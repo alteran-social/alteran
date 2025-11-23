@@ -33,8 +33,10 @@ export async function readJsonBounded(env: any, request: Request): Promise<any> 
 
 export function bearerToken(request: Request): string | null {
   const auth = request.headers.get('authorization');
-  if (!auth || !auth.startsWith('Bearer ')) return null;
-  return auth.slice(7);
+  if (!auth) return null;
+  if (auth.startsWith('Bearer ')) return auth.slice(7);
+  if (auth.startsWith('DPoP ')) return auth.slice(5);
+  return null;
 }
 
 export function isAllowedMime(env: any, mime: string): boolean {

@@ -1,6 +1,7 @@
 import type { APIContext } from 'astro';
 import type { Env } from '../env';
 import { verifyJwt, type JwtClaims } from './jwt';
+import { bearerToken } from './util';
 
 export interface AuthContext {
   token: string;
@@ -16,12 +17,12 @@ export async function isAuthorized(request: Request, env: Env): Promise<boolean>
   console.error('Auth Prefix:', auth?.substring(0, 30));
   console.error('=== AUTH DEBUG END ===');
 
-  if (!auth || !auth.startsWith('Bearer ')) {
-    console.error('RESULT: No Bearer token found');
+  const token = bearerToken(request);
+  if (!token) {
+    console.error('RESULT: No Bearer or DPoP token found');
     return false;
   }
 
-  const token = auth.slice(7);
   console.error('Token Length:', token.length);
   console.error('Token Prefix:', token.substring(0, 30));
 
@@ -62,9 +63,8 @@ export function unauthorized() {
 }
 
 export async function authenticateRequest(request: Request, env: Env): Promise<AuthContext | null> {
-  const auth = request.headers.get('authorization');
-  if (!auth || !auth.startsWith('Bearer ')) return null;
-  const token = auth.slice(7);
+  const token = bearerToken(request);
+  if (!token) return null;
   const ver = await verifyJwt(env, token).catch((err) => {
     console.error('JWT verification error:', err);
     return null;
