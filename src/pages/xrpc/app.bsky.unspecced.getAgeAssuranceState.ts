@@ -1,11 +1,18 @@
 import type { APIContext } from 'astro';
-import { isAuthorized, unauthorized } from '../../lib/auth';
+import { AuthTokenExpiredError, expiredToken, isAuthorized, unauthorized } from '../../lib/auth';
 
 export const prerender = false;
 
 export async function GET({ locals, request }: APIContext) {
   const { env } = locals.runtime;
-  if (!(await isAuthorized(request, env))) return unauthorized();
+  try {
+    if (!(await isAuthorized(request, env))) return unauthorized();
+  } catch (err) {
+    if (err instanceof AuthTokenExpiredError) {
+      return expiredToken();
+    }
+    throw err;
+  }
 
   return new Response(
     JSON.stringify({

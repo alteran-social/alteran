@@ -1,6 +1,6 @@
 import type { APIContext } from 'astro';
 import { proxyAppView } from '../../lib/appview';
-import { isAuthorized, unauthorized } from '../../lib/auth';
+import { AuthTokenExpiredError, expiredToken, isAuthorized, unauthorized } from '../../lib/auth';
 
 export const prerender = false;
 
@@ -20,7 +20,14 @@ function nsidFromParams(params: Record<string, any>): string {
 
 async function handle({ locals, request, params }: APIContext): Promise<Response> {
   const { env } = locals.runtime;
-  if (!(await isAuthorized(request, env))) return unauthorized();
+  try {
+    if (!(await isAuthorized(request, env))) return unauthorized();
+  } catch (err) {
+    if (err instanceof AuthTokenExpiredError) {
+      return expiredToken();
+    }
+    throw err;
+  }
 
   const nsid = nsidFromParams(params).trim();
   console.log('xrpc catchall invoked:', { nsid, url: request.url });

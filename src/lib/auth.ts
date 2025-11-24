@@ -1,5 +1,6 @@
 import type { APIContext } from 'astro';
 import type { Env } from '../env';
+import { AuthTokenExpiredError } from './auth-errors';
 import { verifyJwt, type JwtClaims } from './jwt';
 import { bearerToken } from './util';
 
@@ -27,10 +28,16 @@ export async function isAuthorized(request: Request, env: Env): Promise<boolean>
   console.error('Token Prefix:', token.substring(0, 30));
 
   // Prefer JWT
-  const ver = await verifyJwt(env, token).catch((err) => {
+  let ver;
+  try {
+    ver = await verifyJwt(env, token);
+  } catch (err) {
+    if (err instanceof AuthTokenExpiredError) {
+      throw err;
+    }
     console.error('JWT VERIFICATION ERROR:', err instanceof Error ? err.message : String(err));
-    return null;
-  });
+    return false;
+  }
 
   console.error('JWT Valid:', ver?.valid);
   console.error('JWT Type:', ver?.payload?.t);
@@ -65,12 +72,20 @@ export function unauthorized() {
 export async function authenticateRequest(request: Request, env: Env): Promise<AuthContext | null> {
   const token = bearerToken(request);
   if (!token) return null;
-  const ver = await verifyJwt(env, token).catch((err) => {
+  let ver;
+  try {
+    ver = await verifyJwt(env, token);
+  } catch (err) {
+    if (err instanceof AuthTokenExpiredError) {
+      throw err;
+    }
     console.error('JWT verification error:', err);
     return null;
-  });
+  }
   if (!ver || !ver.valid) return null;
   const claims = ver.payload as JwtClaims;
   if (claims.t !== 'access') return null;
   return { token, claims };
 }
+
+export { AuthTokenExpiredError, expiredToken } from './auth-errors';

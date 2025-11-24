@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { AuthTokenExpiredError } from "./auth-errors";
 import { getRuntimeString } from "./secrets";
 import {
   issueSessionTokens,
@@ -52,10 +53,17 @@ export async function verifyJwt(
 
   if (header.typ === "at+jwt") {
     console.error('[verifyJwt] Detected at+jwt type');
-    const payload = await verifyAccessToken(env, token).catch((err) => {
+    let payload;
+    try {
+      payload = await verifyAccessToken(env, token);
+    } catch (err) {
+      if (isJwtExpiredError(err)) {
+        console.error('[verifyJwt] Access token expired');
+        throw new AuthTokenExpiredError();
+      }
       console.error('[verifyJwt] verifyAccessToken failed:', err);
       return null;
-    });
+    }
     if (!payload) {
       console.error('[verifyJwt] No payload from verifyAccessToken');
       return null;
@@ -83,7 +91,13 @@ export async function verifyJwt(
 
   if (header.typ === "refresh+jwt") {
     console.error('[verifyJwt] Detected refresh+jwt type');
-    const verified = await verifyRefreshToken(env, token).catch(() => null);
+    const verified = await verifyRefreshToken(env, token).catch((err) => {
+      if (isJwtExpiredError(err)) {
+        console.error('[verifyJwt] Refresh token expired');
+        throw new AuthTokenExpiredError();
+      }
+      return null;
+    });
     if (!verified) return null;
     if (!verified.payload.sub) return null;
     const payload: JwtClaims = {
@@ -133,7 +147,7 @@ export async function verifyJwt(
   }
   if (payload.exp && now > payload.exp) {
     console.error('[verifyJwt] Token expired. Now:', now, 'Exp:', payload.exp);
-    return null;
+    throw new AuthTokenExpiredError();
   }
 
   console.error('[verifyJwt] Legacy JWT verified successfully');
@@ -207,3 +221,8 @@ function b64urlDecode(s: string): Uint8Array {
 }
 
 // EdDSA (Ed25519) path removed; only HS256 session tokens are supported
+
+function isJwtExpiredError(err: unknown): boolean {
+  return err instanceof AuthTokenExpiredError ||
+    (typeof err === "object" && err !== null && (err as any).code === "ERR_JWT_EXPIRED");
+}

@@ -1,6 +1,6 @@
 import type { Env } from '../env';
 import { getRuntimeString } from './secrets';
-import { authenticateRequest, unauthorized } from './auth';
+import { AuthTokenExpiredError, authenticateRequest, expiredToken, unauthorized } from './auth';
 
 const DEFAULT_APPVIEW_URL = 'https://api.bsky.app';
 const DEFAULT_APPVIEW_DID = 'did:web:api.bsky.app';
@@ -436,7 +436,15 @@ export async function proxyAppView({ request, env, lxm, fallback }: ProxyAppView
 
   console.log('proxyAppView: Selected service for method:', { lxm, serviceId: defaultService.id, url: defaultService.url, did: defaultService.did });
 
-  const auth = await authenticateRequest(request, env);
+  let auth;
+  try {
+    auth = await authenticateRequest(request, env);
+  } catch (err) {
+    if (err instanceof AuthTokenExpiredError) {
+      return expiredToken();
+    }
+    throw err;
+  }
   if (!auth) {
     console.log('proxyAppView: Authentication failed');
     return unauthorized();
