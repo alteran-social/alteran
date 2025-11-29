@@ -1,5 +1,6 @@
 import type { APIContext } from 'astro';
 import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError } from '../../lib/oauth/resource';
+import { verifyServiceAuth, isServiceAuthToken } from '../../lib/service-auth';
 import { checkRate } from '../../lib/ratelimit';
 import { isAllowedMime, sniffMime, baseMime } from '../../lib/util';
 import { R2BlobStore } from '../../services/r2-blob-store';
@@ -12,13 +13,34 @@ export const prerender = false;
 
 export async function POST({ locals, request }: APIContext) {
   const { env } = locals.runtime;
-  try {
-    const auth = await verifyResourceRequestHybrid(env, request);
-    if (!auth) return dpopResourceUnauthorized(env);
-  } catch (err) {
-    const handled = await handleResourceAuthError(env, err);
-    if (handled) return handled;
-    throw err;
+  
+  // Check if this is a service auth request (from video.bsky.app, etc.)
+  const authHeader = request.headers.get('authorization');
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+  
+  let isServiceAuth = false;
+  if (token && isServiceAuthToken(token)) {
+    const serviceAuth = await verifyServiceAuth(env, request);
+    if (serviceAuth) {
+      isServiceAuth = true;
+    } else {
+      return new Response(
+        JSON.stringify({ error: 'AuthRequired', message: 'Invalid service auth token' }),
+        { status: 401, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+  }
+
+  // If not service auth, verify as user request
+  if (!isServiceAuth) {
+    try {
+      const auth = await verifyResourceRequestHybrid(env, request);
+      if (!auth) return dpopResourceUnauthorized(env);
+    } catch (err) {
+      const handled = await handleResourceAuthError(env, err);
+      if (handled) return handled;
+      throw err;
+    }
   }
 
   // Get DID from environment (single-user PDS)
