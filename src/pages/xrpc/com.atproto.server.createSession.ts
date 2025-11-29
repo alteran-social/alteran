@@ -7,6 +7,7 @@ import { createAccount, getAccountByIdentifier, storeRefreshToken } from '../../
 import { hashPassword, verifyPassword } from '../../lib/password';
 import { issueSessionTokens } from '../../lib/session-tokens';
 import { getRuntimeString } from '../../lib/secrets';
+import { buildDidDocument } from '../../lib/did-document';
 
 export const prerender = false;
 
@@ -114,7 +115,10 @@ export async function POST({ locals, request }: APIContext) {
     appPasswordName: null,
   });
 
-  return new Response(JSON.stringify({ did, handle, accessJwt, refreshJwt }), {
+  // Build didDoc for the response (required by official API contract)
+  const didDoc = await buildDidDocument(env, did, handle);
+
+  return new Response(JSON.stringify({ did, didDoc, handle, accessJwt, refreshJwt, active: true }), {
     headers: { 'Content-Type': 'application/json' },
   });
 }

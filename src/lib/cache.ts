@@ -203,7 +203,13 @@ export async function withCache(
   // Check cache first
   const cached = await getCachedResponse(request, { prefix: options.prefix });
   if (cached) {
-    return cached;
+    // Clone the cached response to avoid immutable headers issue
+    // Cache API responses have immutable headers which Astro may try to modify
+    return new Response(cached.body, {
+      status: cached.status,
+      statusText: cached.statusText,
+      headers: new Headers(cached.headers),
+    });
   }
 
   // Generate response

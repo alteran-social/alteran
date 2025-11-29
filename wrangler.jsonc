@@ -5,7 +5,6 @@
   "compatibility_date": "2025-09-27",
   "vars": {
     "PDS_MAX_BLOB_SIZE": "5242880",
-    "PDS_ALLOWED_MIME": "image/jpeg,image/png,image/webp,image/gif,image/avif",
     "PDS_DID": "did:plc:35bdlgus7hihmup66o265nuy",
     "PDS_HANDLE": "rawkode.dev",
     "PDS_HOSTNAME": "rawkode.dev"

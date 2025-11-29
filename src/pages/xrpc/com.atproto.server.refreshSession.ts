@@ -4,6 +4,7 @@ import { lazyCleanupExpiredTokens } from '../../lib/token-cleanup';
 import { getRuntimeString } from '../../lib/secrets';
 import { getAccountByIdentifier, getRefreshToken, markRefreshTokenRotated, storeRefreshToken } from '../../db/account';
 import { verifyRefreshToken, issueSessionTokens, computeGraceExpiry } from '../../lib/session-tokens';
+import { buildDidDocument } from '../../lib/did-document';
 
 export const prerender = false;
 
@@ -54,14 +55,6 @@ export async function POST({ locals, request }: APIContext) {
     );
   }
 
-  // THIS IS THE FIX: Check if the token has already been used for rotation.
-  if (stored.nextId) {
-    return new Response(
-      JSON.stringify({ error: 'InvalidToken', message: 'Refresh token has been revoked' }),
-      { status: 401, headers: { 'Content-Type': 'application/json' } }
-    );
-  }
-
   if (stored.expiresAt <= nowSec) {
     return new Response(
       JSON.stringify({ error: 'ExpiredToken', message: 'Refresh token expired' }),
@@ -80,23 +73,42 @@ export async function POST({ locals, request }: APIContext) {
   const did = stored.did;
   const handle = account?.handle ?? (await getRuntimeString(env, 'PDS_HANDLE', 'user.example'));
 
-  // Rotate: generate new token pair with new JTI
-  const { accessJwt, refreshJwt, refreshPayload, refreshExpiry } = await issueSessionTokens(env, did, { jti: stored.nextId ?? undefined });
+  // Determine the next refresh token id: upon refresh token reuse during grace period,
+  // you always receive a refresh token with the same id (matching official PDS behavior)
+  const nextId = stored.nextId ?? undefined;
 
-  await storeRefreshToken(env, {
-    id: refreshPayload.jti,
-    did,
-    expiresAt: refreshExpiry,
-    appPasswordName: stored.appPasswordName ?? null,
-  });
+  // Rotate: generate new token pair with the expected JTI
+  const { accessJwt, refreshJwt, refreshPayload, refreshExpiry } = await issueSessionTokens(env, did, { jti: nextId });
 
-  const graceExpiry = computeGraceExpiry(stored.expiresAt, nowSec);
-  await markRefreshTokenRotated(env, decoded.jti, refreshPayload.jti, graceExpiry);
+  // Check if token was already rotated to a DIFFERENT token (reuse attack detection)
+  // Allow reuse during grace period if nextId matches what we're about to issue
+  if (stored.nextId && stored.nextId !== refreshPayload.jti) {
+    return new Response(
+      JSON.stringify({ error: 'InvalidToken', message: 'Refresh token has been revoked' }),
+      { status: 401, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+
+  // Only store and rotate if this is a fresh rotation (not a reuse during grace period)
+  if (!stored.nextId) {
+    await storeRefreshToken(env, {
+      id: refreshPayload.jti,
+      did,
+      expiresAt: refreshExpiry,
+      appPasswordName: stored.appPasswordName ?? null,
+    });
+
+    const graceExpiry = computeGraceExpiry(stored.expiresAt, nowSec);
+    await markRefreshTokenRotated(env, decoded.jti, refreshPayload.jti, graceExpiry);
+  }
 
   // Lazy cleanup of expired tokens (runs 1% of the time)
   lazyCleanupExpiredTokens(env).catch(console.error);
 
-  return new Response(JSON.stringify({ did, handle, accessJwt, refreshJwt }), {
+  // Build didDoc for the response (required by official API contract)
+  const didDoc = await buildDidDocument(env, did, handle);
+
+  return new Response(JSON.stringify({ did, didDoc, handle, accessJwt, refreshJwt, active: true }), {
     headers: { 'Content-Type': 'application/json' },
   });
 }

@@ -1,3 +1,7 @@
+# BlueSky Code
+/atproto
+/social-app
+
 # Devenv
 .devenv*
 devenv.local.nix

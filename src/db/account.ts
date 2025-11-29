@@ -143,9 +143,22 @@ export async function setSecret(env: Env, key: string, value: string): Promise<v
 }
 
 export async function getOrCreateSecret(env: Env, key: string, factory: () => Promise<string>): Promise<string> {
+  // Check if secret already exists
   const existing = await getSecret(env, key);
   if (existing) return existing;
+
+  // Generate a new value
   const value = await factory();
-  await setSecret(env, key, value);
-  return value;
+
+  // Use onConflictDoNothing to avoid race conditions where multiple Workers
+  // might try to create the secret simultaneously. The first one wins.
+  const db = getDb(env);
+  await db
+    .insert(secret)
+    .values({ key, value, updatedAt: NOW() })
+    .onConflictDoNothing();
+
+  // Re-read to get the actual stored value (might be from another Worker)
+  const stored = await getSecret(env, key);
+  return stored ?? value;
 }
