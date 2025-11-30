@@ -133,7 +133,19 @@ export async function dpopResourceUnauthorized(env: Env, message?: string, nonce
  * Hybrid authentication that supports both DPoP (OAuth) and Bearer (legacy XRPC) tokens.
  * Tries DPoP first, then falls back to Bearer for backward compatibility with official Bluesky apps.
  */
-export async function verifyResourceRequestHybrid(env: Env, request: Request): Promise<{ did: string; token: string } | null> {
+type VerifyResourceHybridDeps = {
+  verifyAccessToken: typeof verifyAccessTokenOrThrow;
+};
+
+const defaultVerifyHybridDeps: VerifyResourceHybridDeps = {
+  verifyAccessToken: verifyAccessTokenOrThrow,
+};
+
+export async function verifyResourceRequestHybrid(
+  env: Env,
+  request: Request,
+  deps: VerifyResourceHybridDeps = defaultVerifyHybridDeps,
+): Promise<{ did: string; token: string } | null> {
   const auth = request.headers.get('authorization');
   if (!auth) return null;
 
@@ -152,8 +164,7 @@ export async function verifyResourceRequestHybrid(env: Env, request: Request): P
   // Fall back to Bearer token authentication (legacy XRPC flow)
   if (auth.startsWith('Bearer ')) {
     const token = auth.slice(7).trim();
-    const payloadJwt = await verifyAccessToken(env, token).catch(() => null);
-    if (!payloadJwt) return null;
+    const payloadJwt = await deps.verifyAccessToken(env, token);
     return { did: payloadJwt.sub as string, token };
   }
 
