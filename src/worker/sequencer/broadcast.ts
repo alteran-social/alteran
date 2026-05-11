@@ -70,21 +70,16 @@ export function broadcastIdentity(targets: WebSocket[], event: IdentityEvent): v
 export function broadcastAccount(targets: WebSocket[], event: AccountEvent): void {
   const time = new Date(event.ts).toISOString();
   const wire = toWireStatus(event.state);
-  const accountBytes = encodeAccountFrame({
-    seq: event.seq,
-    did: event.did,
-    time,
-    active: wire.active,
-    status: wire.status,
-  });
+  // dag-cbor refuses to encode `undefined`, so build the payload conditionally
+  // rather than passing { status: undefined } when the FSM is active.
+  const base = { seq: event.seq, did: event.did, time, active: wire.active };
+  const accountBytes = encodeAccountFrame(
+    wire.status ? { ...base, status: wire.status } : base,
+  );
   // Compatibility #sync emission for clients on the legacy topic.
-  const syncBytes = encodeSyncFrame({
-    seq: event.seq,
-    did: event.did,
-    time,
-    active: wire.active,
-    status: wire.status,
-  });
+  const syncBytes = encodeSyncFrame(
+    wire.status ? { ...base, status: wire.status } : base,
+  );
   for (const ws of targets) {
     try {
       ws.send(accountBytes);
