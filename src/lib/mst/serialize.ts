@@ -1,8 +1,20 @@
+import type { CID } from 'multiformats/cid';
 import * as uint8arrays from 'uint8arrays';
 import type { ReadableBlockstore } from './blockstore';
 import * as util from './util';
 import { Leaf } from './leaf';
 import type { NodeData, NodeEntry, MstOpts } from './types';
+
+// Caller-supplied loader keeps serialize.ts free of a back-reference to mst.ts.
+// Previously the cycle was broken by `await import('./mst')` inside this
+// function — that worked but added a microtask per deserialize and depended on
+// module-eval order. Inverting the dependency lets both files import each
+// other's types without runtime hacks.
+export type SubtreeLoader = (
+  storage: ReadableBlockstore,
+  cid: CID,
+  opts?: Partial<MstOpts>,
+) => NodeEntry;
 
 export async function layerForEntries(entries: NodeEntry[]): Promise<number | null> {
   const firstLeaf = entries.find((entry) => entry.isLeaf());
@@ -13,14 +25,14 @@ export async function layerForEntries(entries: NodeEntry[]): Promise<number | nu
 export async function deserializeNodeData(
   storage: ReadableBlockstore,
   data: NodeData,
+  loadSubtree: SubtreeLoader,
   opts?: Partial<MstOpts>,
 ): Promise<NodeEntry[]> {
-  const { MST } = await import('./mst');
   const { layer } = opts || {};
   const entries: NodeEntry[] = [];
 
   if (data.l !== null) {
-    entries.push(MST.load(storage, data.l, { layer: layer ? layer - 1 : undefined }));
+    entries.push(loadSubtree(storage, data.l, { layer: layer ? layer - 1 : undefined }));
   }
 
   let lastKey = '';
@@ -32,7 +44,7 @@ export async function deserializeNodeData(
     lastKey = key;
 
     if (entry.t !== null) {
-      entries.push(MST.load(storage, entry.t, { layer: layer ? layer - 1 : undefined }));
+      entries.push(loadSubtree(storage, entry.t, { layer: layer ? layer - 1 : undefined }));
     }
   }
 

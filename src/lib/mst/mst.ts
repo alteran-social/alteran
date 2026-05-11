@@ -57,7 +57,7 @@ export class MST {
     opts?: Partial<MstOpts>,
   ): Promise<MST> {
     const { layer = null } = opts || {};
-    const entries = await deserializeNodeData(storage, data, opts);
+    const entries = await deserializeNodeData(storage, data, MST.load, opts);
     const pointer = await util.cidForCbor(data);
     return new MST(storage, pointer, entries, layer);
   }
@@ -86,7 +86,7 @@ export class MST {
       const layer = firstLeaf !== undefined
         ? await util.leadingZerosOnHash(firstLeaf.k)
         : undefined;
-      this.entries = await deserializeNodeData(this.storage, data, { layer });
+      this.entries = await deserializeNodeData(this.storage, data, MST.load, { layer });
       return this.entries;
     }
 
