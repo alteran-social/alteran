@@ -2,17 +2,53 @@ import type { Env } from '../../env';
 import { InvalidProxyHeader, UpstreamProxyFailure } from '../errors';
 import type { ProxyTarget, ServiceConfig, ServiceId } from './types';
 
-interface DidService {
+type DidService = {
   readonly id?: unknown;
   readonly serviceEndpoint?: unknown;
-}
+};
 
-interface DidDocument {
+type DidDocument = {
   readonly id?: unknown;
   readonly service?: unknown;
+};
+
+// The cache key is derived from a user-supplied `atproto-proxy` header. Without
+// bounds, a noisy or hostile client can grow this map without limit. Cap the
+// entry count and expire entries after a fixed TTL so memory stays predictable
+// across long-lived isolates.
+const CACHE_MAX = 1024;
+const CACHE_TTL_MS = 10 * 60 * 1000;
+
+type CacheEntry = {
+  readonly doc: Promise<DidDocument>;
+  readonly expiresAt: number;
+};
+const didDocumentCache = new Map<string, CacheEntry>();
+
+let clock: () => number = () => Date.now();
+let fetchOverride: ((did: string) => Promise<DidDocument>) | null = null;
+
+function getCached(did: string): Promise<DidDocument> | null {
+  const entry = didDocumentCache.get(did);
+  if (!entry) return null;
+  if (entry.expiresAt <= clock()) {
+    didDocumentCache.delete(did);
+    return null;
+  }
+  // Re-insert to mark as most recently used. Map preserves insertion order, so
+  // the oldest entry is whatever keys().next() returns when we evict.
+  didDocumentCache.delete(did);
+  didDocumentCache.set(did, entry);
+  return entry.doc;
 }
 
-const didDocumentCache = new Map<string, Promise<DidDocument>>();
+function setCached(did: string, doc: Promise<DidDocument>): void {
+  if (didDocumentCache.size >= CACHE_MAX) {
+    const oldest = didDocumentCache.keys().next().value;
+    if (oldest !== undefined) didDocumentCache.delete(oldest);
+  }
+  didDocumentCache.set(did, { doc, expiresAt: clock() + CACHE_TTL_MS });
+}
 
 export function parseProxyHeader(header: string): { did: string; serviceId: string } {
   const value = header.trim();
@@ -66,21 +102,21 @@ export async function resolveProxyTargetWithRegistry(
 }
 
 async function resolveDidDocument(env: Env, did: string): Promise<DidDocument> {
-  const existing = didDocumentCache.get(did);
-  if (existing) {
-    return existing;
-  }
+  const existing = getCached(did);
+  if (existing) return existing;
 
   const loader = fetchDidDocument(env, did).catch((error) => {
     didDocumentCache.delete(did);
     throw error;
   });
 
-  didDocumentCache.set(did, loader);
+  setCached(did, loader);
   return loader;
 }
 
 async function fetchDidDocument(_env: Env, did: string): Promise<DidDocument> {
+  if (fetchOverride) return fetchOverride(did);
+
   let url: string;
   if (did.startsWith('did:web:')) {
     url = buildDidWebUrl(did);
@@ -100,7 +136,21 @@ async function fetchDidDocument(_env: Env, did: string): Promise<DidDocument> {
     throw new UpstreamProxyFailure('failed to resolve DID document');
   }
 
-  return response.json() as Promise<DidDocument>;
+  return parseDidDocument(await response.json());
+}
+
+function parseDidDocument(value: unknown): DidDocument {
+  if (!value || typeof value !== 'object') {
+    throw new UpstreamProxyFailure('DID document is not an object');
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.id !== 'string') {
+    throw new UpstreamProxyFailure('DID document missing id');
+  }
+  if (record.service !== undefined && !Array.isArray(record.service)) {
+    throw new UpstreamProxyFailure('DID document service field is not an array');
+  }
+  return record as DidDocument;
 }
 
 function buildDidWebUrl(did: string): string {
@@ -159,3 +209,25 @@ function extractServiceEndpoint(service: DidService): string | null {
   }
   return null;
 }
+
+// Test seam — exercised only by tests/did-resolver-cache.test.ts. Production
+// code does not import this object.
+export const __testHooks = {
+  reset(): void {
+    didDocumentCache.clear();
+    clock = () => Date.now();
+    fetchOverride = null;
+  },
+  setClock(fn: () => number): void {
+    clock = fn;
+  },
+  setFetcher(fn: (did: string) => Promise<DidDocument>): void {
+    fetchOverride = fn;
+  },
+  cacheSize(): number {
+    return didDocumentCache.size;
+  },
+  async resolve(did: string): Promise<DidDocument> {
+    return resolveDidDocument({} as Env, did);
+  },
+};
