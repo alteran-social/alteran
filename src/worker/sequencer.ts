@@ -4,6 +4,7 @@ import { commit_log } from '../db/schema';
 import { gt, eq, desc } from 'drizzle-orm';
 import { encodeInfoFrame, encodeCommitFrame } from '../lib/firehose/frames';
 import type { Env } from '../env';
+import { fromWireStatus } from '../lib/account-state';
 import type {
   AccountEvent,
   Client,
@@ -218,8 +219,7 @@ export class Sequencer {
       const event: AccountEvent = {
         seq: this.nextSeq++,
         did: body.did,
-        active: body.active,
-        status: body.status,
+        state: fromWireStatus({ active: body.active, status: body.status }),
         ts: Date.now(),
       };
       try {

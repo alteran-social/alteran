@@ -6,6 +6,7 @@ import {
   encodeSyncFrame,
 } from '../../lib/firehose/frames';
 import type { Env } from '../../env';
+import { toWireStatus } from '../../lib/account-state';
 import type { AccountEvent, CommitEvent, IdentityEvent } from './types';
 import { createCommitPayload } from './payload';
 
@@ -68,20 +69,21 @@ export function broadcastIdentity(targets: WebSocket[], event: IdentityEvent): v
 
 export function broadcastAccount(targets: WebSocket[], event: AccountEvent): void {
   const time = new Date(event.ts).toISOString();
+  const wire = toWireStatus(event.state);
   const accountBytes = encodeAccountFrame({
     seq: event.seq,
     did: event.did,
     time,
-    active: event.active,
-    status: event.status,
+    active: wire.active,
+    status: wire.status,
   });
   // Compatibility #sync emission for clients on the legacy topic.
   const syncBytes = encodeSyncFrame({
     seq: event.seq,
     did: event.did,
     time,
-    active: event.active,
-    status: event.status,
+    active: wire.active,
+    status: wire.status,
   });
   for (const ws of targets) {
     try {

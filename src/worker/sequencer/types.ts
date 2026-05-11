@@ -1,4 +1,5 @@
 import type { RepoOp } from '../../lib/firehose/frames';
+import type { AccountState } from '../../lib/account-state';
 
 export interface Client {
   webSocket: WebSocket;
@@ -28,8 +29,7 @@ export interface IdentityEvent {
 export interface AccountEvent {
   seq: number;
   did: string;
-  active: boolean;
-  status?: string;
+  state: AccountState;
   ts: number;
 }
 
