@@ -1,6 +1,6 @@
 {
   "name": "@alteran/astro",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Astro integration for running a Cloudflare-hosted Bluesky PDS with Alteran.",
   "module": "index.js",
   "types": "index.d.ts",
@@ -75,11 +75,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/alteran-dev/alteran.git"
+    "url": "git+https://github.com/alteran-social/alteran.git"
   },
   "bugs": {
-    "url": "https://github.com/alteran-dev/alteran/issues"
+    "url": "https://github.com/alteran-social/alteran/issues"
   },
-  "homepage": "https://github.com/alteran-dev/alteran#readme",
+  "homepage": "https://github.com/alteran-social/alteran#readme",
   "license": "MIT"
 }
