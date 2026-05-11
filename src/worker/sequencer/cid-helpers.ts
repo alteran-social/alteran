@@ -21,16 +21,13 @@ export function reviveOps(ops: unknown): RepoOp[] | undefined {
   if (!Array.isArray(ops)) return undefined;
   return ops.map((raw) => {
     const op = raw as { action: RepoOp['action']; path: string; cid?: unknown; prev?: unknown };
-    const result: RepoOp = {
+    const prev = op.prev != null ? reviveCid(op.prev) ?? undefined : undefined;
+    return {
       action: op.action,
       path: op.path,
       cid: reviveCid(op.cid),
+      ...(prev ? { prev } : {}),
     };
-    if (op.prev != null) {
-      const prev = reviveCid(op.prev);
-      if (prev) result.prev = prev;
-    }
-    return result;
   });
 }
 

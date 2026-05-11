@@ -34,12 +34,12 @@ const OPTIONAL_VARS = {
  * Configuration validation result
  */
 export interface ConfigValidationResult {
-  valid: boolean;
-  missing: string[];
-  warnings: string[];
-  config: {
-    required: Record<string, string>;
-    optional: Record<string, string>;
+  readonly valid: boolean;
+  readonly missing: readonly string[];
+  readonly warnings: readonly string[];
+  readonly config: {
+    readonly required: Readonly<Record<string, string>>;
+    readonly optional: Readonly<Record<string, string>>;
   };
 }
 
