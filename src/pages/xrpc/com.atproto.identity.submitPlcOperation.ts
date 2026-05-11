@@ -1,4 +1,5 @@
 import type { APIContext } from 'astro';
+import { errorMessage } from '../../lib/errors';
 import { AuthTokenExpiredError, expiredToken, isAuthorized, unauthorized } from '../../lib/auth';
 import { resolveSecret } from '../../lib/secrets';
 
@@ -91,12 +92,12 @@ export async function POST({ locals, request }: APIContext) {
       JSON.stringify({ success: true }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     );
-  } catch (error: any) {
+  } catch (error) {
     console.error('Submit PLC operation error:', error);
     return new Response(
       JSON.stringify({
         error: 'InternalServerError',
-        message: error.message || 'Failed to submit PLC operation'
+        message: errorMessage(error) || 'Failed to submit PLC operation'
       }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );

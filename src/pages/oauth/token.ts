@@ -1,4 +1,5 @@
 import type { APIContext } from 'astro';
+import { errorCode, errorMessage } from '../../lib/errors';
 import { verifyDpop, dpopErrorResponse, getAuthzNonce } from '../../lib/oauth/dpop';
 import { consumeCode } from '../../lib/oauth/store';
 import { sha256b64url } from '../../lib/oauth/dpop';
@@ -144,9 +145,9 @@ export async function POST({ locals, request }: APIContext) {
     }
 
     return jsonError('unsupported_grant_type', 'grant_type must be authorization_code or refresh_token');
-  } catch (e: any) {
-    if (e && e.code === 'use_dpop_nonce') return dpopErrorResponse(env, e);
-    return jsonError('invalid_request', e?.message ?? 'Unknown error');
+  } catch (e) {
+    if (e && errorCode(e) === 'use_dpop_nonce') return dpopErrorResponse(env, e);
+    return jsonError('invalid_request', errorMessage(e) ?? 'Unknown error');
   }
 }
 

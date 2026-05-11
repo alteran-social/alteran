@@ -1,7 +1,6 @@
 import type { APIContext } from 'astro';
 import { AuthTokenExpiredError, expiredToken, isAuthorized, unauthorized } from '../../lib/auth';
 import { resolveSecret } from '../../lib/secrets';
-import * as uint8arrays from 'uint8arrays';
 
 export const prerender = false;
 
@@ -30,7 +29,7 @@ export async function GET({ locals, request }: APIContext) {
 
     // Always ES256K: derive did:key from the secp256k1 signing key
     let didKey: string | undefined;
-    const priv = (await resolveSecret((env as any).REPO_SIGNING_KEY))?.trim();
+    const priv = (await resolveSecret(env.REPO_SIGNING_KEY))?.trim();
     if (!priv) {
       return new Response(
         JSON.stringify({ error: 'InvalidRequest', message: 'REPO_SIGNING_KEY not configured for ES256K' }),
@@ -39,17 +38,18 @@ export async function GET({ locals, request }: APIContext) {
     }
     try {
       const { Secp256k1Keypair } = await import('@atproto/crypto');
-      let kp: any;
+      let keypair: { did: () => string };
       if (/^[0-9a-fA-F]{64}$/.test(priv)) {
-        kp = await Secp256k1Keypair.import(priv);
+        keypair = await Secp256k1Keypair.import(priv);
       } else {
         const bin = atob(priv.replace(/\s+/g, ''));
         const bytes = new Uint8Array(bin.length);
         for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        kp = await Secp256k1Keypair.import(bytes);
+        keypair = await Secp256k1Keypair.import(bytes);
       }
-      didKey = kp.did();
-    } catch (e) {
+      didKey = keypair.did();
+    } catch (keypairError) {
+      console.error('REPO_SIGNING_KEY did:key derivation failed:', keypairError);
       return new Response(
         JSON.stringify({ error: 'InvalidRequest', message: 'Failed to derive secp256k1 did:key from REPO_SIGNING_KEY' }),
         { status: 400, headers: { 'Content-Type': 'application/json' } },
@@ -85,12 +85,13 @@ export async function GET({ locals, request }: APIContext) {
       JSON.stringify(credentials),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     );
-  } catch (error: any) {
+  } catch (error) {
     console.error('Get recommended credentials error:', error);
+    const message = error instanceof Error ? error.message : 'Failed to get recommended credentials';
     return new Response(
       JSON.stringify({
         error: 'InternalServerError',
-        message: error.message || 'Failed to get recommended credentials'
+        message,
       }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );

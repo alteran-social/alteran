@@ -1,4 +1,5 @@
 import type { APIContext } from 'astro';
+import { errorMessage } from '../../lib/errors';
 import { buildRepoCar } from '../../services/car';
 
 export const prerender = false;
@@ -30,8 +31,8 @@ export async function GET({ locals, request }: APIContext) {
         'Cache-Control': 'no-store',
       },
     });
-  } catch (error: any) {
-    const msg = String(error?.message || error);
+  } catch (error) {
+    const msg = String(errorMessage(error) || error);
     // Map to lexicon-specified errors
     const known = ['RepoNotFound', 'RepoTakendown', 'RepoSuspended', 'RepoDeactivated'];
     const name = known.find((n) => msg.includes(n)) || (msg.includes('HeadNotFound') ? 'RepoNotFound' : null);

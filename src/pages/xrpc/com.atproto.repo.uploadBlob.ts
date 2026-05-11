@@ -1,4 +1,5 @@
 import type { APIContext } from 'astro';
+import { errorMessage } from '../../lib/errors';
 import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError } from '../../lib/oauth/resource';
 import { verifyServiceAuth, isServiceAuthToken } from '../../lib/service-auth';
 import { checkRate } from '../../lib/ratelimit';
@@ -122,8 +123,8 @@ export async function POST({ locals, request }: APIContext) {
     if (enc) headers['x-upload-encoding'] = enc;
 
     return new Response(JSON.stringify(body), { headers });
-  } catch (e: any) {
-    if (String(e.message || '').startsWith('BlobTooLarge')) return new Response(JSON.stringify({ error: 'PayloadTooLarge' }), { status: 413 });
+  } catch (e) {
+    if (String(errorMessage(e) || '').startsWith('BlobTooLarge')) return new Response(JSON.stringify({ error: 'PayloadTooLarge' }), { status: 413 });
     return new Response(JSON.stringify({ error: 'UploadFailed' }), { status: 500 });
   }
 }

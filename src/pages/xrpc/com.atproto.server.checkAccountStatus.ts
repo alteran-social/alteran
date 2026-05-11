@@ -1,4 +1,5 @@
 import type { APIContext } from 'astro';
+import { errorMessage } from '../../lib/errors';
 import { AuthTokenExpiredError, expiredToken, isAuthorized, unauthorized } from '../../lib/auth';
 import { getAccountState } from '../../db/dal';
 import { getDb } from '../../db/client';
@@ -87,11 +88,11 @@ export async function GET({ locals, request }: APIContext) {
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     );
-  } catch (error: any) {
+  } catch (error) {
     return new Response(
       JSON.stringify({
         error: 'InternalServerError',
-        message: error.message || 'Failed to check account status'
+        message: errorMessage(error) || 'Failed to check account status'
       }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );

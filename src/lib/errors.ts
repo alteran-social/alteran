@@ -154,6 +154,28 @@ export function categorizeError(status: number): 'client' | 'server' {
 }
 
 /**
+ * Narrow an unknown thrown value to extract its `code` and `message` fields
+ * without resorting to `any`. Useful in catch blocks for libraries that
+ * decorate Errors with custom code strings (jose, ResourceAuthError, etc.).
+ */
+export function errorCode(error: unknown): string | undefined {
+  if (error && typeof error === 'object' && 'code' in error) {
+    const value = (error as { code: unknown }).code;
+    return typeof value === 'string' ? value : undefined;
+  }
+  return undefined;
+}
+
+export function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object' && 'message' in error) {
+    const value = (error as { message: unknown }).message;
+    if (typeof value === 'string') return value;
+  }
+  return String(error);
+}
+
+/**
  * Convert any error to XRPCError
  */
 export function toXRPCError(error: unknown): XRPCError {

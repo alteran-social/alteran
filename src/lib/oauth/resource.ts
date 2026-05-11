@@ -1,4 +1,5 @@
 import type { Env } from '../../env';
+import { errorCode, errorMessage } from '../errors';
 import { verifyAccessToken } from '../session-tokens';
 import { decodeProtectedHeader, importJWK, compactVerify, type JWK as JoseJWK } from 'jose';
 
@@ -108,11 +109,11 @@ async function verifyAccessTokenOrThrow(env: Env, token: string) {
   let payloadJwt: Awaited<ReturnType<typeof verifyAccessToken>>;
   try {
     payloadJwt = await verifyAccessToken(env, token);
-  } catch (error: any) {
-    if (error?.code === 'ERR_JWT_EXPIRED') {
+  } catch (error) {
+    if (errorCode(error) === 'ERR_JWT_EXPIRED') {
       throw new ResourceAuthError('expired_token');
     }
-    if (error?.code) {
+    if (errorCode(error)) {
       throw new ResourceAuthError('invalid_token');
     }
     throw error;
@@ -159,9 +160,9 @@ export async function verifyResourceRequestHybrid(
     try {
       const result = await verifyResourceRequest(env, request);
       if (result) return result;
-    } catch (e: any) {
+    } catch (e) {
       // If it's a nonce error, propagate it
-      if (e?.code === 'use_dpop_nonce') throw e;
+      if (errorCode(e) === 'use_dpop_nonce') throw e;
       // Otherwise fall through to Bearer
     }
   }
@@ -187,7 +188,7 @@ export async function handleResourceAuthError(env: Env, error: unknown): Promise
   if (!(error instanceof ResourceAuthError)) {
     return null;
   }
-  switch (error.code) {
+  switch (errorCode(error)) {
     case 'use_dpop_nonce':
       return dpopResourceUnauthorized(env, undefined, error.nonce);
     case 'expired_token':

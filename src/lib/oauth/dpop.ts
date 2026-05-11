@@ -1,4 +1,5 @@
 import type { Env } from '../../env';
+import { errorCode, errorMessage } from '../errors';
 import { getOrCreateSecret, setSecret, getSecret } from '../../db/account';
 import { decodeProtectedHeader, importJWK, compactVerify, type JWK as JoseJWK } from 'jose';
 
@@ -152,12 +153,12 @@ export async function withDpop<T>(env: Env, request: Request, fn: (ver: DpopVeri
       return result;
     }
     return new Response(JSON.stringify(result), { status: 200, headers });
-  } catch (e: any) {
-    if (e && e.code === 'use_dpop_nonce') {
+  } catch (e) {
+    if (e && errorCode(e) === 'use_dpop_nonce') {
       return dpopErrorResponse(env, e);
     }
     const headers = new Headers({ 'Content-Type': 'application/json' });
-    return new Response(JSON.stringify({ error: 'invalid_request', error_description: e?.message ?? 'Unknown error' }), { status: 400, headers });
+    return new Response(JSON.stringify({ error: 'invalid_request', error_description: errorMessage(e) ?? 'Unknown error' }), { status: 400, headers });
   }
 }
 

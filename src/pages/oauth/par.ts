@@ -1,4 +1,5 @@
 import type { APIContext } from 'astro';
+import { errorCode, errorMessage } from '../../lib/errors';
 import { getAuthzNonce, setDpopNonceHeader, verifyDpop, dpopErrorResponse } from '../../lib/oauth/dpop';
 import { savePar } from '../../lib/oauth/store';
 import { fetchClientMetadata, isHttpsUrl, verifyClientAssertion } from '../../lib/oauth/clients';
@@ -49,8 +50,8 @@ export async function POST({ locals, request }: APIContext) {
     let clientMeta: any = null;
     try {
       clientMeta = await fetchClientMetadata(client_id);
-    } catch (e: any) {
-      return new Response(JSON.stringify({ error: 'invalid_client', error_description: e?.message ?? 'Client metadata fetch failed' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+    } catch (e) {
+      return new Response(JSON.stringify({ error: 'invalid_client', error_description: errorMessage(e) ?? 'Client metadata fetch failed' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
     }
 
     if (clientMeta?.client_id !== client_id) {
@@ -109,11 +110,11 @@ export async function POST({ locals, request }: APIContext) {
     const headers = new Headers({ 'Content-Type': 'application/json' });
     setDpopNonceHeader(headers, await getAuthzNonce(env));
     return new Response(JSON.stringify({ request_uri }), { status: 201, headers });
-  } catch (e: any) {
-    if (e && e.code === 'use_dpop_nonce') {
+  } catch (e) {
+    if (e && errorCode(e) === 'use_dpop_nonce') {
       return dpopErrorResponse(env, e);
     }
     const headers = new Headers({ 'Content-Type': 'application/json' });
-    return new Response(JSON.stringify({ error: 'invalid_request', error_description: e?.message ?? 'Unknown error' }), { status: 400, headers });
+    return new Response(JSON.stringify({ error: 'invalid_request', error_description: errorMessage(e) ?? 'Unknown error' }), { status: 400, headers });
   }
 }

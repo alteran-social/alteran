@@ -1,4 +1,5 @@
 import { CID } from 'multiformats/cid';
+import { errorMessage } from '../errors';
 import * as dagCbor from '@ipld/dag-cbor';
 import type { Env } from '../../env';
 import { drizzle } from 'drizzle-orm/d1';
@@ -99,13 +100,13 @@ export class D1Blockstore implements WritableBlockstore {
       await this.env.DB.prepare(
         `INSERT OR REPLACE INTO blockstore (cid, bytes) VALUES (?, ?)`
       ).bind(cidStr, base64).run();
-    } catch (error: any) {
+    } catch (error) {
       console.error(JSON.stringify({
         level: 'error',
         type: 'blockstore_put',
         cid: cidStr,
         size: bytes.byteLength,
-        message: error?.message,
+        message: errorMessage(error),
       }));
       throw error;
     }

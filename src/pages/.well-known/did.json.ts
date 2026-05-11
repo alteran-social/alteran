@@ -1,4 +1,5 @@
 import type { APIContext } from 'astro';
+import { errorMessage } from '../../lib/errors';
 import { withCache, CACHE_CONFIGS } from '../../lib/cache';
 import { resolveSecret } from '../../lib/secrets';
 import { Secp256k1Keypair } from '@atproto/crypto';
@@ -36,8 +37,8 @@ export async function GET({ locals, request }: APIContext) {
           }
           publicKeyMultibase = formatMultikey(kp.jwtAlg, kp.publicKeyBytes());
         }
-      } catch (error: any) {
-        signingKeyError = `Failed to process REPO_SIGNING_KEY: ${error?.message || error}`;
+      } catch (error) {
+        signingKeyError = `Failed to process REPO_SIGNING_KEY: ${errorMessage(error) || error}`;
         console.error('did.json: Failed to process REPO_SIGNING_KEY:', error);
       }
 
