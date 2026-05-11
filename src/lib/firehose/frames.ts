@@ -5,10 +5,11 @@ import { CID } from 'multiformats/cid';
 /**
  * Frame types for AT Protocol firehose
  */
-export enum FrameType {
-  Message = 1,
-  Error = -1,
-}
+export const FrameType = {
+  Message: 1,
+  Error: -1,
+} as const;
+export type FrameType = (typeof FrameType)[keyof typeof FrameType];
 
 /**
  * Frame header structure
