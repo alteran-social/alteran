@@ -33,14 +33,15 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
   const db = drizzle(env.DB);
   const did = (await resolveSecret(env.PDS_DID)) ?? 'did:example:single-user';
 
-  // Resolve signing key (use ephemeral dev key if not configured and not production)
+  // Falls back to an ephemeral key only in non-production so dev runs work
+  // without REPO_SIGNING_KEY; prod always requires the configured key.
   const signingKey = await getSigningKey(env);
 
-  // Get current repo state
   const row = await db.select().from(repo_root).where(eq(repo_root.did, did)).get();
   const prevCommitCid = row?.commitCid ? CID.parse(row.commitCid) : null;
 
-  // Get the current MST root (prefer caller-provided pointer if available)
+  // Prefer caller-provided pointer to avoid an extra MST load on the
+  // batched-write path that already knows the new root.
   const repoManager = new RepoManager(env);
   const mstRootCid = currentMstRoot
     ? currentMstRoot
@@ -49,25 +50,19 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
         return mst.getPointer();
       })();
 
-  // Use provided ops if available; else compute by diffing trees (more expensive)
+  // Caller-provided ops avoid the more expensive full-tree diff.
   const ops = opts?.ops !== undefined
     ? opts.ops
     : (prevMstRoot ? await repoManager.extractOps(prevMstRoot, mstRootCid) : []);
 
-  // Generate new revision (TID)
   const rev = generateTid();
-
-  // Create commit
   const commit = createCommit(did, mstRootCid, rev, prevCommitCid);
-
-  // Sign commit
   const signedCommit = await signCommit(commit, signingKey);
-
-  // Calculate commit CID
   const cid = await commitCid(signedCommit);
   const cidString = cid.toString();
 
-  // Update repo root - use sql.raw with excluded to properly reference INSERT values
+  // sql.raw('excluded.X') references the just-inserted VALUES so the upsert
+  // updates with the new value rather than a stale parameter.
   await db
     .insert(repo_root)
     .values({
