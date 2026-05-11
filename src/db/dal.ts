@@ -20,8 +20,8 @@ export async function putRecord(env: Env, row: NewRecordRow) {
 
 export async function getRecord(env: Env, uri: string) {
   const db = getDb(env);
-  const res = await db.select().from(record).where(eq(record.uri, uri)).get();
-  return res ?? null;
+  const result = await db.select().from(record).where(eq(record.uri, uri)).get();
+  return result ?? null;
 }
 
 export async function deleteRecord(env: Env, uri: string) {
@@ -113,7 +113,7 @@ export async function updateBlobQuota(env: Env, did: string, bytesAdded: number,
 
 export async function checkBlobQuota(env: Env, did: string, additionalBytes: number): Promise<boolean> {
   const quota = await getBlobQuota(env, did);
-  const maxBytes = parseInt((env as any).PDS_BLOB_QUOTA_BYTES || '10737418240', 10); // Default: 10GB
+  const maxBytes = parseInt(env.PDS_BLOB_QUOTA_BYTES || '10737418240', 10);
 
   return (quota.total_bytes + additionalBytes) <= maxBytes;
 }

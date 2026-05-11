@@ -17,7 +17,8 @@ function isSecretStoreBinding(value: unknown): value is SecretsStoreSecret {
   return (
     !!value &&
     typeof value === "object" &&
-    typeof (value as any).get === "function"
+    "get" in value &&
+    typeof (value as { get: unknown }).get === "function"
   );
 }
 
@@ -35,13 +36,13 @@ export async function resolveSecret(
  * Non-secret bindings (DB, BLOBS, SEQUENCER, vars) are preserved as-is.
  */
 export async function resolveEnvSecrets<E extends Env>(env: E): Promise<E> {
-  const resolved: any = { ...(env as any) };
+  const resolved: Record<string, unknown> = { ...env };
 
   await Promise.all(
     SECRET_KEYS.map(async (key) => {
-      const val = await resolveSecret((env as any)[key]);
-      if (val !== undefined) {
-        resolved[key as string] = val;
+      const value = await resolveSecret(env[key]);
+      if (value !== undefined) {
+        resolved[key as string] = value;
       }
     }),
   );
