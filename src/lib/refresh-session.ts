@@ -8,6 +8,7 @@
  * decision branch without an HTTP layer.
  */
 import type { Env } from '../env';
+import { InvalidToken } from './errors';
 import { getRuntimeString } from './secrets';
 import {
   getAccountByIdentifier,
@@ -64,13 +65,28 @@ export async function attemptRefresh({ env, token, nowSec }: AttemptInput): Prom
     return failure('AuthRequired', 'No authorization token provided');
   }
 
-  const verification = await verifyRefreshToken(env, token).catch(() => null);
+  // Catch only token-shape failures here; configuration errors must propagate
+  // so they surface as 5xx instead of being masked as a 401.
+  let verification: Awaited<ReturnType<typeof verifyRefreshToken>> | null;
+  try {
+    verification = await verifyRefreshToken(env, token);
+  } catch (error) {
+    if (error instanceof InvalidToken) {
+      verification = null;
+    } else {
+      throw error;
+    }
+  }
   if (!verification) {
     return failure('InvalidToken', 'Invalid or expired refresh token');
   }
 
   const { decoded } = verification;
-  if (!decoded || typeof decoded.jti !== 'string') {
+  if (
+    !decoded ||
+    typeof decoded.jti !== 'string' ||
+    typeof decoded.sub !== 'string'
+  ) {
     return failure('InvalidToken', 'Malformed refresh token');
   }
 
