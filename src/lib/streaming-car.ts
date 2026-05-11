@@ -58,6 +58,9 @@ function concat(parts: Uint8Array[]): Uint8Array {
  * });
  * ```
  */
+// StreamingCarEncoder is a class because it caches the encoded header
+// once and then writes one block at a time; the cache state plus the
+// per-block writeBlock() method belong on the same object.
 export class StreamingCarEncoder {
   private headerBytes: Uint8Array;
 
