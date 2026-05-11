@@ -298,7 +298,9 @@ export class Sequencer {
   private getSocketTargets(): WebSocket[] {
     let sockets: WebSocket[] = [];
     try {
-      sockets = (this.state.getWebSockets?.() || []) as WebSocket[];
+      // workers-types WebSocket misses a few DOM-types members; the values
+      // are wire-compatible at runtime, so widen through unknown.
+      sockets = (this.state.getWebSockets?.() || []) as unknown as WebSocket[];
     } catch (error) {
       console.warn('Sequencer: getWebSockets failed:', error);
     }
@@ -380,7 +382,9 @@ export class Sequencer {
     const base = this.getMetrics();
     let sockets: WebSocket[] = [];
     try {
-      sockets = this.state.getWebSockets?.() || [];
+      // workers-types WebSocket misses a few DOM-types members; the values
+      // are wire-compatible at runtime, so widen through unknown.
+      sockets = (this.state.getWebSockets?.() || []) as unknown as WebSocket[];
     } catch (error) {
       console.warn('Sequencer: getWebSockets failed in metrics:', error);
     }

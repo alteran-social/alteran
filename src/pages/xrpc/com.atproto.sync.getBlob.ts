@@ -108,7 +108,9 @@ export async function GET({ locals, url }: APIContext) {
       }
     }
 
-    return new Response(object.body as ReadableStream<Uint8Array>, {
+    // workers-types' ReadableStream lacks the DOM-types readMany member; the
+    // shapes are wire-compatible at runtime, so widen through unknown.
+    return new Response(object.body as unknown as ReadableStream<Uint8Array>, {
       status: 200,
       headers: {
         'Content-Type': mime,
