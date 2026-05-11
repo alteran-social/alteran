@@ -63,7 +63,7 @@
     "@ipld/car": "^5.4.2",
     "@ipld/dag-cbor": "^9.2.5",
     "@noble/hashes": "^2.0.1",
-    "astro": "^5.14.1",
+    "astro": "^6.1.5",
     "astro-icon": "^1.1.5",
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.44.6",

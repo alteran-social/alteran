@@ -123,7 +123,18 @@ export async function POST({ locals, request }: APIContext) {
   // Build didDoc for the response (required by official API contract)
   const didDoc = await buildDidDocument(env, did, handle);
 
-  return new Response(JSON.stringify({ did, didDoc, handle, accessJwt, refreshJwt, active: true }), {
-    headers: { 'Content-Type': 'application/json' },
-  });
+  const email = account?.email ?? (env.PDS_EMAIL as string | undefined);
+
+  return new Response(
+    JSON.stringify({
+      did,
+      didDoc,
+      handle,
+      accessJwt,
+      refreshJwt,
+      active: true,
+      ...(email ? { email, emailConfirmed: true, emailAuthFactor: false } : {}),
+    }),
+    { headers: { 'Content-Type': 'application/json' } },
+  );
 }

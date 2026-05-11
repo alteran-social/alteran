@@ -76,13 +76,13 @@ async function main() {
   const repo = await generateRepoSigning();
 
   printHeader("Generated Secrets");
-  console.log(`PDS_DID                 = ${did}`);
-  console.log(`PDS_HANDLE              = ${handle}`);
-  console.log(`USER_PASSWORD           = ${password}`);
-  console.log(`REFRESH_TOKEN     = ${accessSecret}`);
-  console.log(`REFRESH_TOKEN_SECRET    = ${refreshSecret}`);
-  console.log(`REPO_SIGNING_KEY        = <secp256k1 hex, hidden>`);
-  console.log(`REPO_SIGNING_DID        = ${repo.didKey}`);
+  console.log(`PDS_DID            = ${did}`);
+  console.log(`PDS_HANDLE         = ${handle}`);
+  console.log(`USER_PASSWORD      = ${password}`);
+  console.log(`ACCESS_TOKEN       = ${accessSecret}`);
+  console.log(`REFRESH_TOKEN      = ${refreshSecret}`);
+  console.log(`REPO_SIGNING_KEY   = <secp256k1 hex, hidden>`);
+  console.log(`REPO_SIGNING_DID   = ${repo.didKey}`);
   console.log();
 
   printHeader(`Wrangler Commands (${env})`);
@@ -91,19 +91,19 @@ async function main() {
     `wrangler secret put PDS_DID${envArg}`,
     `wrangler secret put PDS_HANDLE${envArg}`,
     `wrangler secret put USER_PASSWORD${envArg}`,
+    `wrangler secret put ACCESS_TOKEN${envArg}`,
     `wrangler secret put REFRESH_TOKEN${envArg}`,
-    `wrangler secret put REFRESH_TOKEN_SECRET${envArg}`,
     `wrangler secret put REPO_SIGNING_KEY${envArg}`,
   ];
   console.log(cmds.join("\n"));
   console.log();
   console.log("Paste the following when prompted:");
-  console.log("  PDS_DID:                 " + did);
-  console.log("  PDS_HANDLE:              " + handle);
-  console.log("  USER_PASSWORD:           " + password);
-  console.log("  REFRESH_TOKEN:     " + accessSecret);
-  console.log("  REFRESH_TOKEN_SECRET:    " + refreshSecret);
-  console.log("  REPO_SIGNING_KEY: " + repo.privateKeyHex);
+  console.log("  PDS_DID:           " + did);
+  console.log("  PDS_HANDLE:        " + handle);
+  console.log("  USER_PASSWORD:     " + password);
+  console.log("  ACCESS_TOKEN:      " + accessSecret);
+  console.log("  REFRESH_TOKEN:     " + refreshSecret);
+  console.log("  REPO_SIGNING_KEY:  " + repo.privateKeyHex);
 
   if (writeDevVars) {
     const target = path.resolve(".dev.vars");
@@ -116,8 +116,8 @@ async function main() {
           `PDS_DID=${did}`,
           `PDS_HANDLE=${handle}`,
           `USER_PASSWORD=${password}`,
-          `REFRESH_TOKEN=${accessSecret}`,
-          `REFRESH_TOKEN_SECRET=${refreshSecret}`,
+          `ACCESS_TOKEN=${accessSecret}`,
+          `REFRESH_TOKEN=${refreshSecret}`,
           `REPO_SIGNING_KEY=${repo.privateKeyHex}`,
           `PDS_CORS_ORIGIN=*`,
         ].join("\n") + "\n";

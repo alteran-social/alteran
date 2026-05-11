@@ -154,9 +154,11 @@ type AstroFetchHandler = (
 let cachedFetchPromise: Promise<AstroFetchHandler> | undefined;
 
 async function loadAstroFetchFromManifest(manifest: SSRManifest): Promise<AstroFetchHandler> {
-  const { createExports } = await import('@astrojs/cloudflare/entrypoints/server.js');
-  const exports = createExports(manifest);
-  return exports.default.fetch as unknown as AstroFetchHandler;
+  const { App } = await import('astro/app');
+  const { handle } = await import('@astrojs/cloudflare/handler');
+  const app = new App(manifest);
+  return (async (request, env, ctx) =>
+    handle(manifest, app, request as any, env as any, ctx as any)) as unknown as AstroFetchHandler;
 }
 
 async function getAstroFetch(options?: CreatePdsFetchHandlerOptions): Promise<AstroFetchHandler> {
@@ -166,7 +168,8 @@ async function getAstroFetch(options?: CreatePdsFetchHandlerOptions): Promise<As
 
   if (!cachedFetchPromise) {
     cachedFetchPromise = (async () => {
-      const mod = await import('@astrojs-manifest' as any);
+      const moduleSpecifier = '@astrojs-manifest';
+      const mod = await import(/* @vite-ignore */ moduleSpecifier);
       const manifest = (mod as any).manifest as SSRManifest;
       return loadAstroFetchFromManifest(manifest);
     })();
