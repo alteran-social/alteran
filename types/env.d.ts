@@ -43,6 +43,7 @@ declare global {
     PDS_MAX_JSON_BYTES?: string;
     PDS_CORS_ORIGIN?: string;
     PDS_SEQ_WINDOW?: string;
+    PDS_WS_HIBERNATE?: string;
     ENVIRONMENT?: string;
     PDS_BSKY_APP_VIEW_URL?: string;
     PDS_BSKY_APP_VIEW_DID?: string;
