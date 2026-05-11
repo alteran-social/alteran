@@ -34,7 +34,12 @@ async function getNonce(env: Env): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const raw = await getSecret(env, NONCE_PDS_KEY);
   if (raw) {
-    try { const j = JSON.parse(raw) as { v: string, ts: number }; if (now - j.ts < 120) return j.v; } catch {}
+    try {
+      const cached = JSON.parse(raw) as { v: string; ts: number };
+      if (now - cached.ts < 120) return cached.v;
+    } catch {
+      // Corrupt cached nonce: fall through and mint a fresh one.
+    }
   }
   const v = crypto.randomUUID().replace(/-/g, '');
   await setSecret(env, NONCE_PDS_KEY, JSON.stringify({ v, ts: now }));

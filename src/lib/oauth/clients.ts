@@ -48,7 +48,9 @@ export async function verifyClientAssertion(client_id: string, issuerOrigin: str
         const verified = await compactVerify(assertionJwt, key);
         payload = JSON.parse(new TextDecoder().decode(verified.payload));
         break;
-      } catch {}
+      } catch {
+        // Try the next JWK candidate; only the final no-payload check matters.
+      }
     }
     if (!payload) return false;
 

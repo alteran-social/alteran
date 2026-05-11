@@ -18,7 +18,11 @@ export async function GET({ locals, request }: APIContext) {
   if (client_id && par.client_id !== client_id) return new Response('client_id mismatch', { status: 400 });
 
   let meta: any = null;
-  try { meta = await fetchClientMetadata(par.client_id); } catch {}
+  try {
+    meta = await fetchClientMetadata(par.client_id);
+  } catch {
+    // Client metadata is decorative on this page; the consent form still renders.
+  }
   const clientName = esc(meta?.client_name || new URL(par.client_id).host);
   const logo = typeof meta?.logo_uri === 'string' ? meta.logo_uri : '';
   const scopes = par.scope.split(' ').filter(Boolean);

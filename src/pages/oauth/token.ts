@@ -41,7 +41,11 @@ export async function POST({ locals, request }: APIContext) {
 
       // If confidential client, verify assertion
       let clientMeta: any = null;
-      try { clientMeta = await fetchClientMetadata(client_id); } catch {}
+      try {
+        clientMeta = await fetchClientMetadata(client_id);
+      } catch {
+        // Public clients have no fetchable metadata; only confidential clients gate on it below.
+      }
       if (clientMeta?.token_endpoint_auth_method === 'private_key_jwt') {
         let jwks = clientMeta?.jwks;
         if (!jwks && typeof clientMeta?.jwks_uri === 'string') {
@@ -86,7 +90,12 @@ export async function POST({ locals, request }: APIContext) {
 
       // If confidential client, verify assertion
       if (client_id) {
-        let clientMeta: any = null; try { clientMeta = await fetchClientMetadata(client_id); } catch {}
+        let clientMeta: any = null;
+        try {
+          clientMeta = await fetchClientMetadata(client_id);
+        } catch {
+          // Public clients have no fetchable metadata; only confidential clients gate on it below.
+        }
         if (clientMeta?.token_endpoint_auth_method === 'private_key_jwt') {
           let jwks = clientMeta?.jwks;
           if (!jwks && typeof clientMeta?.jwks_uri === 'string') {

@@ -12,7 +12,9 @@ export function resolvePdsHostname(env: Env, requestUrl?: string): string | null
     try {
       const url = new URL(requestUrl);
       host = url.hostname;
-    } catch {}
+    } catch {
+      // Malformed request URL: leave host unset so the caller can choose a fallback.
+    }
   }
 
   if (!host) return null;

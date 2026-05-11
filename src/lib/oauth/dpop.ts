@@ -31,7 +31,9 @@ export async function getAuthzNonce(env: Env): Promise<string> {
       if (typeof parsed.v === 'string' && typeof parsed.ts === 'number') {
         if (now - parsed.ts < NONCE_TTL_SEC) return parsed.v;
       }
-    } catch {}
+    } catch {
+      // Corrupt cached nonce: fall through and mint a fresh one.
+    }
   }
   const v = crypto.randomUUID().replace(/-/g, '');
   const rec = JSON.stringify({ v, ts: now });

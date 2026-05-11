@@ -125,7 +125,9 @@ export function createPdsFetchHandler(options?: CreatePdsFetchHandlerOptions): P
             message: 'subscribeRepos requires WebSocket upgrade',
             timestamp: new Date().toISOString(),
           }));
-        } catch {}
+        } catch {
+          // Logging-only path; never block the response on log serialization.
+        }
         return new Response('This endpoint requires a WebSocket (wss://) upgrade', { status: 426 }) as unknown as WorkersResponse;
       }
       if (!resolvedEnv.SEQUENCER) {
