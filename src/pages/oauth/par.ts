@@ -1,6 +1,7 @@
 import type { APIContext } from 'astro';
-import { errorCode, errorMessage } from '../../lib/errors';
+import { errorMessage } from '../../lib/errors';
 import { getAuthzNonce, setDpopNonceHeader, verifyDpop, dpopErrorResponse } from '../../lib/oauth/dpop';
+import { DpopNonceError } from '../../lib/oauth/dpop-errors';
 import { savePar } from '../../lib/oauth/store';
 import { fetchClientMetadata, isHttpsUrl, verifyClientAssertion } from '../../lib/oauth/clients';
 
@@ -111,7 +112,7 @@ export async function POST({ locals, request }: APIContext) {
     setDpopNonceHeader(headers, await getAuthzNonce(env));
     return new Response(JSON.stringify({ request_uri }), { status: 201, headers });
   } catch (e) {
-    if (e && errorCode(e) === 'use_dpop_nonce') {
+    if (e instanceof DpopNonceError) {
       return dpopErrorResponse(env, e);
     }
     const headers = new Headers({ 'Content-Type': 'application/json' });
