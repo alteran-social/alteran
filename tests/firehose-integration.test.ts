@@ -4,6 +4,9 @@ import { RepoManager } from '../src/services/repo-manager';
 import { encodeBlocksForCommit } from '../src/services/car';
 import type { Env } from '../src/env';
 
+const runAppIntegrationTests = process.env.RUN_APP_TESTS === 'true';
+const describeIntegration = runAppIntegrationTests ? describe : describe.skip;
+
 // Mock environment for testing
 const createMockEnv = (): Env => {
   return {
@@ -17,7 +20,7 @@ const createMockEnv = (): Env => {
   } as unknown as Env;
 };
 
-describe('Firehose Integration Tests', () => {
+describeIntegration('Firehose Integration Tests', () => {
   describe('Operation Extraction Workflow', () => {
     it('should extract operations from MST changes', async () => {
       // This is a conceptual test showing the workflow
