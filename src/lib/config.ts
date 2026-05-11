@@ -187,10 +187,18 @@ export function validateConfigOrThrow(env: Env): void {
 export function getConfig(env: Env) {
   const result = validateConfig(env);
 
+  const did = env.PDS_DID;
+  const handle = env.PDS_HANDLE;
+  if (typeof did !== 'string' || did === '' || typeof handle !== 'string' || handle === '') {
+    throw new Error(
+      `getConfig called with invalid configuration. Missing: ${result.missing.join(', ')}`,
+    );
+  }
+
   return {
     // Required
-    did: String(env.PDS_DID!),
-    handle: String(env.PDS_HANDLE!),
+    did,
+    handle,
 
     // Optional with defaults
     allowedMime: result.config.optional.PDS_ALLOWED_MIME.split(','),

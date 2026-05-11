@@ -421,8 +421,9 @@ export class Sequencer {
 
         for (const event of events) {
           try {
+            if (event.seq == null) continue;
             const commitEvent: CommitEvent = {
-              seq: event.seq!,
+              seq: event.seq,
               did: JSON.parse(event.data).did,
               commitCid: event.cid,
               rev: event.rev,
@@ -430,8 +431,8 @@ export class Sequencer {
               sig: event.sig,
               ts: event.ts,
             };
-            const msg = await this.createCommitPayload(commitEvent);
-            ws.send(encodeCommitFrame(msg));
+            const message = await this.createCommitPayload(commitEvent);
+            ws.send(encodeCommitFrame(message));
           } catch (error) {
             console.error('Failed to send database event:', error);
           }
