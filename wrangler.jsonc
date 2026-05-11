@@ -3,14 +3,15 @@
   "name": "alteran",
   "main": "src/_worker.ts",
   "compatibility_date": "2025-09-27",
+  // Base vars apply when running `wrangler dev`/`wrangler deploy` without
+  // `--env`. Identity (PDS_DID/PDS_HANDLE/PDS_HOSTNAME) belongs to the
+  // per-environment blocks below so a fork can configure dev/staging/prod
+  // independently; the `deploy` npm script pins `--env production`.
   "vars": {
-    "PDS_MAX_BLOB_SIZE": "5242880",
-    "PDS_DID": "did:plc:35bdlgus7hihmup66o265nuy",
-    "PDS_HANDLE": "rawkode.dev",
-    "PDS_HOSTNAME": "rawkode.dev"
+    "PDS_MAX_BLOB_SIZE": "5242880"
   },
   // Secrets to set in env (via `wrangler secret put`):
-  // USER_PASSWORD, REFRESH_TOKEN, REFRESH_TOKEN_SECRET, PDS_DID, PDS_HANDLE
+  // USER_PASSWORD, REFRESH_TOKEN, REFRESH_TOKEN_SECRET
   // Optional: PDS_ALLOWED_MIME, PDS_MAX_BLOB_SIZE, PDS_MAX_JSON_BYTES, PDS_RATE_LIMIT_PER_MIN, PDS_CORS_ORIGIN
   "d1_databases": [
     {
@@ -52,6 +53,9 @@
         "ENVIRONMENT": "development",
         "PDS_MAX_BLOB_SIZE": "10485760",
         "PDS_CORS_ORIGIN": "*",
+        "PDS_DID": "did:plc:35bdlgus7hihmup66o265nuy",
+        "PDS_HANDLE": "rawkode.dev",
+        "PDS_HOSTNAME": "rawkode.dev"
       },
       "d1_databases": [
         {

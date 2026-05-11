@@ -29,7 +29,7 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "deploy": "astro build && bunx wrangler deploy",
+    "deploy": "astro build && bunx wrangler deploy --env production",
     "iac:deploy": "bunx alchemy deploy iac/alchemy.run.ts",
     "iac:destroy": "bunx alchemy destroy iac/alchemy.run.ts",
     "iac:plan": "bunx alchemy plan iac/alchemy.run.ts",
