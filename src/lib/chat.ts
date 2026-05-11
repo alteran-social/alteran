@@ -10,23 +10,23 @@ export interface ListConvosFilters {
 export interface ConvoView {
   id: string;
   rev: string;
-  members: any[];
+  members: unknown[];
   muted: boolean;
   unreadCount: number;
   status?: string;
-  lastMessage?: any;
-  lastReaction?: any;
+  lastMessage?: unknown;
+  lastReaction?: unknown;
 }
 
 export type ConvoLogEntry =
   | { $type: 'chat.bsky.convo.defs#logBeginConvo'; rev: string; convoId: string }
-  | { $type: 'chat.bsky.convo.defs#logCreateMessage'; rev: string; convoId: string; message: any }
+  | { $type: 'chat.bsky.convo.defs#logCreateMessage'; rev: string; convoId: string; message: unknown }
   | {
       $type: 'chat.bsky.convo.defs#logAddReaction';
       rev: string;
       convoId: string;
-      message: any;
-      reaction: any;
+      message: unknown;
+      reaction: unknown;
     };
 
 export async function ensureChatTables(env: Env) {
@@ -130,8 +130,14 @@ export async function listChatConvos(
           avatar: string | null;
         }>();
 
-      const memberViews = (members.results ?? []).map((member) => {
-        const view: any = {
+      type MemberView = {
+        did: string;
+        handle: string;
+        displayName?: string;
+        avatar?: string;
+      };
+      const memberViews: MemberView[] = (members.results ?? []).map((member) => {
+        const view: MemberView = {
           did: member.did,
           handle: member.handle,
         };

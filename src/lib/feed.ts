@@ -30,18 +30,17 @@ function parseRow(row: PostRow): ParsedPost | null {
     const record = JSON.parse(row.json) ?? {};
     if (record && typeof record === 'object' && !Array.isArray(record)) {
       const collection = inferCollectionFromUri(row.uri);
-      if (collection && typeof (record as any).$type !== 'string') {
-        (record as any).$type = collection;
+      const writable = record as Record<string, unknown>;
+      if (collection && typeof writable.$type !== 'string') {
+        writable.$type = collection;
       }
-      if (typeof (record as any).createdAt !== 'string') {
-        (record as any).createdAt = new Date().toISOString();
+      if (typeof writable.createdAt !== 'string') {
+        writable.createdAt = new Date().toISOString();
       }
     }
 
-    const createdAt =
-      record && typeof record === 'object' && typeof (record as any).createdAt === 'string'
-        ? (record as any).createdAt
-        : new Date().toISOString();
+    const createdAtField = (record as Record<string, unknown>).createdAt;
+    const createdAt = typeof createdAtField === 'string' ? createdAtField : new Date().toISOString();
 
     return {
       uri: row.uri,
