@@ -11,37 +11,39 @@ export const prerender = false;
 export async function GET({ locals, request }: APIContext) {
   const { env } = locals.runtime;
   const url = new URL(request.url);
-  const did = url.searchParams.get('did') ?? (env.PDS_DID as string);
+  const configuredDid = typeof env.PDS_DID === 'string' ? env.PDS_DID : '';
+  const did = url.searchParams.get('did') ?? configuredDid;
 
   try {
-    const active = await isAccountActive(env as any, did);
+    const active = await isAccountActive(env, did);
     let status: string | undefined = undefined;
     try {
-      const state = await getAccountState(env as any, did);
-      // If your schema eventually stores a specific status, map it here.
-      // For now, we only expose active=true/false and leave status undefined unless inactive.
+      const state = await getAccountState(env, did);
       if (state && state.active === false) status = 'desynchronized';
-    } catch {}
+    } catch (stateError) {
+      // Account-state lookup is best-effort; falls through with status undefined.
+      console.warn('getAccountState failed:', stateError);
+    }
 
     let rev: string | undefined;
     if (active) {
-      const head = await getRepoRoot(env as any);
+      const head = await getRepoRoot(env);
       if (head?.rev) rev = String(head.rev);
     }
 
     return new Response(
-      JSON.stringify({ did, active, ...(status ? { status } : {}), ...(rev ? { rev } : {} ) }),
+      JSON.stringify({ did, active, ...(status ? { status } : {}), ...(rev ? { rev } : {}) }),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
     );
-  } catch (error: any) {
-    const msg = String(error?.message || error);
-    if (msg.includes('RepoNotFound')) {
-      return new Response(JSON.stringify({ error: 'RepoNotFound', message: msg }), {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('RepoNotFound')) {
+      return new Response(JSON.stringify({ error: 'RepoNotFound', message }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' },
       });
     }
-    return new Response(JSON.stringify({ error: 'InternalServerError', message: msg }), {
+    return new Response(JSON.stringify({ error: 'InternalServerError', message }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });

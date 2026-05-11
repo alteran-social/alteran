@@ -55,8 +55,9 @@ export async function POST({ locals, request }: APIContext) {
     }
 
     const repoManager = new RepoManager(env);
-    const pdsDid = env.PDS_DID as string;
-    const results = [] as any[];
+    const pdsDid = typeof env.PDS_DID === 'string' ? env.PDS_DID : '';
+    type WriteResult = { $type: string; uri?: string; cid?: string; validationStatus?: string };
+    const results: WriteResult[] = [];
     // Accumulate ops and new MST blocks for this batch
     const opsForCommit: { action: 'create'|'update'|'delete'; path: string; cid: import('multiformats/cid').CID | null }[] = [];
     const newMstBlocksAll: Array<[import('multiformats/cid').CID, Uint8Array]> = [];
@@ -79,7 +80,7 @@ export async function POST({ locals, request }: APIContext) {
           did: pdsDid,
           cid: recordCid.toString(),
           json: JSON.stringify(value),
-        } as any);
+        });
         results.push({
           $type: 'com.atproto.repo.applyWrites#createResult',
           uri: `at://${repo}/${collection}/${rkey}`,
@@ -97,7 +98,7 @@ export async function POST({ locals, request }: APIContext) {
           did: pdsDid,
           cid: recordCid.toString(),
           json: JSON.stringify(value),
-        } as any);
+        });
         results.push({
           $type: 'com.atproto.repo.applyWrites#updateResult',
           uri: `at://${repo}/${collection}/${rkey}`,
@@ -127,7 +128,7 @@ export async function POST({ locals, request }: APIContext) {
     try {
       // Prefer commitData/sig/blocks returned by bumpRoot (authoritative)
       await notifySequencer(env, {
-        did: env.PDS_DID as string,
+        did: pdsDid,
         commitCid,
         rev,
         data: commitData,
