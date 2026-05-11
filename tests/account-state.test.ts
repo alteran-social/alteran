@@ -12,6 +12,7 @@ describe('account state machine', () => {
   describe('transition', () => {
     it('activates from any non-deleted state', () => {
       const states: AccountState[] = [
+        { tag: 'active' },
         { tag: 'takendown' },
         { tag: 'suspended' },
         { tag: 'deactivated' },
@@ -25,9 +26,14 @@ describe('account state machine', () => {
       expect(transition({ tag: 'active' }, { tag: 'takedown' })).toEqual({ tag: 'takendown' });
     });
 
-    it('suspends with optional expiry', () => {
+    it('suspends without expiry', () => {
       expect(transition({ tag: 'active' }, { tag: 'suspend' })).toEqual({ tag: 'suspended' });
-      expect(transition({ tag: 'active' }, { tag: 'suspend', until: '2026-12-31T00:00:00Z' })).toEqual({
+    });
+
+    it('suspends with an expiry', () => {
+      expect(
+        transition({ tag: 'active' }, { tag: 'suspend', until: '2026-12-31T00:00:00Z' }),
+      ).toEqual({
         tag: 'suspended',
         until: '2026-12-31T00:00:00Z',
       });

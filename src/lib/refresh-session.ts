@@ -27,20 +27,20 @@ export type RefreshFailureCode =
   | 'InvalidToken'
   | 'ExpiredToken';
 
-export interface RefreshFailure {
+export type RefreshFailure = {
   readonly tag: 'failure';
   readonly code: RefreshFailureCode;
   readonly message: string;
   readonly status: number;
-}
+};
 
-export interface RefreshSuccess {
+export type RefreshSuccess = {
   readonly tag: 'success';
   readonly did: string;
   readonly handle: string;
   readonly accessJwt: string;
   readonly refreshJwt: string;
-}
+};
 
 export type RefreshOutcome = RefreshFailure | RefreshSuccess;
 
@@ -48,11 +48,11 @@ function failure(code: RefreshFailureCode, message: string, status = 401): Refre
   return { tag: 'failure', code, message, status };
 }
 
-interface AttemptInput {
+type AttemptInput = {
   readonly env: Env;
   readonly token: string | null;
   readonly nowSec: number;
-}
+};
 
 /**
  * Pure-ish coordinator: every branch either fails fast or yields a
@@ -94,12 +94,12 @@ export async function attemptRefresh({ env, token, nowSec }: AttemptInput): Prom
   return finalizeRotation({ env, stored, expiredJti: decoded.jti, nowSec });
 }
 
-interface FinalizeInput {
+type FinalizeInput = {
   readonly env: Env;
   readonly stored: RefreshTokenRow;
   readonly expiredJti: string;
   readonly nowSec: number;
-}
+};
 
 async function finalizeRotation({
   env,

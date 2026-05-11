@@ -59,10 +59,10 @@ export function transition(state: AccountState, event: AccountEvent): AccountSta
   }
 }
 
-export interface AccountWireStatus {
+export type AccountWireStatus = {
   readonly active: boolean;
   readonly status?: string;
-}
+};
 
 export function toWireStatus(state: AccountState): AccountWireStatus {
   switch (state.tag) {

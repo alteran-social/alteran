@@ -188,14 +188,12 @@ export async function handleResourceAuthError(env: Env, error: unknown): Promise
   if (!(error instanceof ResourceAuthError)) {
     return null;
   }
-  switch (errorCode(error)) {
+  switch (error.code) {
     case 'use_dpop_nonce':
       return dpopResourceUnauthorized(env, undefined, error.nonce);
     case 'expired_token':
       return jsonError('ExpiredToken', 'Access token expired', 400);
     case 'invalid_token':
       return jsonError('InvalidToken', 'Invalid or malformed access token', 400);
-    default:
-      return null;
   }
 }

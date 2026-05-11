@@ -11,33 +11,9 @@ import {
 
 // Structural tests for the Drizzle schema. They verify the table definitions
 // at module load — no D1 binding is required because the assertions only read
-// column metadata (primary/notNull/dataType). The query-construction tests at
-// the bottom build a Drizzle statement object but never execute it, so they
-// likewise need no runtime backend.
+// column metadata (primary/notNull/dataType).
 
 describe('Schema Tests', () => {
-  describe('Indexes', () => {
-    test('record table has did index', () => {
-      expect(record).toBeDefined();
-    });
-
-    test('record table has cid index', () => {
-      expect(record).toBeDefined();
-    });
-
-    test('blob_usage table has record_uri index', () => {
-      expect(blob_usage).toBeDefined();
-    });
-
-    test('refresh_token table has did index', () => {
-      expect(refresh_token_store).toBeDefined();
-    });
-
-    test('commit_log table has seq index', () => {
-      expect(commit_log).toBeDefined();
-    });
-  });
-
   describe('Schema Constraints', () => {
     test('record table has primary key on uri', () => {
       expect(record.uri.primary).toBe(true);

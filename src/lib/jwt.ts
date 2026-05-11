@@ -1,5 +1,6 @@
 import type { Env } from "../env";
 import { AuthTokenExpiredError } from "./auth-errors";
+import { errorCode } from "./errors";
 import { getRuntimeString } from "./secrets";
 import {
   issueSessionTokens,
@@ -224,5 +225,5 @@ function b64urlDecode(s: string): Uint8Array {
 
 function isJwtExpiredError(error: unknown): boolean {
   return error instanceof AuthTokenExpiredError ||
-    (typeof error === "object" && error !== null && (error as any).code === "ERR_JWT_EXPIRED");
+    errorCode(error) === "ERR_JWT_EXPIRED";
 }

@@ -149,6 +149,11 @@ export async function proxyAppView({
     }
   }
 
+  // Service JWT is best-effort. Public AppView endpoints accept unauthenticated
+  // reads, so a mint failure here should not block the proxy — we forward
+  // without an Authorization header and let the upstream decide. Common
+  // reasons we silently fall through: missing signing key on the viewer's DID
+  // document, transient PLC lookup failure, or unsupported issuer DID method.
   let serviceJwt: string | null = null;
   try {
     const issuerDid = auth.claims.sub;
