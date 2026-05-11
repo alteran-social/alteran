@@ -4,6 +4,7 @@ import { lazyCleanupExpiredTokens } from '../../lib/token-cleanup';
 import { attemptRefresh, type RefreshOutcome } from '../../lib/refresh-session';
 import { buildDidDocument } from '../../lib/did-document';
 import { getAccountState } from '../../db/dal';
+import { getAccountByIdentifier } from '../../db/account';
 import { toWireStatus } from '../../lib/account-state';
 
 export const prerender = false;
@@ -28,6 +29,8 @@ export async function POST({ locals, request }: APIContext) {
   const didDoc = await buildDidDocument(env, outcome.did, outcome.handle);
   const accountState = await getAccountState(env, outcome.did);
   const wire = accountState ? toWireStatus(accountState) : { active: true };
+  const account = await getAccountByIdentifier(env, outcome.did);
+  const email = account?.email ?? (env.PDS_EMAIL as string | undefined);
 
   return new Response(
     JSON.stringify({
@@ -38,6 +41,7 @@ export async function POST({ locals, request }: APIContext) {
       refreshJwt: outcome.refreshJwt,
       active: wire.active,
       ...(wire.status ? { status: wire.status } : {}),
+      ...(email ? { email, emailConfirmed: true, emailAuthFactor: false } : {}),
     }),
     { headers: { 'Content-Type': 'application/json' } },
   );

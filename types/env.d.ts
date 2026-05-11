@@ -27,6 +27,7 @@ declare global {
     PDS_HANDLE?: string | SecretsStoreSecret;
     PDS_DID?: string | SecretsStoreSecret;
     PDS_HOSTNAME?: string;
+    PDS_EMAIL?: string;
     PDS_ALLOWED_MIME?: string;
     USER_PASSWORD?: string | SecretsStoreSecret;
     PDS_MAX_BLOB_SIZE?: string;

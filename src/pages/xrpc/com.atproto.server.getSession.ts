@@ -33,7 +33,7 @@ export async function GET({ locals, request }: APIContext) {
     JSON.stringify({
       did,
       handle,
-      email: account?.email ?? 'user@example.com',
+      email: account?.email ?? (env.PDS_EMAIL as string | undefined) ?? 'user@example.com',
       emailConfirmed: true,
       emailAuthFactor: false,
       didDoc: {
