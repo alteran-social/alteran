@@ -298,7 +298,7 @@ export class Sequencer {
   private getSocketTargets(): WebSocket[] {
     let sockets: WebSocket[] = [];
     try {
-      sockets = this.state.getWebSockets?.() || [];
+      sockets = (this.state.getWebSockets?.() || []) as WebSocket[];
     } catch (error) {
       console.warn('Sequencer: getWebSockets failed:', error);
     }

@@ -34,15 +34,20 @@ export async function POST({ locals, request }: APIContext) {
     );
   }
 
-  const body = await readJson(request).catch(() => ({ identifier: '', password: '' }));
-  const identifier = typeof body.identifier === 'string' && body.identifier ? body.identifier : (await getRuntimeString(env, 'PDS_HANDLE', 'user.example'));
+  const rawBody = await readJson(request).catch(() => ({}));
+  const body = (rawBody ?? {}) as { identifier?: unknown; password?: unknown };
+  const identifier: string =
+    typeof body.identifier === 'string' && body.identifier
+      ? body.identifier
+      : (await getRuntimeString(env, 'PDS_HANDLE', 'user.example')) ?? 'user.example';
   const password = typeof body.password === 'string' ? body.password : '';
 
-  let account = await getAccountByIdentifier(env, identifier ?? '');
+  let account = await getAccountByIdentifier(env, identifier);
   if (!account) {
     const fallbackPassword = await getRuntimeString(env, 'USER_PASSWORD', '');
     if (fallbackPassword) {
-      const fallbackDid = (await getRuntimeString(env, 'PDS_DID', 'did:example:single-user')) ?? 'did:example:single-user';
+      const fallbackDid =
+        (await getRuntimeString(env, 'PDS_DID', 'did:example:single-user')) ?? 'did:example:single-user';
       const fallbackHandle = (await getRuntimeString(env, 'PDS_HANDLE', identifier)) ?? identifier;
       const hashed = await hashPassword(fallbackPassword);
       await createAccount(env, {
@@ -50,7 +55,7 @@ export async function POST({ locals, request }: APIContext) {
         handle: fallbackHandle,
         passwordScrypt: hashed,
       });
-      account = await getAccountByIdentifier(env, identifier ?? '');
+      account = await getAccountByIdentifier(env, identifier);
     }
   }
   const passwordHash = account?.passwordScrypt ?? null;

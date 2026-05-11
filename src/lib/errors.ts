@@ -109,6 +109,22 @@ export class UpstreamProxyFailure extends XRPCError {
   }
 }
 
+// 500 - Server misconfiguration (missing secrets, invalid signing key, etc)
+export class ServerMisconfigured extends XRPCError {
+  constructor(message: string = 'Server misconfigured', details?: Record<string, unknown>) {
+    super('ServerMisconfigured', message, 500, details);
+    this.name = 'ServerMisconfigured';
+  }
+}
+
+// 413 - Payload too large (rejected before parsing)
+export class PayloadTooLarge extends XRPCError {
+  constructor(message: string = 'Payload too large', details?: Record<string, unknown>) {
+    super('PayloadTooLarge', message, 413, details);
+    this.name = 'PayloadTooLarge';
+  }
+}
+
 /**
  * User-friendly error messages
  * Maps technical errors to actionable guidance

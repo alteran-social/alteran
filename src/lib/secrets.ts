@@ -36,7 +36,7 @@ export async function resolveSecret(
  * Non-secret bindings (DB, BLOBS, SEQUENCER, vars) are preserved as-is.
  */
 export async function resolveEnvSecrets<E extends Env>(env: E): Promise<E> {
-  const resolved: Record<string, unknown> = { ...env };
+  const resolved = { ...env } as Record<string, unknown>;
 
   await Promise.all(
     SECRET_KEYS.map(async (key) => {

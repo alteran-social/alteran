@@ -44,7 +44,12 @@ export async function POST({ locals, request }: APIContext) {
   if (rateLimitResponse) return rateLimitResponse;
 
   try {
-    const body = await readJson(request);
+    const body = (await readJson(request)) as {
+      repo?: string;
+      writes?: unknown[];
+      validate?: boolean;
+      swapCommit?: string;
+    };
     const { repo, writes, validate = true, swapCommit } = body;
 
     if (!writes || !Array.isArray(writes)) {
@@ -64,9 +69,25 @@ export async function POST({ locals, request }: APIContext) {
     let firstPrevMst: import('multiformats/cid').CID | null = null;
     let lastMst: import('../../lib/mst').MST | null = null;
 
+    type WriteOperation = {
+      $type?: string;
+      collection?: string;
+      rkey?: string;
+      value?: Record<string, unknown>;
+    };
     // Apply all writes atomically
-    for (const write of writes) {
+    for (const rawWrite of writes) {
+      const write = rawWrite as WriteOperation;
       const { $type, collection, rkey, value } = write;
+      if (typeof collection !== 'string' || typeof rkey !== 'string') {
+        return new Response(
+          JSON.stringify({
+            error: 'InvalidRequest',
+            message: 'collection and rkey are required strings on every write',
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
 
       if ($type === 'com.atproto.repo.applyWrites#create') {
         const { mst, recordCid, prevMstRoot, newMstBlocks } = await repoManager.addRecord(collection, rkey, value);
