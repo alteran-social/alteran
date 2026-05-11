@@ -1,10 +1,11 @@
 import type { DurableObjectState } from '@cloudflare/workers-types';
 import { encodeInfoFrame } from '../../lib/firehose/frames';
+import { InvalidRequest } from '../../lib/errors';
 
-export interface WebSocketAttachment {
+export type WebSocketAttachment = {
   id: string;
   cursor: number;
-}
+};
 
 export type HibernatableSocket = WebSocket & {
   serializeAttachment?: (value: WebSocketAttachment) => void;
@@ -22,11 +23,23 @@ export type HibernatableState = DurableObjectState & {
   getWebSockets?: () => WebSocket[];
 };
 
-export interface UpgradeContext {
+export type UpgradeContext = {
   readonly state: HibernatableState;
   readonly nextSeq: number;
   readonly hibernate: boolean;
   readonly onClient: (id: string, cursor: number, server: HibernatableSocket) => void;
+};
+
+// Reject NaN / negative / non-integer cursors at the boundary. parseInt('abc')
+// yields NaN, which would silently bypass `cursor > nextSeq - 1` (all NaN
+// comparisons are false) and get persisted into the attachment.
+export function parseCursorParam(raw: string | null): number {
+  if (raw === null || raw === '') return 0;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new InvalidRequest('cursor must be a non-negative integer');
+  }
+  return parsed;
 }
 
 export function handleUpgrade(
@@ -34,12 +47,22 @@ export function handleUpgrade(
   url: URL,
   context: UpgradeContext,
 ): Response {
+  let cursor: number;
+  try {
+    cursor = parseCursorParam(url.searchParams.get('cursor'));
+  } catch (error) {
+    if (error instanceof InvalidRequest) {
+      return new Response(
+        JSON.stringify({ error: 'InvalidRequest', message: error.message }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    throw error;
+  }
+
   const pair = new WebSocketPair();
   const [client, server] = Object.values(pair) as [WebSocket, HibernatableSocket];
   const id = crypto.randomUUID();
-
-  const cursorParam = url.searchParams.get('cursor');
-  const cursor = cursorParam ? parseInt(cursorParam, 10) : 0;
 
   const requestedProtoHeader =
     request.headers.get('Sec-WebSocket-Protocol') ||
