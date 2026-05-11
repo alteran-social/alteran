@@ -71,8 +71,8 @@ export async function POST({ locals, request }: APIContext) {
       let jwks = clientMeta?.jwks;
       if (!jwks && typeof clientMeta?.jwks_uri === 'string') {
         try {
-          const res = await fetch(clientMeta.jwks_uri);
-          jwks = await res.json();
+          const response = await fetch(clientMeta.jwks_uri);
+          jwks = await response.json();
         } catch (e) {
           return new Response(JSON.stringify({ error: 'invalid_client', error_description: 'Failed to fetch jwks_uri' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }

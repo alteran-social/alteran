@@ -72,27 +72,27 @@ export async function listPosts(env: Env, limit: number, cursor?: string): Promi
   }
   params.push(safeLimit);
 
-  const res = await env.DB.prepare(
+  const response = await env.DB.prepare(
     `SELECT rowid, uri, cid, json FROM record WHERE ${where} ORDER BY rowid DESC LIMIT ?`
   )
     .bind(...params)
     .all<PostRow>();
 
-  if (!res?.results) return [];
-  return res.results.map(parseRow).filter((row): row is ParsedPost => row !== null);
+  if (!response?.results) return [];
+  return response.results.map(parseRow).filter((row): row is ParsedPost => row !== null);
 }
 
 export async function getPostsByUris(env: Env, uris: string[]): Promise<ParsedPost[]> {
   if (!uris.length) return [];
   const placeholders = uris.map(() => '?').join(',');
-  const res = await env.DB.prepare(
+  const response = await env.DB.prepare(
     `SELECT rowid, uri, cid, json FROM record WHERE uri IN (${placeholders})`
   )
     .bind(...uris)
     .all<PostRow>();
 
-  if (!res?.results) return [];
-  return res.results.map(parseRow).filter((row): row is ParsedPost => row !== null);
+  if (!response?.results) return [];
+  return response.results.map(parseRow).filter((row): row is ParsedPost => row !== null);
 }
 
 export async function buildFeedViewPosts(env: Env, posts: ParsedPost[]) {
@@ -143,23 +143,23 @@ export async function countPosts(env: Env): Promise<number> {
   const actor = await getPrimaryActor(env);
   const prefix = `at://${actor.did}/${POST_COLLECTION}/`;
   const upperBound = `${prefix}{`; // '{' sorts after 'z', safely bounding rkeys
-  const res = await env.DB.prepare(
+  const response = await env.DB.prepare(
     'SELECT COUNT(*) as count FROM record WHERE uri >= ? AND uri < ?'
   )
     .bind(prefix, upperBound)
     .first<{ count: number }>();
-  return res?.count ?? 0;
+  return response?.count ?? 0;
 }
 
 export async function getPostByUri(env: Env, uri: string): Promise<ParsedPost | null> {
-  const res = await env.DB.prepare(
+  const response = await env.DB.prepare(
     'SELECT rowid, uri, cid, json FROM record WHERE uri = ? LIMIT 1'
   )
     .bind(uri)
     .first<PostRow>();
 
-  if (!res) return null;
-  return parseRow(res);
+  if (!response) return null;
+  return parseRow(response);
 }
 
 export type { ParsedPost };

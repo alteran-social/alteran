@@ -66,8 +66,8 @@ export class D1Blockstore implements WritableBlockstore {
       const placeholders = new Array(chunk.length).fill('?').join(',');
       const stmt = this.env.DB.prepare(`SELECT cid, bytes FROM blockstore WHERE cid IN (${placeholders})`);
       const binds = chunk.map((c) => c.toString());
-      const res = await stmt.bind(...binds).all();
-      const rows = (res.results ?? []) as Array<{ cid: string; bytes: string }>;
+      const response = await stmt.bind(...binds).all();
+      const rows = (response.results ?? []) as Array<{ cid: string; bytes: string }>;
       const got = new Set<string>();
       for (const row of rows) {
         got.add(row.cid);

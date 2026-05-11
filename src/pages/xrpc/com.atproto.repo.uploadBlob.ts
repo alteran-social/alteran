@@ -99,7 +99,7 @@ export async function POST({ locals, request }: APIContext) {
 
   const store = new R2BlobStore(env);
   try {
-    const res = await store.put(buf, { contentType });
+    const response = await store.put(buf, { contentType });
 
     // Compute a CIDv1 (raw) for the blob so clients receive a valid CID link
     const digest = await sha256.digest(new Uint8Array(buf));
@@ -107,14 +107,14 @@ export async function POST({ locals, request }: APIContext) {
     const cidStr = cid.toString();
 
     // Register blob ref with CID-based key
-    await putBlobRef(env, did, cidStr, res.key, contentType, res.size);
+    await putBlobRef(env, did, cidStr, response.key, contentType, response.size);
 
     // Update quota
-    await updateBlobQuota(env, did, res.size, 1);
+    await updateBlobQuota(env, did, response.size, 1);
 
     // Mirror upstream shape exactly; helpful debugging header
     // Conform to lexicon: blob object must include $type: 'blob'
-    const body = { blob: { $type: 'blob', ref: { $link: cidStr }, mimeType: contentType, size: res.size } };
+    const body = { blob: { $type: 'blob', ref: { $link: cidStr }, mimeType: contentType, size: response.size } };
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     // Debug-only headers (safe for clients to ignore)
     headers['x-sniffed-mime'] = sniffed || '';
