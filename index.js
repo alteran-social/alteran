@@ -127,23 +127,35 @@ export default function alteran(options = {}) {
           enforce: 'post',
           apply: 'build',
           transform(code, id) {
-            if (!id.includes('@astrojs-ssr-virtual-entry')) return null;
-            if (!code.includes('const _exports = createExports')) return null;
-            if (code.includes("const Sequencer = _exports['Sequencer'];")) return null;
+            if (code.includes("_exports['Sequencer']") || code.includes('_exports.Sequencer')) {
+              return null;
+            }
 
-            const replacedInit = code.replace(
-              'const __astrojsSsrVirtualEntry = _exports.default;',
-              "const Sequencer = _exports['Sequencer'];\nconst __astrojsSsrVirtualEntry = _exports.default;"
-            );
+            // Astro 6: virtual:astro:legacy-ssr-entry — the resolved id is `\0virtual:astro:legacy-ssr-entry`.
+            // The body is a thin wrapper that re-exports `_exports.default`; we tack on a named Sequencer export.
+            if (id.includes('virtual:astro:legacy-ssr-entry')) {
+              return {
+                code: `${code}\nexport const Sequencer = _exports['Sequencer'];\n`,
+                map: null,
+              };
+            }
 
-            if (replacedInit === code) return null;
+            // Astro 5: @astrojs-ssr-virtual-entry — the body assigns `_exports` and exports a default; patch both.
+            if (id.includes('@astrojs-ssr-virtual-entry')) {
+              if (!code.includes('const _exports = createExports')) return null;
+              const withSequencer = code.replace(
+                'const __astrojsSsrVirtualEntry = _exports.default;',
+                "const Sequencer = _exports['Sequencer'];\nconst __astrojsSsrVirtualEntry = _exports.default;",
+              );
+              if (withSequencer === code) return null;
+              const reexported = withSequencer.replace(
+                'export { __astrojsSsrVirtualEntry as default, pageMap };',
+                'export { Sequencer, __astrojsSsrVirtualEntry as default, pageMap };',
+              );
+              return { code: reexported, map: null };
+            }
 
-            const replacedExport = replacedInit.replace(
-              'export { __astrojsSsrVirtualEntry as default, pageMap };',
-              'export { Sequencer, __astrojsSsrVirtualEntry as default, pageMap };'
-            );
-
-            return { code: replacedExport, map: null };
+            return null;
           },
         });
 
