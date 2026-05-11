@@ -157,8 +157,18 @@ async function loadAstroFetchFromManifest(manifest: SSRManifest): Promise<AstroF
   const { App } = await import('astro/app');
   const { handle } = await import('@astrojs/cloudflare/handler');
   const app = new App(manifest);
-  return (async (request, env, ctx) =>
-    handle(manifest, app, request as any, env as any, ctx as any)) as unknown as AstroFetchHandler;
+  return async (
+    request: WorkersRequest,
+    env: Env,
+    ctx: ExecutionContext,
+  ) =>
+    (await handle(
+      manifest,
+      app,
+      request as any,
+      env as any,
+      ctx as any,
+    )) as unknown as WorkersResponse;
 }
 
 async function getAstroFetch(options?: CreatePdsFetchHandlerOptions): Promise<AstroFetchHandler> {
