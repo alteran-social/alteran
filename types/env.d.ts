@@ -47,6 +47,7 @@ declare global {
     PDS_BSKY_APP_VIEW_URL?: string;
     PDS_BSKY_APP_VIEW_DID?: string;
     PDS_BSKY_APP_VIEW_CDN_URL_PATTERN?: string;
+    PDS_APPVIEW_FORCE_FALLBACK?: string;
     PDS_BSKY_CHAT_URL?: string;
     PDS_BSKY_CHAT_DID?: string;
     PDS_OZONE_URL?: string;

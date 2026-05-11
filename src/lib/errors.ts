@@ -93,6 +93,22 @@ export class InternalServerError extends XRPCError {
   }
 }
 
+// 400 - Invalid atproto-proxy header
+export class InvalidProxyHeader extends XRPCError {
+  constructor(message: string = 'Invalid atproto-proxy header', details?: Record<string, unknown>) {
+    super('InvalidProxyHeader', message, 400, details);
+    this.name = 'InvalidProxyHeader';
+  }
+}
+
+// 502 - Upstream proxy or DID resolution failure
+export class UpstreamProxyFailure extends XRPCError {
+  constructor(message: string = 'Upstream proxy failure', details?: Record<string, unknown>) {
+    super('UpstreamProxyFailure', message, 502, details);
+    this.name = 'UpstreamProxyFailure';
+  }
+}
+
 /**
  * User-friendly error messages
  * Maps technical errors to actionable guidance
