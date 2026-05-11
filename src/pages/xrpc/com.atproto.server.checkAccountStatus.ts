@@ -2,6 +2,7 @@ import type { APIContext } from 'astro';
 import { errorMessage } from '../../lib/errors';
 import { AuthTokenExpiredError, expiredToken, isAuthorized, unauthorized } from '../../lib/auth';
 import { getAccountState } from '../../db/dal';
+import { toWireStatus } from '../../lib/account-state';
 import { getDb } from '../../db/client';
 import { repo_root, record, blob_ref, commit_log } from '../../db/schema';
 import { eq, count } from 'drizzle-orm';
@@ -34,9 +35,11 @@ export async function GET({ locals, request }: APIContext) {
     const did = String(env.PDS_DID ?? 'did:example:single-user');
     const db = getDb(env);
 
-    // Get account state
+    // Get account state. No row means an unmigrated account, treated as active
+    // for backward compatibility.
     const accountState = await getAccountState(env, did);
-    const active = accountState?.active ?? true;
+    const wire = accountState ? toWireStatus(accountState) : { active: true };
+    const { active, status } = wire;
 
     // Get repo head
     const repoRoot = await db
@@ -73,6 +76,7 @@ export async function GET({ locals, request }: APIContext) {
       JSON.stringify({
         did,
         active,
+        ...(status ? { status } : {}),
         head: repoRoot?.commitCid ?? null,
         rev: repoRoot?.rev ?? 0,
         recordCount,

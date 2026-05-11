@@ -1,6 +1,7 @@
 import type { APIContext } from 'astro';
 import { getRoot as getRepoRoot } from '../../db/repo';
-import { isAccountActive, getAccountState } from '../../db/dal';
+import { getAccountState } from '../../db/dal';
+import { toWireStatus } from '../../lib/account-state';
 
 export const prerender = false;
 
@@ -15,13 +16,18 @@ export async function GET({ locals, request }: APIContext) {
   const did = url.searchParams.get('did') ?? configuredDid;
 
   try {
-    const active = await isAccountActive(env, did);
-    let status: string | undefined = undefined;
+    // Best-effort FSM lookup: an unmigrated row or a transient DB error both
+    // fall through to active=true so reads aren't blocked by an internal hiccup.
+    let active = true;
+    let status: string | undefined;
     try {
       const state = await getAccountState(env, did);
-      if (state && state.active === false) status = 'desynchronized';
+      if (state) {
+        const wire = toWireStatus(state);
+        active = wire.active;
+        status = wire.status;
+      }
     } catch (stateError) {
-      // Account-state lookup is best-effort; falls through with status undefined.
       console.warn('getAccountState failed:', stateError);
     }
 

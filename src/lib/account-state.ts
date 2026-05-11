@@ -64,6 +64,10 @@ export type AccountWireStatus = {
   readonly status?: string;
 };
 
+// The AT Protocol firehose #account event carries only { active, status } —
+// the spec has no slot for `until`. Wire round-trips through
+// fromWireStatus(toWireStatus) are intentionally lossy on the suspended
+// expiry; persistence uses toRow/fromRow which preserve the full FSM.
 export function toWireStatus(state: AccountState): AccountWireStatus {
   switch (state.tag) {
     case 'active':
@@ -99,4 +103,54 @@ export function fromWireStatus(wire: AccountWireStatus): AccountState {
 
 export function isActive(state: AccountState): boolean {
   return state.tag === 'active';
+}
+
+// Persistence shape. The account_state table mirrors this row exactly. We
+// keep both `active` (for legacy reads + cheap filters) and `status` /
+// `suspended_until` so the full FSM can be recovered from D1.
+export type AccountStateRow = {
+  readonly active: boolean;
+  readonly status: string | null;
+  readonly suspended_until: number | null;
+};
+
+export function toRow(state: AccountState): AccountStateRow {
+  switch (state.tag) {
+    case 'active':
+      return { active: true, status: null, suspended_until: null };
+    case 'takendown':
+      return { active: false, status: 'takendown', suspended_until: null };
+    case 'suspended':
+      return {
+        active: false,
+        status: 'suspended',
+        suspended_until: state.until ? Date.parse(state.until) : null,
+      };
+    case 'deactivated':
+      return { active: false, status: 'deactivated', suspended_until: null };
+    case 'deleted':
+      return { active: false, status: 'deleted', suspended_until: null };
+  }
+}
+
+export function fromRow(row: AccountStateRow): AccountState {
+  if (row.active) return ACTIVE;
+  switch (row.status) {
+    case 'takendown':
+      return TAKENDOWN;
+    case 'suspended': {
+      const until = row.suspended_until !== null
+        ? new Date(row.suspended_until).toISOString()
+        : undefined;
+      return until ? { tag: 'suspended', until } : { tag: 'suspended' };
+    }
+    case 'deleted':
+      return DELETED;
+    case 'deactivated':
+    default:
+      // null / unknown status with active=false is the bootstrap state for
+      // freshly-created accounts that haven't been activated yet. Treat it
+      // as deactivated so reads still gate but no special-case is needed.
+      return DEACTIVATED;
+  }
 }

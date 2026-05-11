@@ -2,6 +2,7 @@ import { getDb } from './client';
 import { record, type NewRecordRow, blob_ref, blob_usage, blob_quota } from './schema';
 import type { Env } from '../env';
 import { eq, inArray, and, sql } from 'drizzle-orm';
+import { type AccountState, toRow, fromRow } from '../lib/account-state';
 
 export async function putRecord(env: Env, row: NewRecordRow) {
   const db = getDb(env);
@@ -118,35 +119,41 @@ export async function checkBlobQuota(env: Env, did: string, additionalBytes: num
   return (quota.total_bytes + additionalBytes) <= maxBytes;
 }
 
-// Account state management for migration support
-export async function getAccountState(env: Env, did: string) {
+// Account state management for migration support. Reads/writes route through
+// the AccountState FSM so the persisted row stays consistent with whatever the
+// firehose broadcast emits.
+export async function getAccountState(env: Env, did: string): Promise<AccountState | null> {
   const db = getDb(env);
   const { account_state } = await import('./schema');
-  const state = await db.select().from(account_state).where(eq(account_state.did, did)).get();
-  return state ?? null;
+  const row = await db.select().from(account_state).where(eq(account_state.did, did)).get();
+  return row ? fromRow(row) : null;
 }
 
-export async function createAccountState(env: Env, did: string, active: boolean = false) {
+export async function setAccountState(env: Env, did: string, state: AccountState): Promise<void> {
   const db = getDb(env);
   const { account_state } = await import('./schema');
-  await db.insert(account_state).values({
-    did,
-    active,
-    created_at: Date.now(),
-  }).run();
-}
-
-export async function setAccountActive(env: Env, did: string, active: boolean) {
-  const db = getDb(env);
-  const { account_state } = await import('./schema');
-  await db.update(account_state)
-    .set({ active })
-    .where(eq(account_state.did, did))
+  const row = toRow(state);
+  await db
+    .insert(account_state)
+    .values({ did, ...row, created_at: Date.now() })
+    .onConflictDoUpdate({
+      target: account_state.did,
+      set: row,
+    })
     .run();
+}
+
+export async function createAccountState(env: Env, did: string, active: boolean = false): Promise<void> {
+  await setAccountState(env, did, active ? { tag: 'active' } : { tag: 'deactivated' });
+}
+
+export async function setAccountActive(env: Env, did: string, active: boolean): Promise<void> {
+  await setAccountState(env, did, active ? { tag: 'active' } : { tag: 'deactivated' });
 }
 
 export async function isAccountActive(env: Env, did: string): Promise<boolean> {
   const state = await getAccountState(env, did);
-  // If no account state exists, assume active (backward compatibility)
-  return state?.active ?? true;
+  // If no account state row exists, assume active (backward compatibility
+  // with rows that predate the migration).
+  return state === null ? true : state.tag === 'active';
 }

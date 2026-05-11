@@ -3,6 +3,8 @@ import { bearerToken } from '../../lib/util';
 import { lazyCleanupExpiredTokens } from '../../lib/token-cleanup';
 import { attemptRefresh, type RefreshOutcome } from '../../lib/refresh-session';
 import { buildDidDocument } from '../../lib/did-document';
+import { getAccountState } from '../../db/dal';
+import { toWireStatus } from '../../lib/account-state';
 
 export const prerender = false;
 
@@ -24,6 +26,8 @@ export async function POST({ locals, request }: APIContext) {
   }
 
   const didDoc = await buildDidDocument(env, outcome.did, outcome.handle);
+  const accountState = await getAccountState(env, outcome.did);
+  const wire = accountState ? toWireStatus(accountState) : { active: true };
 
   return new Response(
     JSON.stringify({
@@ -32,7 +36,8 @@ export async function POST({ locals, request }: APIContext) {
       handle: outcome.handle,
       accessJwt: outcome.accessJwt,
       refreshJwt: outcome.refreshJwt,
-      active: true,
+      active: wire.active,
+      ...(wire.status ? { status: wire.status } : {}),
     }),
     { headers: { 'Content-Type': 'application/json' } },
   );

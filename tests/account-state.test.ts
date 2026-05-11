@@ -6,6 +6,8 @@ import {
   toWireStatus,
   fromWireStatus,
   isActive,
+  toRow,
+  fromRow,
 } from '../src/lib/account-state';
 
 describe('account state machine', () => {
@@ -100,6 +102,38 @@ describe('account state machine', () => {
       expect(isActive({ tag: 'suspended' })).toBe(false);
       expect(isActive({ tag: 'deactivated' })).toBe(false);
       expect(isActive({ tag: 'deleted' })).toBe(false);
+    });
+  });
+
+  describe('row converters', () => {
+    it('round-trips active', () => {
+      expect(fromRow(toRow({ tag: 'active' }))).toEqual({ tag: 'active' });
+    });
+
+    it('round-trips takendown', () => {
+      expect(fromRow(toRow({ tag: 'takendown' }))).toEqual({ tag: 'takendown' });
+    });
+
+    it('round-trips suspended without expiry', () => {
+      expect(fromRow(toRow({ tag: 'suspended' }))).toEqual({ tag: 'suspended' });
+    });
+
+    it('round-trips suspended with expiry', () => {
+      const state: AccountState = { tag: 'suspended', until: '2026-12-31T00:00:00.000Z' };
+      expect(fromRow(toRow(state))).toEqual(state);
+    });
+
+    it('round-trips deactivated', () => {
+      expect(fromRow(toRow({ tag: 'deactivated' }))).toEqual({ tag: 'deactivated' });
+    });
+
+    it('round-trips deleted', () => {
+      expect(fromRow(toRow({ tag: 'deleted' }))).toEqual({ tag: 'deleted' });
+    });
+
+    it('treats null status with active=false as deactivated (bootstrap)', () => {
+      expect(fromRow({ active: false, status: null, suspended_until: null }))
+        .toEqual({ tag: 'deactivated' });
     });
   });
 });
