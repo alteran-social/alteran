@@ -1,14 +1,6 @@
-import { drizzle } from 'drizzle-orm/d1';
-import { repo_root } from './schema';
-
-export async function seed(db: D1Database, did: string) {
-  const d1 = drizzle(db);
-  const rows = await d1.select().from(repo_root).all();
-  if (rows.length === 0) {
-    await d1.insert(repo_root).values({
-      did,
-      commitCid: 'bafyreih2y3p6t2i4y567q2z5q2z5q2z5q2z5q2z5q2z5q2z5q2z5q2z5q',
-      rev: '0',
-    });
-  }
+export async function seed(_db: D1Database, _did: string) {
+  // Intentional no-op. The repo_root row is created via UPSERT by bumpRoot()
+  // on the first write. Previously this function seeded a placeholder commit
+  // CID that wasn't a valid CIDv1, causing the first applyWrites to throw
+  // `SyntaxError: Unexpected end of data` when CID.parse decoded it.
 }
