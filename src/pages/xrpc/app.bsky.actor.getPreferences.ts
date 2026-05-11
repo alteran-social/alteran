@@ -8,11 +8,11 @@ export async function GET({ locals, request }: APIContext) {
   const { env } = locals.runtime;
   try {
     if (!(await isAuthorized(request, env))) return unauthorized();
-  } catch (err) {
-    if (err instanceof AuthTokenExpiredError) {
+  } catch (error) {
+    if (error instanceof AuthTokenExpiredError) {
       return expiredToken();
     }
-    throw err;
+    throw error;
   }
 
   const { preferences } = await getActorPreferences(env);

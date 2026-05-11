@@ -89,7 +89,7 @@ export function createPdsFetchHandler(options?: CreatePdsFetchHandlerOptions): P
       if (!isRelayPath) {
         ctx.waitUntil(notifyRelaysIfNeeded(resolvedEnv as any, request.url));
       }
-    } catch (err) {
+    } catch (error) {
       // Never block on relay notification
     }
 
@@ -103,13 +103,13 @@ export function createPdsFetchHandler(options?: CreatePdsFetchHandlerOptions): P
         }
         const id = (resolvedEnv as any).SEQUENCER.idFromName('default');
         const stub = (resolvedEnv as any).SEQUENCER.get(id);
-        const req = new Request(new URL('/metrics', request.url).toString(), { method: 'GET' });
-        const res = await stub.fetch(req as any);
+        const proxyRequest = new Request(new URL('/metrics', request.url).toString(), { method: 'GET' });
+        const response = await stub.fetch(proxyRequest as any);
         // Pass through JSON
-        const headers = new Headers(res.headers);
+        const headers = new Headers(response.headers);
         headers.set('Content-Type', 'application/json');
-        return new Response(await res.text(), { status: res.status, headers }) as unknown as WorkersResponse;
-      } catch (err) {
+        return new Response(await response.text(), { status: response.status, headers }) as unknown as WorkersResponse;
+      } catch (error) {
         return new Response(JSON.stringify({ error: 'InternalError', message: 'Failed to fetch sequencer metrics' }), { status: 500, headers: { 'Content-Type': 'application/json' } }) as unknown as WorkersResponse;
       }
     }
@@ -125,7 +125,9 @@ export function createPdsFetchHandler(options?: CreatePdsFetchHandlerOptions): P
             message: 'subscribeRepos requires WebSocket upgrade',
             timestamp: new Date().toISOString(),
           }));
-        } catch {}
+        } catch {
+          // Logging-only path; never block the response on log serialization.
+        }
         return new Response('This endpoint requires a WebSocket (wss://) upgrade', { status: 426 }) as unknown as WorkersResponse;
       }
       if (!resolvedEnv.SEQUENCER) {

@@ -93,6 +93,38 @@ export class InternalServerError extends XRPCError {
   }
 }
 
+// 400 - Invalid atproto-proxy header
+export class InvalidProxyHeader extends XRPCError {
+  constructor(message: string = 'Invalid atproto-proxy header', details?: Record<string, unknown>) {
+    super('InvalidProxyHeader', message, 400, details);
+    this.name = 'InvalidProxyHeader';
+  }
+}
+
+// 502 - Upstream proxy or DID resolution failure
+export class UpstreamProxyFailure extends XRPCError {
+  constructor(message: string = 'Upstream proxy failure', details?: Record<string, unknown>) {
+    super('UpstreamProxyFailure', message, 502, details);
+    this.name = 'UpstreamProxyFailure';
+  }
+}
+
+// 500 - Server misconfiguration (missing secrets, invalid signing key, etc)
+export class ServerMisconfigured extends XRPCError {
+  constructor(message: string = 'Server misconfigured', details?: Record<string, unknown>) {
+    super('ServerMisconfigured', message, 500, details);
+    this.name = 'ServerMisconfigured';
+  }
+}
+
+// 413 - Payload too large (rejected before parsing)
+export class PayloadTooLarge extends XRPCError {
+  constructor(message: string = 'Payload too large', details?: Record<string, unknown>) {
+    super('PayloadTooLarge', message, 413, details);
+    this.name = 'PayloadTooLarge';
+  }
+}
+
 /**
  * User-friendly error messages
  * Maps technical errors to actionable guidance
@@ -119,6 +151,28 @@ export function getUserFriendlyMessage(code: string): string {
  */
 export function categorizeError(status: number): 'client' | 'server' {
   return status >= 400 && status < 500 ? 'client' : 'server';
+}
+
+/**
+ * Narrow an unknown thrown value to extract its `code` and `message` fields
+ * without resorting to `any`. Useful in catch blocks for libraries that
+ * decorate Errors with custom code strings (jose, ResourceAuthError, etc.).
+ */
+export function errorCode(error: unknown): string | undefined {
+  if (error && typeof error === 'object' && 'code' in error) {
+    const value = (error as { code: unknown }).code;
+    return typeof value === 'string' ? value : undefined;
+  }
+  return undefined;
+}
+
+export function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object' && 'message' in error) {
+    const value = (error as { message: unknown }).message;
+    if (typeof value === 'string') return value;
+  }
+  return String(error);
 }
 
 /**

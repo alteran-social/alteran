@@ -1,4 +1,5 @@
 import type { APIContext } from 'astro';
+import { errorMessage } from '../../lib/errors';
 import { AuthTokenExpiredError, expiredToken, isAuthorized, unauthorized } from '../../lib/auth';
 import { getDb } from '../../db/client';
 import { record, blob_ref } from '../../db/schema';
@@ -18,11 +19,11 @@ export async function GET({ locals, request, url }: APIContext) {
 
   try {
     if (!(await isAuthorized(request, env))) return unauthorized();
-  } catch (err) {
-    if (err instanceof AuthTokenExpiredError) {
+  } catch (error) {
+    if (error instanceof AuthTokenExpiredError) {
       return expiredToken();
     }
-    throw err;
+    throw error;
   }
 
   try {
@@ -83,11 +84,11 @@ export async function GET({ locals, request, url }: APIContext) {
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     );
-  } catch (error: any) {
+  } catch (error) {
     return new Response(
       JSON.stringify({
         error: 'InternalServerError',
-        message: error.message || 'Failed to list missing blobs'
+        message: errorMessage(error) || 'Failed to list missing blobs'
       }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );

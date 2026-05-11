@@ -11,7 +11,7 @@ export async function POST({ locals, request }: APIContext) {
   const { env } = locals.runtime;
 
   try {
-    const body = await readJson(request);
+    const body = (await readJson(request)) as { handle?: string };
     const { handle } = body;
 
     if (!handle) {

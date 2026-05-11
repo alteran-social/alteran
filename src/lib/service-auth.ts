@@ -69,12 +69,12 @@ async function getVerificationKey(did: string): Promise<string | null> {
       return null;
     }
 
-    const res = await fetch(url, {
+    const response = await fetch(url, {
       headers: { 'Accept': 'application/json' },
     });
-    if (!res.ok) return null;
+    if (!response.ok) return null;
 
-    const doc = await res.json() as any;
+    const doc = await response.json() as any;
     
     // Find atproto verification method
     const methods = doc.verificationMethod || [];

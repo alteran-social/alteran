@@ -5,25 +5,26 @@ import { CID } from 'multiformats/cid';
 /**
  * Frame types for AT Protocol firehose
  */
-export enum FrameType {
-  Message = 1,
-  Error = -1,
-}
+export const FrameType = {
+  Message: 1,
+  Error: -1,
+} as const;
+export type FrameType = (typeof FrameType)[keyof typeof FrameType];
 
 /**
  * Frame header structure
  */
 export interface FrameHeader {
-  op: FrameType;
-  t?: string; // Message type discriminator
+  readonly op: FrameType;
+  readonly t?: string; // Message type discriminator
 }
 
 /**
  * Error frame body
  */
 export interface ErrorFrameBody {
-  error: string;
-  message?: string;
+  readonly error: string;
+  readonly message?: string;
 }
 
 /**
@@ -116,54 +117,54 @@ export class ErrorFrame extends Frame {
  */
 
 export interface InfoMessage {
-  name: string;
-  message?: string;
+  readonly name: string;
+  readonly message?: string;
 }
 
 export interface RepoOp {
-  action: 'create' | 'update' | 'delete';
-  path: string;
-  cid: CID | null;
-  prev?: CID;
+  readonly action: 'create' | 'update' | 'delete';
+  readonly path: string;
+  readonly cid: CID | null;
+  readonly prev?: CID;
 }
 
 export interface CommitMessage {
-  seq: number;
-  rebase: boolean;
-  tooBig: boolean;
-  repo: string; // DID
-  commit: CID;
-  prev: CID | null;
-  rev: string; // TID
-  since: string | null; // Previous TID
-  blocks: Uint8Array; // CAR bytes
-  ops: RepoOp[];
-  blobs: CID[];
-  time: string; // ISO 8601
-  prevData?: CID; // Previous MST root
+  readonly seq: number;
+  readonly rebase: boolean;
+  readonly tooBig: boolean;
+  readonly repo: string; // DID
+  readonly commit: CID;
+  readonly prev: CID | null;
+  readonly rev: string; // TID
+  readonly since: string | null; // Previous TID
+  readonly blocks: Uint8Array; // CAR bytes
+  readonly ops: readonly RepoOp[];
+  readonly blobs: readonly CID[];
+  readonly time: string; // ISO 8601
+  readonly prevData?: CID; // Previous MST root
 }
 
 export interface IdentityMessage {
-  seq: number;
-  did: string;
-  time: string;
-  handle?: string;
+  readonly seq: number;
+  readonly did: string;
+  readonly time: string;
+  readonly handle?: string;
 }
 
 export interface AccountMessage {
-  seq: number;
-  did: string;
-  time: string;
-  active: boolean;
-  status?: string;
+  readonly seq: number;
+  readonly did: string;
+  readonly time: string;
+  readonly active: boolean;
+  readonly status?: string;
 }
 
 export interface SyncMessage {
-  seq: number;
-  did: string;
-  time: string;
-  active: boolean;
-  status?: string;
+  readonly seq: number;
+  readonly did: string;
+  readonly time: string;
+  readonly active: boolean;
+  readonly status?: string;
 }
 
 /**

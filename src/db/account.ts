@@ -121,8 +121,8 @@ export async function deleteRefreshToken(env: Env, id: string): Promise<void> {
 
 export async function cleanupExpiredRefreshTokens(env: Env, now: number): Promise<number> {
   const db = getDb(env);
-  const res = await db.delete(refresh_token_store).where(lt(refresh_token_store.expiresAt, now)).run();
-  return res.meta.changes ?? 0;
+  const response = await db.delete(refresh_token_store).where(lt(refresh_token_store.expiresAt, now)).run();
+  return response.meta.changes ?? 0;
 }
 
 export async function getSecret(env: Env, key: string): Promise<string | null> {

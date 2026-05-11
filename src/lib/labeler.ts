@@ -6,38 +6,54 @@ export interface LabelerViewOptions {
   detailed?: boolean;
 }
 
+interface LabelerView {
+  uri: string;
+  cid: string;
+  creator: ReturnType<typeof buildProfileView>;
+  indexedAt: string;
+  likeCount: number;
+  viewer: Record<string, unknown>;
+  labels?: unknown;
+  policies?: { labelValues: unknown[]; labelValueDefinitions?: unknown[] };
+  reasonTypes?: unknown[];
+  subjectTypes?: unknown[];
+  subjectCollections?: unknown[];
+}
+
 const LABELER_COLLECTION = 'app.bsky.labeler.service';
 const LABELER_RKEY = 'self';
 
 export async function getLabelerServiceViews(
   env: Env,
   dids: string[],
-  options: LabelerViewOptions = {}
-) {
+  options: LabelerViewOptions = {},
+): Promise<LabelerView[]> {
   const detailed = options.detailed ?? false;
   const primaryActor = await getPrimaryActor(env);
 
   const unique = Array.from(new Set(dids.map((did) => did.trim()).filter(Boolean)));
-  const views: any[] = [];
+  const views: LabelerView[] = [];
 
   for (const did of unique) {
-    if (did !== primaryActor.did) continue; // Single-user PDS only has local labeler data
+    // Single-user PDS only has local labeler data.
+    if (did !== primaryActor.did) continue;
 
     const uri = `at://${did}/${LABELER_COLLECTION}/${LABELER_RKEY}`;
     const row = await getRecord(env, uri);
     if (!row || !row.json) continue;
 
-    let record: any;
+    let parsedRecord: Record<string, unknown>;
     try {
-      record = JSON.parse(row.json);
+      const parsed = JSON.parse(row.json);
+      if (typeof parsed !== 'object' || parsed === null) continue;
+      parsedRecord = parsed as Record<string, unknown>;
     } catch {
       continue;
     }
 
-    if (typeof record !== 'object' || record === null) continue;
-
-    const indexedAt = typeof record.createdAt === 'string' ? record.createdAt : new Date().toISOString();
-    const baseView: any = {
+    const indexedAt =
+      typeof parsedRecord.createdAt === 'string' ? parsedRecord.createdAt : new Date().toISOString();
+    const baseView: LabelerView = {
       uri,
       cid: row.cid,
       creator: buildProfileView(primaryActor),
@@ -47,17 +63,18 @@ export async function getLabelerServiceViews(
     };
 
     if (detailed) {
-      const policies = normalizePolicies(record.policies);
       views.push({
         ...baseView,
-        policies,
-        reasonTypes: Array.isArray(record.reasonTypes) ? record.reasonTypes : undefined,
-        subjectTypes: Array.isArray(record.subjectTypes) ? record.subjectTypes : undefined,
-        subjectCollections: Array.isArray(record.subjectCollections) ? record.subjectCollections : undefined,
-        labels: extractLabels(record.labels),
+        policies: normalizePolicies(parsedRecord.policies),
+        reasonTypes: Array.isArray(parsedRecord.reasonTypes) ? parsedRecord.reasonTypes : undefined,
+        subjectTypes: Array.isArray(parsedRecord.subjectTypes) ? parsedRecord.subjectTypes : undefined,
+        subjectCollections: Array.isArray(parsedRecord.subjectCollections)
+          ? parsedRecord.subjectCollections
+          : undefined,
+        labels: extractLabels(parsedRecord.labels),
       });
     } else {
-      const labels = extractLabels(record.labels);
+      const labels = extractLabels(parsedRecord.labels);
       if (labels) baseView.labels = labels;
       views.push(baseView);
     }
@@ -66,24 +83,20 @@ export async function getLabelerServiceViews(
   return views;
 }
 
-function normalizePolicies(input: any) {
-  if (input && typeof input === 'object') {
-    const labelValues = Array.isArray(input.labelValues) ? input.labelValues : [];
-    const labelValueDefinitions = Array.isArray(input.labelValueDefinitions)
-      ? input.labelValueDefinitions
-      : undefined;
+function normalizePolicies(input: unknown): LabelerView['policies'] {
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    const policies = input as { labelValues?: unknown; labelValueDefinitions?: unknown };
     return {
-      labelValues,
-      labelValueDefinitions,
+      labelValues: Array.isArray(policies.labelValues) ? policies.labelValues : [],
+      labelValueDefinitions: Array.isArray(policies.labelValueDefinitions)
+        ? policies.labelValueDefinitions
+        : undefined,
     };
   }
-
-  return {
-    labelValues: [],
-  };
+  return { labelValues: [] };
 }
 
-function extractLabels(input: any) {
+function extractLabels(input: unknown): unknown {
   if (!input) return undefined;
   if (Array.isArray(input)) return input.length ? input : undefined;
   if (typeof input === 'object') return input;

@@ -23,7 +23,8 @@ export async function GET({ locals, url }: APIContext) {
   const { env } = locals.runtime;
 
   try {
-    const did = url.searchParams.get('did') ?? (env.PDS_DID as string);
+    const configuredDid = typeof env.PDS_DID === 'string' ? env.PDS_DID : undefined;
+    const did = url.searchParams.get('did') ?? configuredDid;
     const cid = url.searchParams.get('cid');
     if (!did || !cid) {
       return new Response(
@@ -35,8 +36,7 @@ export async function GET({ locals, url }: APIContext) {
       );
     }
 
-    // Gate by account active state
-    const active = await isAccountActive(env as any, did);
+    const active = await isAccountActive(env, did);
     if (!active) {
       return new Response(
         JSON.stringify({ error: 'AccountInactive', message: 'Account is not active' }),
@@ -98,16 +98,19 @@ export async function GET({ locals, url }: APIContext) {
       );
     }
 
-    // If row missing, opportunistically backfill blob_ref
     if (!blobMeta) {
       try {
-        size = (object as any).size ?? size ?? 0;
-        await putBlobRef(env as any, did, cid, key, mime, Number(size ?? 0));
-      } catch {}
+        size = object.size ?? size ?? 0;
+        await putBlobRef(env, did, cid, key, mime, Number(size ?? 0));
+      } catch (backfillError) {
+        // Backfill is opportunistic; serving the blob is the priority.
+        console.warn('getBlob backfill failed:', backfillError);
+      }
     }
 
-    // Stream the blob with appropriate content type
-    return new Response(object.body as any, {
+    // workers-types' ReadableStream lacks the DOM-types readMany member; the
+    // shapes are wire-compatible at runtime, so widen through unknown.
+    return new Response(object.body as unknown as ReadableStream<Uint8Array>, {
       status: 200,
       headers: {
         'Content-Type': mime,
@@ -117,11 +120,12 @@ export async function GET({ locals, url }: APIContext) {
         'content-security-policy': "default-src 'none'; sandbox",
       },
     });
-  } catch (error: any) {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to retrieve blob';
     return new Response(
       JSON.stringify({
         error: 'InternalServerError',
-        message: error.message || 'Failed to retrieve blob'
+        message,
       }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );

@@ -103,10 +103,14 @@ export const blob_quota = sqliteTable('blob_quota', {
   updated_at: integer('updated_at').notNull(),
 });
 
-// Account state for migration support (single-user PDS)
+// Account state for migration support (single-user PDS). The active flag
+// stays for legacy reads, but the full FSM is recovered from
+// (active, status, suspended_until) via fromRow in src/lib/account-state.ts.
 export const account_state = sqliteTable('account_state', {
   did: text('did').primaryKey().notNull(),
   active: integer('active', { mode: 'boolean' }).notNull().default(false),
+  status: text('status'),
+  suspended_until: integer('suspended_until'),
   created_at: integer('created_at').notNull(),
 });
 

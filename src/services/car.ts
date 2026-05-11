@@ -7,6 +7,7 @@ import { CID } from 'multiformats/cid';
 import * as dagCbor from '@ipld/dag-cbor';
 import { sha256 } from 'multiformats/hashes/sha2';
 import { MST, Leaf, D1Blockstore } from '../lib/mst';
+import { NotFound } from '../lib/errors';
 
 export type CarSnapshot = {
   bytes: Uint8Array;
@@ -94,7 +95,7 @@ export async function buildRepoCar(env: Env, did: string): Promise<CarSnapshot> 
     }
   }
   // No authoritative head to build from
-  throw new Error('RepoNotFound');
+  throw new NotFound('RepoNotFound');
 }
 
 export async function buildRepoCarRange(env: Env, fromSeq: number, toSeq: number): Promise<CarSnapshot> {
@@ -262,7 +263,7 @@ export async function buildRecordProofCar(
   const db = drizzle(env.DB);
   const tip = await db.select().from(commit_log).orderBy(desc(commit_log.seq)).limit(1).get();
   if (!tip) {
-    throw new Error('HeadNotFound');
+    throw new NotFound('HeadNotFound');
   }
 
   // Reconstruct signed commit block and CID
@@ -389,8 +390,8 @@ async function collectMstBfs(
             if (!seen.has(key)) toFetch.push(t);
           }
         }
-      } catch (err) {
-        console.warn('collectMstBfs: failed to decode node', cidStr, err);
+      } catch (error) {
+        console.warn('collectMstBfs: failed to decode node', cidStr, error);
       }
     }
     // Ignore missing here; caller might not need full tree for snapshots

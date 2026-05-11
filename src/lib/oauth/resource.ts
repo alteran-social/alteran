@@ -1,4 +1,5 @@
 import type { Env } from '../../env';
+import { errorCode, errorMessage } from '../errors';
 import { verifyAccessToken } from '../session-tokens';
 import { decodeProtectedHeader, importJWK, compactVerify, type JWK as JoseJWK } from 'jose';
 
@@ -34,7 +35,12 @@ async function getNonce(env: Env): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const raw = await getSecret(env, NONCE_PDS_KEY);
   if (raw) {
-    try { const j = JSON.parse(raw) as { v: string, ts: number }; if (now - j.ts < 120) return j.v; } catch {}
+    try {
+      const cached = JSON.parse(raw) as { v: string; ts: number };
+      if (now - cached.ts < 120) return cached.v;
+    } catch {
+      // Corrupt cached nonce: fall through and mint a fresh one.
+    }
   }
   const v = crypto.randomUUID().replace(/-/g, '');
   await setSecret(env, NONCE_PDS_KEY, JSON.stringify({ v, ts: now }));
@@ -103,11 +109,11 @@ async function verifyAccessTokenOrThrow(env: Env, token: string) {
   let payloadJwt: Awaited<ReturnType<typeof verifyAccessToken>>;
   try {
     payloadJwt = await verifyAccessToken(env, token);
-  } catch (error: any) {
-    if (error?.code === 'ERR_JWT_EXPIRED') {
+  } catch (error) {
+    if (errorCode(error) === 'ERR_JWT_EXPIRED') {
       throw new ResourceAuthError('expired_token');
     }
-    if (error?.code) {
+    if (errorCode(error)) {
       throw new ResourceAuthError('invalid_token');
     }
     throw error;
@@ -154,9 +160,9 @@ export async function verifyResourceRequestHybrid(
     try {
       const result = await verifyResourceRequest(env, request);
       if (result) return result;
-    } catch (e: any) {
+    } catch (e) {
       // If it's a nonce error, propagate it
-      if (e?.code === 'use_dpop_nonce') throw e;
+      if (errorCode(e) === 'use_dpop_nonce') throw e;
       // Otherwise fall through to Bearer
     }
   }
@@ -178,18 +184,16 @@ function jsonError(error: string, message: string, status: number): Response {
   });
 }
 
-export async function handleResourceAuthError(env: Env, err: unknown): Promise<Response | null> {
-  if (!(err instanceof ResourceAuthError)) {
+export async function handleResourceAuthError(env: Env, error: unknown): Promise<Response | null> {
+  if (!(error instanceof ResourceAuthError)) {
     return null;
   }
-  switch (err.code) {
+  switch (error.code) {
     case 'use_dpop_nonce':
-      return dpopResourceUnauthorized(env, undefined, err.nonce);
+      return dpopResourceUnauthorized(env, undefined, error.nonce);
     case 'expired_token':
       return jsonError('ExpiredToken', 'Access token expired', 400);
     case 'invalid_token':
       return jsonError('InvalidToken', 'Invalid or malformed access token', 400);
-    default:
-      return null;
   }
 }

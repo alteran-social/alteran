@@ -21,10 +21,10 @@ export async function POST({ locals, request }: APIContext) {
   try {
     const auth = await verifyResourceRequestHybrid(env, request);
     if (!auth) return dpopResourceUnauthorized(env);
-  } catch (err) {
-    const handled = await handleResourceAuthError(env, err);
+  } catch (error) {
+    const handled = await handleResourceAuthError(env, error);
     if (handled) return handled;
-    throw err;
+    throw error;
   }
 
   // Check if account is active
@@ -44,7 +44,12 @@ export async function POST({ locals, request }: APIContext) {
   if (rateLimitResponse) return rateLimitResponse;
 
   try {
-    const body = await readJson(request);
+    const body = (await readJson(request)) as {
+      repo?: string;
+      writes?: unknown[];
+      validate?: boolean;
+      swapCommit?: string;
+    };
     const { repo, writes, validate = true, swapCommit } = body;
 
     if (!writes || !Array.isArray(writes)) {
@@ -55,17 +60,34 @@ export async function POST({ locals, request }: APIContext) {
     }
 
     const repoManager = new RepoManager(env);
-    const pdsDid = env.PDS_DID as string;
-    const results = [] as any[];
+    const pdsDid = typeof env.PDS_DID === 'string' ? env.PDS_DID : '';
+    type WriteResult = { $type: string; uri?: string; cid?: string; validationStatus?: string };
+    const results: WriteResult[] = [];
     // Accumulate ops and new MST blocks for this batch
     const opsForCommit: { action: 'create'|'update'|'delete'; path: string; cid: import('multiformats/cid').CID | null }[] = [];
     const newMstBlocksAll: Array<[import('multiformats/cid').CID, Uint8Array]> = [];
     let firstPrevMst: import('multiformats/cid').CID | null = null;
     let lastMst: import('../../lib/mst').MST | null = null;
 
+    type WriteOperation = {
+      $type?: string;
+      collection?: string;
+      rkey?: string;
+      value?: Record<string, unknown>;
+    };
     // Apply all writes atomically
-    for (const write of writes) {
+    for (const rawWrite of writes) {
+      const write = rawWrite as WriteOperation;
       const { $type, collection, rkey, value } = write;
+      if (typeof collection !== 'string' || typeof rkey !== 'string') {
+        return new Response(
+          JSON.stringify({
+            error: 'InvalidRequest',
+            message: 'collection and rkey are required strings on every write',
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
 
       if ($type === 'com.atproto.repo.applyWrites#create') {
         const { mst, recordCid, prevMstRoot, newMstBlocks } = await repoManager.addRecord(collection, rkey, value);
@@ -79,7 +101,7 @@ export async function POST({ locals, request }: APIContext) {
           did: pdsDid,
           cid: recordCid.toString(),
           json: JSON.stringify(value),
-        } as any);
+        });
         results.push({
           $type: 'com.atproto.repo.applyWrites#createResult',
           uri: `at://${repo}/${collection}/${rkey}`,
@@ -97,7 +119,7 @@ export async function POST({ locals, request }: APIContext) {
           did: pdsDid,
           cid: recordCid.toString(),
           json: JSON.stringify(value),
-        } as any);
+        });
         results.push({
           $type: 'com.atproto.repo.applyWrites#updateResult',
           uri: `at://${repo}/${collection}/${rkey}`,
@@ -127,7 +149,7 @@ export async function POST({ locals, request }: APIContext) {
     try {
       // Prefer commitData/sig/blocks returned by bumpRoot (authoritative)
       await notifySequencer(env, {
-        did: env.PDS_DID as string,
+        did: pdsDid,
         commitCid,
         rev,
         data: commitData,
@@ -135,8 +157,8 @@ export async function POST({ locals, request }: APIContext) {
         ops: opsForCommit,
         ...(blocks ? { blocks } : {}),
       });
-    } catch (err) {
-      console.error('Failed to notify sequencer:', err);
+    } catch (error) {
+      console.error('Failed to notify sequencer:', error);
       // Don't fail the request if sequencer notification fails
     }
 

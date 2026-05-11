@@ -15,11 +15,11 @@ export async function GET({ locals, request }: APIContext) {
   let authContext;
   try {
     authContext = await authenticateRequest(request, env);
-  } catch (err) {
-    if (err instanceof AuthTokenExpiredError) {
+  } catch (error) {
+    if (error instanceof AuthTokenExpiredError) {
       return expiredToken();
     }
-    throw err;
+    throw error;
   }
   if (!authContext) {
     return unauthorized();

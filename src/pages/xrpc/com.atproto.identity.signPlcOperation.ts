@@ -17,11 +17,11 @@ export async function POST({ locals, request }: APIContext) {
 
   try {
     if (!(await isAuthorized(request, env))) return unauthorized();
-  } catch (err) {
-    if (err instanceof AuthTokenExpiredError) {
+  } catch (error) {
+    if (error instanceof AuthTokenExpiredError) {
       return expiredToken();
     }
-    throw err;
+    throw error;
   }
 
   try {
@@ -43,53 +43,58 @@ export async function POST({ locals, request }: APIContext) {
       return jsonErr(400, 'InvalidRequest', 'PDS_DID is not configured');
     }
 
-    // Load PLC rotation key (hex-encoded secp256k1 private key).
-    // MUST be the rotation key currently present in the PLC document.
-    const privHex = ((await resolveSecret(env.PDS_PLC_ROTATION_KEY as any)) || '').trim();
+    const privHex = ((await resolveSecret(env.PDS_PLC_ROTATION_KEY)) || '').trim();
     if (!privHex) {
       return jsonErr(500, 'ServerMisconfigured', 'PDS_PLC_ROTATION_KEY is not configured');
     }
-    // Lazy-load deps compatible with Workers runtime
     const { Secp256k1Keypair } = await import('@atproto/crypto');
-    const dagCbor: any = await import('@ipld/dag-cbor');
+    const dagCbor = await import('@ipld/dag-cbor');
     const { sha256 } = await import('multiformats/hashes/sha2');
     const { CID } = await import('multiformats/cid');
-    const u8a: any = await import('uint8arrays');
+    const u8a = await import('uint8arrays');
 
     const signer = await Secp256k1Keypair.import(privHex);
 
-    // Fetch last op for prev CID
-    const lastRes = await fetch(`https://plc.directory/${encodeURIComponent(did)}/log/last`);
-    if (!lastRes.ok) {
-      const text = await lastRes.text();
-      return jsonErr(lastRes.status, 'PlcFetchFailed', `Failed to fetch last op: ${text}`);
+    const lastResponse = await fetch(`https://plc.directory/${encodeURIComponent(did)}/log/last`);
+    if (!lastResponse.ok) {
+      const text = await lastResponse.text();
+      return jsonErr(lastResponse.status, 'PlcFetchFailed', `Failed to fetch last op: ${text}`);
     }
-    const lastOp = await lastRes.json();
-    if ((lastOp as any)?.type === 'plc_tombstone') {
+    const lastOp = (await lastResponse.json()) as { type?: string };
+    if (lastOp?.type === 'plc_tombstone') {
       return jsonErr(400, 'DidTombstoned', 'DID is tombstoned');
     }
     const lastOpCbor = dagCbor.encode(lastOp);
     const mh = await sha256.digest(lastOpCbor);
     const prevCid = CID.createV1(dagCbor.code, mh);
 
-    // Fetch current document data as defaults and to verify rotation key
-    const dataRes = await fetch(`https://plc.directory/${encodeURIComponent(did)}/data`);
-    if (!dataRes.ok) {
-      const text = await dataRes.text();
-      return jsonErr(dataRes.status, 'PlcFetchFailed', `Failed to fetch document data: ${text}`);
+    const dataResponse = await fetch(`https://plc.directory/${encodeURIComponent(did)}/data`);
+    if (!dataResponse.ok) {
+      const text = await dataResponse.text();
+      return jsonErr(dataResponse.status, 'PlcFetchFailed', `Failed to fetch document data: ${text}`);
     }
-    const doc = (await dataRes.json()) as any;
+    type PlcDoc = {
+      rotationKeys?: string[];
+      alsoKnownAs?: string[];
+      verificationMethods?: Record<string, string>;
+      services?: Record<string, { type?: string; endpoint?: string }>;
+    };
+    const doc = (await dataResponse.json()) as PlcDoc;
 
     const rotationKeys = body.rotationKeys ?? doc.rotationKeys ?? [];
     const alsoKnownAs = body.alsoKnownAs ?? doc.alsoKnownAs ?? [];
     const verificationMethods = body.verificationMethods ?? doc.verificationMethods ?? {};
-    const services = body.services ?? doc.services ?? {};
+    const services = (body.services ?? doc.services ?? {}) as Record<
+      string,
+      { type?: string; endpoint?: string }
+    >;
 
-    if (!services.atproto_pds || typeof services.atproto_pds !== 'object') {
+    const pdsService = services.atproto_pds;
+    if (!pdsService || typeof pdsService !== 'object') {
       return jsonErr(400, 'InvalidRequest', 'Missing atproto_pds service in PLC operation');
     }
-    if (!services.atproto_pds.type) {
-      services.atproto_pds.type = 'AtprotoPersonalDataServer';
+    if (!pdsService.type) {
+      pdsService.type = 'AtprotoPersonalDataServer';
     }
 
     const unsignedOp = {
@@ -103,10 +108,9 @@ export async function POST({ locals, request }: APIContext) {
 
     const bytes = dagCbor.encode(unsignedOp);
     const sig = await signer.sign(bytes);
-    const sigB64 = (u8a.toString as any)(sig, 'base64url');
+    const sigB64 = u8a.toString(sig, 'base64url');
     const operation = { ...unsignedOp, sig: sigB64 };
 
-    // sanity: ensure our configured rotation key is included
     const signerDid = (await (await import('@atproto/crypto')).Secp256k1Keypair.import(privHex)).did();
     if (!rotationKeys.includes(signerDid)) {
       return jsonErr(
@@ -120,9 +124,10 @@ export async function POST({ locals, request }: APIContext) {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('signPlcOperation error:', error);
-    return jsonErr(500, 'InternalServerError', error?.message || 'Failed to sign PLC operation');
+    const message = error instanceof Error ? error.message : 'Failed to sign PLC operation';
+    return jsonErr(500, 'InternalServerError', message);
   }
 }
 

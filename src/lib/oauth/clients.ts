@@ -17,12 +17,12 @@ export async function fetchClientMetadata(client_id: string): Promise<any> {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 3000);
   try {
-    const res = await fetch(client_id, { signal: ctl.signal });
-    if (!res.ok) throw new Error(`client metadata fetch failed: ${res.status}`);
-    const ctype = res.headers.get('content-type') || '';
+    const response = await fetch(client_id, { signal: ctl.signal });
+    if (!response.ok) throw new Error(`client metadata fetch failed: ${response.status}`);
+    const ctype = response.headers.get('content-type') || '';
     if (!ctype.includes('application/json') && !ctype.includes('json'))
       throw new Error('client metadata must be JSON');
-    return await res.json();
+    return await response.json();
   } finally {
     clearTimeout(t);
   }
@@ -48,7 +48,9 @@ export async function verifyClientAssertion(client_id: string, issuerOrigin: str
         const verified = await compactVerify(assertionJwt, key);
         payload = JSON.parse(new TextDecoder().decode(verified.payload));
         break;
-      } catch {}
+      } catch {
+        // Try the next JWK candidate; only the final no-payload check matters.
+      }
     }
     if (!payload) return false;
 

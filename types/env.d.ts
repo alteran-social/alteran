@@ -30,6 +30,7 @@ declare global {
     PDS_ALLOWED_MIME?: string;
     USER_PASSWORD?: string | SecretsStoreSecret;
     PDS_MAX_BLOB_SIZE?: string;
+    PDS_BLOB_QUOTA_BYTES?: string;
     REFRESH_TOKEN?: string | SecretsStoreSecret;
     REFRESH_TOKEN_SECRET?: string | SecretsStoreSecret;
     SESSION_JWT_SECRET?: string | SecretsStoreSecret;
@@ -42,10 +43,12 @@ declare global {
     PDS_MAX_JSON_BYTES?: string;
     PDS_CORS_ORIGIN?: string;
     PDS_SEQ_WINDOW?: string;
+    PDS_WS_HIBERNATE?: string;
     ENVIRONMENT?: string;
     PDS_BSKY_APP_VIEW_URL?: string;
     PDS_BSKY_APP_VIEW_DID?: string;
     PDS_BSKY_APP_VIEW_CDN_URL_PATTERN?: string;
+    PDS_APPVIEW_FORCE_FALLBACK?: string;
     PDS_BSKY_CHAT_URL?: string;
     PDS_BSKY_CHAT_DID?: string;
     PDS_OZONE_URL?: string;

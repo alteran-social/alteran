@@ -34,12 +34,12 @@ const OPTIONAL_VARS = {
  * Configuration validation result
  */
 export interface ConfigValidationResult {
-  valid: boolean;
-  missing: string[];
-  warnings: string[];
-  config: {
-    required: Record<string, string>;
-    optional: Record<string, string>;
+  readonly valid: boolean;
+  readonly missing: readonly string[];
+  readonly warnings: readonly string[];
+  readonly config: {
+    readonly required: Readonly<Record<string, string>>;
+    readonly optional: Readonly<Record<string, string>>;
   };
 }
 
@@ -187,10 +187,18 @@ export function validateConfigOrThrow(env: Env): void {
 export function getConfig(env: Env) {
   const result = validateConfig(env);
 
+  const did = env.PDS_DID;
+  const handle = env.PDS_HANDLE;
+  if (typeof did !== 'string' || did === '' || typeof handle !== 'string' || handle === '') {
+    throw new Error(
+      `getConfig called with invalid configuration. Missing: ${result.missing.join(', ')}`,
+    );
+  }
+
   return {
     // Required
-    did: String(env.PDS_DID!),
-    handle: String(env.PDS_HANDLE!),
+    did,
+    handle,
 
     // Optional with defaults
     allowedMime: result.config.optional.PDS_ALLOWED_MIME.split(','),

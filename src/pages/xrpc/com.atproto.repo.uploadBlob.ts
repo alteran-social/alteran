@@ -1,4 +1,5 @@
 import type { APIContext } from 'astro';
+import { errorMessage } from '../../lib/errors';
 import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError } from '../../lib/oauth/resource';
 import { verifyServiceAuth, isServiceAuthToken } from '../../lib/service-auth';
 import { checkRate } from '../../lib/ratelimit';
@@ -36,10 +37,10 @@ export async function POST({ locals, request }: APIContext) {
     try {
       const auth = await verifyResourceRequestHybrid(env, request);
       if (!auth) return dpopResourceUnauthorized(env);
-    } catch (err) {
-      const handled = await handleResourceAuthError(env, err);
+    } catch (error) {
+      const handled = await handleResourceAuthError(env, error);
       if (handled) return handled;
-      throw err;
+      throw error;
     }
   }
 
@@ -99,7 +100,7 @@ export async function POST({ locals, request }: APIContext) {
 
   const store = new R2BlobStore(env);
   try {
-    const res = await store.put(buf, { contentType });
+    const response = await store.put(buf, { contentType });
 
     // Compute a CIDv1 (raw) for the blob so clients receive a valid CID link
     const digest = await sha256.digest(new Uint8Array(buf));
@@ -107,14 +108,14 @@ export async function POST({ locals, request }: APIContext) {
     const cidStr = cid.toString();
 
     // Register blob ref with CID-based key
-    await putBlobRef(env, did, cidStr, res.key, contentType, res.size);
+    await putBlobRef(env, did, cidStr, response.key, contentType, response.size);
 
     // Update quota
-    await updateBlobQuota(env, did, res.size, 1);
+    await updateBlobQuota(env, did, response.size, 1);
 
     // Mirror upstream shape exactly; helpful debugging header
     // Conform to lexicon: blob object must include $type: 'blob'
-    const body = { blob: { $type: 'blob', ref: { $link: cidStr }, mimeType: contentType, size: res.size } };
+    const body = { blob: { $type: 'blob', ref: { $link: cidStr }, mimeType: contentType, size: response.size } };
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     // Debug-only headers (safe for clients to ignore)
     headers['x-sniffed-mime'] = sniffed || '';
@@ -122,8 +123,8 @@ export async function POST({ locals, request }: APIContext) {
     if (enc) headers['x-upload-encoding'] = enc;
 
     return new Response(JSON.stringify(body), { headers });
-  } catch (e: any) {
-    if (String(e.message || '').startsWith('BlobTooLarge')) return new Response(JSON.stringify({ error: 'PayloadTooLarge' }), { status: 413 });
+  } catch (e) {
+    if (String(errorMessage(e) || '').startsWith('BlobTooLarge')) return new Response(JSON.stringify({ error: 'PayloadTooLarge' }), { status: 413 });
     return new Response(JSON.stringify({ error: 'UploadFailed' }), { status: 500 });
   }
 }

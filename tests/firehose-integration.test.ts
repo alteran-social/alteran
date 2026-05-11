@@ -1,298 +1,263 @@
-import { describe, it, expect, beforeAll } from 'bun:test';
+import { describe, it, expect } from 'bun:test';
+import * as dagCbor from '@ipld/dag-cbor';
 import { CID } from 'multiformats/cid';
-import { RepoManager } from '../src/services/repo-manager';
-import { encodeBlocksForCommit } from '../src/services/car';
-import type { Env } from '../src/env';
+import {
+  encodeAccountFrame,
+  encodeCommitFrame,
+  encodeIdentityFrame,
+  encodeInfoFrame,
+  FrameType,
+  type AccountMessage,
+  type CommitMessage,
+  type IdentityMessage,
+  type RepoOp,
+} from '../src/lib/firehose/frames';
+import { reviveCid, reviveOps, base64ToBytes } from '../src/worker/sequencer/cid-helpers';
+import { broadcastAccount, broadcastIdentity } from '../src/worker/sequencer/broadcast';
+import type { AccountEvent, IdentityEvent } from '../src/worker/sequencer/types';
 
-// Mock environment for testing
-const createMockEnv = (): Env => {
-  return {
-    DB: {} as D1Database,
-    BLOBS: {} as R2Bucket,
-    PDS_DID: 'did:plc:test123',
-    PDS_HANDLE: 'test.bsky.social',
-    PDS_HOSTNAME: 'test.pds.local',
-    REPO_SIGNING_KEY: 'test-key',
-    JWT_SECRET: 'test-secret',
-  } as unknown as Env;
-};
+// Each frame written by the sequencer is a single WebSocket message
+// containing CBOR(header) || CBOR(body). Decode-then-decode-rest by
+// re-encoding the header to compute the boundary; the dag-cbor decoder is
+// strict about trailing bytes so we slice deliberately.
+function decodeFrame(bytes: Uint8Array): { header: unknown; body: unknown } {
+  // dag-cbor decode is strict — re-encode the decoded header to find where the
+  // body block starts.
+  let headerLen = 0;
+  for (let i = 1; i <= bytes.byteLength; i++) {
+    try {
+      dagCbor.decode(bytes.slice(0, i));
+      headerLen = i;
+      break;
+    } catch {
+      // try the next byte length
+    }
+  }
+  if (headerLen === 0) throw new Error('could not find header boundary');
+  const header = dagCbor.decode(bytes.slice(0, headerLen));
+  const body = dagCbor.decode(bytes.slice(headerLen));
+  return { header, body };
+}
 
-describe('Firehose Integration Tests', () => {
-  describe('Operation Extraction Workflow', () => {
-    it('should extract operations from MST changes', async () => {
-      // This is a conceptual test showing the workflow
-      // In a real environment, this would use actual D1 database
+// Minimal fake WebSocket that captures sent bytes. The real DurableObjectState
+// hands these to clients; for tests we only need to observe what would be sent.
+function fakeSocket(opts: { failOnSend?: boolean } = {}): {
+  send: (bytes: Uint8Array | string) => void;
+  sent: Uint8Array[];
+  socket: WebSocket;
+} {
+  const sent: Uint8Array[] = [];
+  const send = (bytes: Uint8Array | string) => {
+    if (opts.failOnSend) throw new Error('send failed');
+    if (typeof bytes !== 'string') sent.push(bytes);
+  };
+  return { send, sent, socket: { send } as unknown as WebSocket };
+}
 
-      const workflow = {
-        step1: 'User creates a record',
-        step2: 'RepoManager.addRecord() captures prevMstRoot',
-        step3: 'MST is updated with new record',
-        step4: 'extractOps(prevRoot, newRoot) computes diff',
-        step5: 'Operations include create/update/delete actions',
-        step6: 'Operations sent to sequencer with commit',
-      };
+const SAMPLE_CID = 'bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua';
+const OTHER_CID = 'bafyreibvjvcv745gig4mvqs4hctx4zfkono4rjejm2ta6gtyzkqxfjeily';
 
-      expect(workflow.step1).toBeDefined();
-      expect(workflow.step6).toBeDefined();
+describe('cid-helpers', () => {
+  describe('reviveCid', () => {
+    it('parses a string CID', () => {
+      const cid = reviveCid(SAMPLE_CID);
+      expect(cid).toBeInstanceOf(CID);
+      expect(cid?.toString()).toBe(SAMPLE_CID);
     });
 
-    it('should handle create operation', () => {
-      const createOp = {
-        action: 'create' as const,
-        path: 'app.bsky.feed.post/abc123',
-        cid: CID.parse('bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua'),
-      };
-
-      expect(createOp.action).toBe('create');
-      expect(createOp.cid).toBeInstanceOf(CID);
-      expect(createOp.path).toContain('app.bsky.feed.post');
+    it('passes through a CID instance', () => {
+      const cid = CID.parse(SAMPLE_CID);
+      expect(reviveCid(cid)?.toString()).toBe(SAMPLE_CID);
     });
 
-    it('should handle update operation', () => {
-      const updateOp = {
-        action: 'update' as const,
-        path: 'app.bsky.feed.post/abc123',
-        cid: CID.parse('bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua'),
-        prev: CID.parse('bafyreibvjvcv745gig4mvqs4hctx4zfkono4rjejm2ta6gtyzkqxfjeily'),
-      };
-
-      expect(updateOp.action).toBe('update');
-      expect(updateOp.prev).toBeInstanceOf(CID);
+    it('unwraps an IPLD link object {"/" : cid}', () => {
+      expect(reviveCid({ '/': SAMPLE_CID })?.toString()).toBe(SAMPLE_CID);
     });
 
-    it('should handle delete operation', () => {
-      const deleteOp = {
-        action: 'delete' as const,
-        path: 'app.bsky.feed.post/abc123',
-        cid: null,
-        prev: CID.parse('bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua'),
-      };
-
-      expect(deleteOp.action).toBe('delete');
-      expect(deleteOp.cid).toBeNull();
-    });
-  });
-
-  describe('CAR Encoding Integration', () => {
-    it('should encode commit with blocks', async () => {
-      // Test the structure of CAR encoding
-      const commitCid = CID.parse('bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua');
-      const mstRoot = CID.parse('bafyreibvjvcv745gig4mvqs4hctx4zfkono4rjejm2ta6gtyzkqxfjeily');
-      const ops = [
-        {
-          path: 'app.bsky.feed.post/abc123',
-          cid: CID.parse('bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua'),
-        },
-      ];
-
-      // Verify structure
-      expect(commitCid).toBeInstanceOf(CID);
-      expect(mstRoot).toBeInstanceOf(CID);
-      expect(ops).toHaveLength(1);
+    it('returns null for null / undefined', () => {
+      expect(reviveCid(null)).toBeNull();
+      expect(reviveCid(undefined)).toBeNull();
     });
 
-    it('should include all necessary blocks in CAR', () => {
-      const requiredBlocks = [
-        'commit block',
-        'MST root block',
-        'MST node blocks',
-        'record blocks',
-      ];
-
-      expect(requiredBlocks).toContain('commit block');
-      expect(requiredBlocks).toContain('MST root block');
-      expect(requiredBlocks).toContain('record blocks');
+    it('returns null for garbage strings', () => {
+      expect(reviveCid('not-a-cid')).toBeNull();
     });
   });
 
-  describe('Sequencer Event Flow', () => {
-    it('should process commit notification', () => {
-      const notification = {
-        type: 'commit',
-        did: 'did:plc:test123',
-        commitCid: 'bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua',
-        rev: '3jzfcijpj2z2a',
-        ops: [
-          {
-            action: 'create' as const,
-            path: 'app.bsky.feed.post/abc123',
-            cid: CID.parse('bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua'),
-          },
-        ],
-      };
-
-      expect(notification.type).toBe('commit');
-      expect(notification.ops).toHaveLength(1);
+  describe('reviveOps', () => {
+    it('revives an array of ops with CID strings', () => {
+      const ops = reviveOps([
+        { action: 'create', path: 'app.bsky.feed.post/abc', cid: SAMPLE_CID },
+        { action: 'update', path: 'app.bsky.feed.post/def', cid: SAMPLE_CID, prev: OTHER_CID },
+        { action: 'delete', path: 'app.bsky.feed.post/ghi', cid: null },
+      ]);
+      expect(ops).toHaveLength(3);
+      expect(ops?.[0].cid).toBeInstanceOf(CID);
+      expect(ops?.[1].prev?.toString()).toBe(OTHER_CID);
+      expect(ops?.[2].cid).toBeNull();
     });
 
-    it('should process identity notification', () => {
-      const notification = {
-        type: 'identity',
-        did: 'did:plc:test123',
-        handle: 'newhandle.bsky.social',
-      };
-
-      expect(notification.type).toBe('identity');
-      expect(notification.handle).toBeDefined();
+    it('returns undefined for non-arrays', () => {
+      expect(reviveOps(null)).toBeUndefined();
+      expect(reviveOps('nope')).toBeUndefined();
     });
 
-    it('should process account notification', () => {
-      const notification = {
-        type: 'account',
-        did: 'did:plc:test123',
-        active: false,
-        status: 'suspended',
-      };
-
-      expect(notification.type).toBe('account');
-      expect(notification.active).toBe(false);
+    it('drops prev when missing', () => {
+      const ops = reviveOps([{ action: 'create', path: 'p', cid: SAMPLE_CID }]);
+      expect(ops?.[0].prev).toBeUndefined();
     });
   });
 
-  describe('Cursor-based Replay', () => {
-    it('should replay events from cursor', () => {
-      const events = [
-        { seq: 1, data: 'event1' },
-        { seq: 2, data: 'event2' },
-        { seq: 3, data: 'event3' },
-        { seq: 4, data: 'event4' },
-        { seq: 5, data: 'event5' },
-      ];
-
-      const cursor = 2;
-      const replayEvents = events.filter(e => e.seq > cursor);
-
-      expect(replayEvents).toHaveLength(3);
-      expect(replayEvents[0].seq).toBe(3);
-      expect(replayEvents[2].seq).toBe(5);
-    });
-
-    it('should reject future cursor', () => {
-      const currentSeq = 100;
-      const futureCursor = 150;
-
-      const isFuture = futureCursor > currentSeq;
-      expect(isFuture).toBe(true);
-
-      if (isFuture) {
-        const error = { code: 'FutureCursor', message: 'Cursor is ahead of current sequence' };
-        expect(error.code).toBe('FutureCursor');
-      }
-    });
-
-    it('should handle cursor = 0', () => {
-      const events = [
-        { seq: 1, data: 'event1' },
-        { seq: 2, data: 'event2' },
-        { seq: 3, data: 'event3' },
-      ];
-
-      const cursor = 0;
-      const replayEvents = events.filter(e => e.seq > cursor);
-
-      expect(replayEvents).toHaveLength(3);
-      expect(replayEvents[0].seq).toBe(1);
+  describe('base64ToBytes', () => {
+    it('round-trips through btoa', () => {
+      const bytes = new Uint8Array([0, 1, 2, 254, 255]);
+      const base64 = btoa(String.fromCharCode(...bytes));
+      expect(Array.from(base64ToBytes(base64))).toEqual(Array.from(bytes));
     });
   });
+});
 
-  describe('Backpressure Management', () => {
-    it('should drop oldest events when buffer full', () => {
-      const maxWindow = 5;
-      const buffer: Array<{ seq: number; data: string }> = [];
-      let droppedCount = 0;
-
-      // Simulate 10 events with buffer size 5
-      for (let i = 1; i <= 10; i++) {
-        buffer.push({ seq: i, data: `event${i}` });
-        if (buffer.length > maxWindow) {
-          buffer.shift();
-          droppedCount++;
-        }
-      }
-
-      expect(buffer.length).toBe(5);
-      expect(droppedCount).toBe(5);
-      expect(buffer[0].seq).toBe(6);
-      expect(buffer[4].seq).toBe(10);
-    });
-
-    it('should notify clients of dropped frames', () => {
-      const droppedCount = 5;
-      const infoMessage = {
-        name: 'FramesDropped',
-        message: `${droppedCount} frame(s) dropped due to backpressure`,
-      };
-
-      expect(infoMessage.name).toBe('FramesDropped');
-      expect(infoMessage.message).toContain('5 frame(s)');
-    });
-
-    it('should track metrics', () => {
-      const metrics = {
-        connectedClients: 3,
-        bufferSize: 450,
-        nextSeq: 1000,
-        droppedFrames: 25,
-      };
-
-      expect(metrics.connectedClients).toBeGreaterThan(0);
-      expect(metrics.bufferSize).toBeLessThan(512);
-      expect(metrics.droppedFrames).toBeGreaterThan(0);
-    });
+describe('frame encoders', () => {
+  it('encodes #info as decodable CBOR', () => {
+    const bytes = encodeInfoFrame('OutdatedCursor', 'Cursor is ahead of current sequence');
+    const { header, body } = decodeFrame(bytes);
+    expect(header).toEqual({ op: FrameType.Message, t: '#info' });
+    expect(body).toEqual({ name: 'OutdatedCursor', message: 'Cursor is ahead of current sequence' });
   });
 
-  describe('Multi-subscriber Broadcast', () => {
-    it('should broadcast to multiple clients', () => {
-      const clients = [
-        { id: 'client1', cursor: 95 },
-        { id: 'client2', cursor: 98 },
-        { id: 'client3', cursor: 99 },
-      ];
-
-      const event = { seq: 100, data: 'new event' };
-      const recipients = clients.filter(c => event.seq > c.cursor);
-
-      expect(recipients).toHaveLength(3);
-    });
-
-    it('should skip clients already caught up', () => {
-      const clients = [
-        { id: 'client1', cursor: 100 },
-        { id: 'client2', cursor: 99 },
-        { id: 'client3', cursor: 100 },
-      ];
-
-      const event = { seq: 100, data: 'event' };
-      const recipients = clients.filter(c => event.seq > c.cursor);
-
-      expect(recipients).toHaveLength(1);
-      expect(recipients[0].id).toBe('client2');
-    });
+  it('encodes #account', () => {
+    const message: AccountMessage = {
+      seq: 42,
+      did: 'did:plc:test',
+      time: '2026-05-11T00:00:00.000Z',
+      active: false,
+      status: 'suspended',
+    };
+    const bytes = encodeAccountFrame(message);
+    const { header, body } = decodeFrame(bytes);
+    expect(header).toEqual({ op: FrameType.Message, t: '#account' });
+    expect(body).toEqual(message);
   });
 
-  describe('Frame Serialization', () => {
-    it('should serialize frames to bytes', () => {
-      const frame = {
-        header: { op: 1, t: '#commit' },
-        body: { seq: 1, repo: 'did:plc:test' },
-      };
+  it('encodes #identity', () => {
+    const message: IdentityMessage = {
+      seq: 7,
+      did: 'did:plc:test',
+      time: '2026-05-11T00:00:00.000Z',
+      handle: 'new.example',
+    };
+    const bytes = encodeIdentityFrame(message);
+    const { header, body } = decodeFrame(bytes);
+    expect(header).toEqual({ op: FrameType.Message, t: '#identity' });
+    expect(body).toEqual(message);
+  });
 
-      // Frames should be serializable
-      const json = JSON.stringify(frame);
-      expect(json).toContain('#commit');
-      expect(json).toContain('did:plc:test');
-    });
+  it('encodes #commit and preserves CIDs through CBOR', () => {
+    const commit = CID.parse(SAMPLE_CID);
+    const mstRoot = CID.parse(OTHER_CID);
+    const op: RepoOp = { action: 'create', path: 'app.bsky.feed.post/abc', cid: commit };
+    const message: CommitMessage = {
+      seq: 1,
+      rebase: false,
+      tooBig: false,
+      repo: 'did:plc:test',
+      commit,
+      prev: null,
+      rev: '3jzfcijpj2z2a',
+      since: null,
+      blocks: new Uint8Array([1, 2, 3]),
+      ops: [op],
+      blobs: [],
+      time: '2026-05-11T00:00:00.000Z',
+      prevData: mstRoot,
+    };
+    const bytes = encodeCommitFrame(message);
+    const { header, body } = decodeFrame(bytes);
+    expect(header).toEqual({ op: FrameType.Message, t: '#commit' });
+    const decoded = body as CommitMessage;
+    expect(decoded.seq).toBe(1);
+    expect(decoded.repo).toBe('did:plc:test');
+    expect(decoded.commit.toString()).toBe(SAMPLE_CID);
+    expect(decoded.prevData?.toString()).toBe(OTHER_CID);
+    expect(decoded.ops).toHaveLength(1);
+    expect(decoded.ops[0].cid?.toString()).toBe(SAMPLE_CID);
+  });
+});
 
-    it('should handle large frames', () => {
-      const largeOps = Array.from({ length: 100 }, (_, i) => ({
-        action: 'create' as const,
-        path: `app.bsky.feed.post/post${i}`,
-        cid: CID.parse('bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua'),
-      }));
+describe('broadcastAccount', () => {
+  function makeEvent(state: AccountEvent['state']): AccountEvent {
+    return {
+      seq: 9,
+      did: 'did:plc:test',
+      ts: Date.parse('2026-05-11T00:00:00.000Z'),
+      state,
+    };
+  }
 
-      expect(largeOps).toHaveLength(100);
-      expect(largeOps[0].path).toContain('post0');
-      expect(largeOps[99].path).toContain('post99');
-    });
+  it('emits an #account frame derived from AccountState (active)', () => {
+    const client = fakeSocket();
+    broadcastAccount([client.socket], makeEvent({ tag: 'active' }));
+    // Two frames per call: #account + legacy #sync.
+    expect(client.sent.length).toBe(2);
+    const account = decodeFrame(client.sent[0]);
+    expect(account.header).toEqual({ op: FrameType.Message, t: '#account' });
+    expect((account.body as AccountMessage).active).toBe(true);
+    expect((account.body as AccountMessage).status).toBeUndefined();
+  });
+
+  it('emits status="suspended" for a suspended FSM state', () => {
+    const client = fakeSocket();
+    broadcastAccount(
+      [client.socket],
+      makeEvent({ tag: 'suspended', until: '2026-12-31T00:00:00.000Z' }),
+    );
+    const account = decodeFrame(client.sent[0]).body as AccountMessage;
+    expect(account.active).toBe(false);
+    expect(account.status).toBe('suspended');
+    // Wire format intentionally drops `until` — toRow/fromRow preserve it
+    // separately for persistence. This test pins the spec-compliant behavior.
+    expect('until' in account).toBe(false);
+  });
+
+  it('fans out to every client and tolerates one failing send', () => {
+    const good1 = fakeSocket();
+    const bad = fakeSocket({ failOnSend: true });
+    const good2 = fakeSocket();
+    broadcastAccount(
+      [good1.socket, bad.socket, good2.socket],
+      makeEvent({ tag: 'takendown' }),
+    );
+    expect(good1.sent.length).toBe(2);
+    expect(bad.sent.length).toBe(0);
+    expect(good2.sent.length).toBe(2);
+  });
+});
+
+describe('broadcastIdentity', () => {
+  it('emits an #identity frame with the new handle', () => {
+    const client = fakeSocket();
+    const event: IdentityEvent = {
+      seq: 11,
+      did: 'did:plc:test',
+      ts: Date.parse('2026-05-11T00:00:00.000Z'),
+      handle: 'changed.example',
+    };
+    broadcastIdentity([client.socket], event);
+    expect(client.sent.length).toBe(1);
+    const { header, body } = decodeFrame(client.sent[0]);
+    expect(header).toEqual({ op: FrameType.Message, t: '#identity' });
+    expect((body as IdentityMessage).handle).toBe('changed.example');
+  });
+
+  it('tolerates a failing client without throwing', () => {
+    const bad = fakeSocket({ failOnSend: true });
+    expect(() =>
+      broadcastIdentity([bad.socket], {
+        seq: 1,
+        did: 'did:plc:test',
+        ts: Date.now(),
+        handle: 'h.example',
+      }),
+    ).not.toThrow();
   });
 });

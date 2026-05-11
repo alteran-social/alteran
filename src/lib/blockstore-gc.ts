@@ -65,7 +65,8 @@ async function traverseMst(env: Env, rootCid: string, referenced: Set<string>): 
   const queue = [rootCid];
 
   while (queue.length > 0) {
-    const cidStr = queue.shift()!;
+    const cidStr = queue.shift();
+    if (cidStr === undefined) break;
 
     if (visited.has(cidStr)) continue;
     visited.add(cidStr);

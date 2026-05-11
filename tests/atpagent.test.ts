@@ -1,10 +1,18 @@
+// This suite imports the Astro-built app via createApp(), which transitively
+// pulls in '@astrojs-manifest' — a virtual module that only exists inside the
+// built worker. Running it under plain `bun test` fails at import time.
+// Gate behind RUN_APP_TESTS=true to match tests/app.test.ts.
 import { describe, it, expect, beforeAll } from 'bun:test';
+
+const runAppIntegrationTests = process.env.RUN_APP_TESTS === 'true';
+const describeIntegration = runAppIntegrationTests ? describe : describe.skip;
+
 import { createApp } from '../src/app';
 import { makeEnv, ctx } from './helpers/env';
 import { AtpAgent } from '@atproto/api';
 import { ensureChatTables } from '../src/lib/chat';
 
-const app = createApp();
+const app = runAppIntegrationTests ? createApp() : (null as unknown as ReturnType<typeof createApp>);
 
 function makeFetch(env: Awaited<ReturnType<typeof makeEnv>>) {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -14,7 +22,7 @@ function makeFetch(env: Awaited<ReturnType<typeof makeEnv>>) {
   };
 }
 
-describe('AtpAgent integration', () => {
+describeIntegration('AtpAgent integration', () => {
   let env: Awaited<ReturnType<typeof makeEnv>>;
   let fetchImpl: ReturnType<typeof makeFetch>;
 

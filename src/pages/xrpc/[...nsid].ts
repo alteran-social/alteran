@@ -22,11 +22,11 @@ async function handle({ locals, request, params }: APIContext): Promise<Response
   const { env } = locals.runtime;
   try {
     if (!(await isAuthorized(request, env))) return unauthorized();
-  } catch (err) {
-    if (err instanceof AuthTokenExpiredError) {
+  } catch (error) {
+    if (error instanceof AuthTokenExpiredError) {
       return expiredToken();
     }
-    throw err;
+    throw error;
   }
 
   const nsid = nsidFromParams(params).trim();

@@ -12,9 +12,10 @@ export interface TraceSpan {
   labels?: Record<string, string>;
 }
 
-/**
- * Performance tracer for measuring operation durations
- */
+// Tracer is a class because each instance owns a Map of in-flight spans;
+// start() and end() are paired stateful calls that need shared access to
+// that map. The global `tracer` plus per-request instances both rely on
+// this isolation.
 export class Tracer {
   private spans: Map<string, TraceSpan> = new Map();
 

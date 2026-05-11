@@ -1,7 +1,8 @@
-import type { APIContext } from 'astro';
 import { CID } from 'multiformats/cid';
 import * as dagCbor from '@ipld/dag-cbor';
 import { sha256 } from 'multiformats/hashes/sha2';
+import type { Env } from '../env';
+import { PayloadTooLarge } from './errors';
 
 export function tryParse(json: string): unknown {
   try {
@@ -11,23 +12,18 @@ export function tryParse(json: string): unknown {
   }
 }
 
-// JSON helper with size cap
-export async function readJson(request: Request): Promise<any> {
+export async function readJson(request: Request): Promise<unknown> {
   const max = 64 * 1024;
   const text = await request.text();
-  if (text.length > max) throw new Error('PayloadTooLarge');
+  if (text.length > max) throw new PayloadTooLarge();
   return JSON.parse(text || '{}');
 }
 
-export async function readJsonBounded(env: any, request: Request): Promise<any> {
-  const raw = (env.PDS_MAX_JSON_BYTES as string | undefined) ?? '65536';
+export async function readJsonBounded(env: Env, request: Request): Promise<unknown> {
+  const raw = env.PDS_MAX_JSON_BYTES ?? '65536';
   const max = Number(raw) > 0 ? Number(raw) : 65536;
   const text = await request.text();
-  if (text.length > max) {
-    const err: any = new Error('PayloadTooLarge');
-    err.code = 'PayloadTooLarge';
-    throw err;
-  }
+  if (text.length > max) throw new PayloadTooLarge();
   return JSON.parse(text || '{}');
 }
 
@@ -39,7 +35,7 @@ export function bearerToken(request: Request): string | null {
   return null;
 }
 
-export function isAllowedMime(env: any, mime: string): boolean {
+export function isAllowedMime(env: Env, mime: string): boolean {
   const def = [
     // Images
     'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif',
@@ -52,7 +48,7 @@ export function isAllowedMime(env: any, mime: string): boolean {
     // Generic fallback
     'application/octet-stream'
   ];
-  const raw = (env.PDS_ALLOWED_MIME as string | undefined) ?? def.join(',');
+  const raw = env.PDS_ALLOWED_MIME ?? def.join(',');
   const set = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
 
   // Extract base MIME type (remove charset and other parameters)

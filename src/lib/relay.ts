@@ -12,7 +12,9 @@ export function resolvePdsHostname(env: Env, requestUrl?: string): string | null
     try {
       const url = new URL(requestUrl);
       host = url.hostname;
-    } catch {}
+    } catch {
+      // Malformed request URL: leave host unset so the caller can choose a fallback.
+    }
   }
 
   if (!host) return null;
@@ -53,12 +55,12 @@ export function getRelayHosts(env: Env): string[] {
  */
 export async function requestCrawl(relayHost: string, pdsHostname: string): Promise<Response> {
   const url = `https://${relayHost}/xrpc/com.atproto.sync.requestCrawl`;
-  const res = await fetch(url, {
+  const response = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ hostname: pdsHostname }),
   });
-  return res;
+  return response;
 }
 
 // In-memory isolation-scoped throttle to avoid spamming relays on every request.
@@ -88,12 +90,12 @@ export async function notifyRelaysIfNeeded(env: Env, requestUrl?: string): Promi
   await Promise.allSettled(
     relays.map(async (relay) => {
       try {
-        const res = await requestCrawl(relay, hostname);
-        if (!res.ok) {
-          console.warn('requestCrawl failed', { relay, status: res.status });
+        const response = await requestCrawl(relay, hostname);
+        if (!response.ok) {
+          console.warn('requestCrawl failed', { relay, status: response.status });
         }
-      } catch (err) {
-        console.warn('requestCrawl error', { relay, error: String(err) });
+      } catch (error) {
+        console.warn('requestCrawl error', { relay, error: String(error) });
       }
     }),
   );

@@ -1,4 +1,5 @@
 import type { APIContext } from 'astro';
+import { errorCode, errorMessage } from '../../lib/errors';
 import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError } from '../../lib/oauth/resource';
 import { checkRate } from '../../lib/ratelimit';
 import { readJsonBounded } from '../../lib/util';
@@ -13,10 +14,10 @@ export async function POST({ locals, request }: APIContext) {
   try {
     const auth = await verifyResourceRequestHybrid(env, request);
     if (!auth) return dpopResourceUnauthorized(env);
-  } catch (err) {
-    const handled = await handleResourceAuthError(env, err);
+  } catch (error) {
+    const handled = await handleResourceAuthError(env, error);
     if (handled) return handled;
-    throw err;
+    throw error;
   }
 
   const rateLimitResponse = await checkRate(env, request, 'writes');
@@ -25,8 +26,8 @@ export async function POST({ locals, request }: APIContext) {
   let body: any;
   try {
     body = await readJsonBounded(env, request);
-  } catch (e: any) {
-    if (e?.code === 'PayloadTooLarge') {
+  } catch (e) {
+    if (errorCode(e) === 'PayloadTooLarge') {
       return new Response(JSON.stringify({ error: 'PayloadTooLarge' }), { status: 413 });
     }
     return new Response(JSON.stringify({ error: 'BadRequest' }), { status: 400 });

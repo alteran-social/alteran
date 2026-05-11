@@ -1,5 +1,6 @@
 import type { Env } from "../env";
 import { AuthTokenExpiredError } from "./auth-errors";
+import { errorCode } from "./errors";
 import { getRuntimeString } from "./secrets";
 import {
   issueSessionTokens,
@@ -56,12 +57,12 @@ export async function verifyJwt(
     let payload;
     try {
       payload = await verifyAccessToken(env, token);
-    } catch (err) {
-      if (isJwtExpiredError(err)) {
+    } catch (error) {
+      if (isJwtExpiredError(error)) {
         console.error('[verifyJwt] Access token expired');
         throw new AuthTokenExpiredError();
       }
-      console.error('[verifyJwt] verifyAccessToken failed:', err);
+      console.error('[verifyJwt] verifyAccessToken failed:', error);
       return null;
     }
     if (!payload) {
@@ -91,8 +92,8 @@ export async function verifyJwt(
 
   if (header.typ === "refresh+jwt") {
     console.error('[verifyJwt] Detected refresh+jwt type');
-    const verified = await verifyRefreshToken(env, token).catch((err) => {
-      if (isJwtExpiredError(err)) {
+    const verified = await verifyRefreshToken(env, token).catch((error) => {
+      if (isJwtExpiredError(error)) {
         console.error('[verifyJwt] Refresh token expired');
         throw new AuthTokenExpiredError();
       }
@@ -222,7 +223,7 @@ function b64urlDecode(s: string): Uint8Array {
 
 // EdDSA (Ed25519) path removed; only HS256 session tokens are supported
 
-function isJwtExpiredError(err: unknown): boolean {
-  return err instanceof AuthTokenExpiredError ||
-    (typeof err === "object" && err !== null && (err as any).code === "ERR_JWT_EXPIRED");
+function isJwtExpiredError(error: unknown): boolean {
+  return error instanceof AuthTokenExpiredError ||
+    errorCode(error) === "ERR_JWT_EXPIRED";
 }

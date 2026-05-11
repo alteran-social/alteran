@@ -1,4 +1,5 @@
 import { CID } from 'multiformats/cid';
+import { errorMessage } from '../errors';
 import * as dagCbor from '@ipld/dag-cbor';
 import type { Env } from '../../env';
 import { drizzle } from 'drizzle-orm/d1';
@@ -66,8 +67,8 @@ export class D1Blockstore implements WritableBlockstore {
       const placeholders = new Array(chunk.length).fill('?').join(',');
       const stmt = this.env.DB.prepare(`SELECT cid, bytes FROM blockstore WHERE cid IN (${placeholders})`);
       const binds = chunk.map((c) => c.toString());
-      const res = await stmt.bind(...binds).all();
-      const rows = (res.results ?? []) as Array<{ cid: string; bytes: string }>;
+      const response = await stmt.bind(...binds).all();
+      const rows = (response.results ?? []) as Array<{ cid: string; bytes: string }>;
       const got = new Set<string>();
       for (const row of rows) {
         got.add(row.cid);
@@ -99,13 +100,13 @@ export class D1Blockstore implements WritableBlockstore {
       await this.env.DB.prepare(
         `INSERT OR REPLACE INTO blockstore (cid, bytes) VALUES (?, ?)`
       ).bind(cidStr, base64).run();
-    } catch (error: any) {
+    } catch (error) {
       console.error(JSON.stringify({
         level: 'error',
         type: 'blockstore_put',
         cid: cidStr,
         size: bytes.byteLength,
-        message: error?.message,
+        message: errorMessage(error),
       }));
       throw error;
     }

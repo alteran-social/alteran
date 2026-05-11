@@ -11,9 +11,9 @@ interface ProfileRecord {
   website?: string;
   avatar?: string;
   banner?: string;
-  joinedViaStarterPack?: any;
-  pinnedPost?: any;
-  labels?: any;
+  joinedViaStarterPack?: unknown;
+  pinnedPost?: unknown;
+  labels?: unknown;
   createdAt?: string;
 }
 
@@ -26,7 +26,7 @@ export interface PrimaryActor {
   website?: string;
   avatar?: string;
   banner?: string;
-  labels?: any;
+  labels?: unknown;
   createdAt?: string;
 }
 

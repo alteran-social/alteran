@@ -9,6 +9,12 @@ import { Buffer } from 'node:buffer';
 import type { AstroTestServer } from './helpers/astro-server';
 import { startAstroDev, stopAstroDev } from './helpers/astro-server';
 
+// E2E suite boots a real `astro dev` process; gate behind RUN_APP_TESTS=true
+// to match tests/app.test.ts. Without the gate, beforeAll times out at 5s
+// before the dev server is ready and pollutes the bun-test output.
+const runAppIntegrationTests = process.env.RUN_APP_TESTS === 'true';
+const describeE2E = runAppIntegrationTests ? describe : describe.skip;
+
 process.env.PDS_SERVICE_SIGNING_KEY_HEX = process.env.PDS_SERVICE_SIGNING_KEY_HEX ?? '8b5e3d226b44c4c88fbd3d4529f6283fb2b20f6deee8a0b34e7f0a9b12d3e4f1';
 
 let server: AstroTestServer | undefined;
@@ -61,6 +67,7 @@ async function createPostRecord(extra: Record<string, unknown> = {}) {
 }
 
 beforeAll(async () => {
+  if (!runAppIntegrationTests) return;
   server = await startAstroDev();
   baseUrl = server.url;
 
@@ -91,7 +98,7 @@ afterAll(async () => {
   }
 });
 
-describe('PDS server parity', () => {
+describeE2E('PDS server parity', () => {
   it('returns 404 for unknown routes', async () => {
     const res = await fetch(`${baseUrl}/definitely-not-real`);
     expect(res.status).toBe(404);

@@ -1,44 +1,26 @@
 import { CID } from 'multiformats/cid';
-import * as uint8arrays from 'uint8arrays';
 import * as dagCbor from '@ipld/dag-cbor';
 import type { ReadableBlockstore } from './blockstore';
 import * as util from './util';
 import { BlockMap } from './block-map';
+import { Leaf } from './leaf';
+import type { NodeData, NodeEntry, MstOpts } from './types';
+import {
+  cidForEntries,
+  deserializeNodeData,
+  layerForEntries,
+  serializeNodeData,
+} from './serialize';
 
-/**
- * MST Node Data Structure
- * Represents the CBOR-encoded format of an MST node
- */
-export interface NodeData {
-  l: CID | null; // left-most subtree
-  e: TreeEntry[]; // entries (leaves with optional right subtrees)
-}
-
-/**
- * Tree Entry in MST node
- */
-export interface TreeEntry {
-  p: number; // prefix count shared with previous key
-  k: Uint8Array; // rest of key after prefix
-  v: CID; // value CID
-  t: CID | null; // next subtree (to right of leaf)
-}
-
-/**
- * Node entry can be either an MST subtree or a Leaf
- */
-export type NodeEntry = MST | Leaf;
-
-export interface MstOpts {
-  layer: number;
-}
+export type { NodeData, TreeEntry, NodeEntry, MstOpts } from './types';
+export { Leaf } from './leaf';
 
 /**
  * Merkle Search Tree (MST) Implementation
  *
- * An ordered, insert-order-independent, deterministic tree structure.
- * Keys are laid out in alphabetic order, with each key hashed to determine
- * which layer it belongs to based on leading zeros (~4 fanout, 2 bits per layer).
+ * Ordered, insert-order-independent, deterministic tree. Keys are laid out
+ * alphabetically; each key's layer is determined by leading zeros on its hash
+ * (~4 fanout, 2 bits per layer).
  */
 export class MST {
   storage: ReadableBlockstore;
@@ -59,9 +41,6 @@ export class MST {
     this.pointer = pointer;
   }
 
-  /**
-   * Create a new MST from entries
-   */
   static async create(
     storage: ReadableBlockstore,
     entries: NodeEntry[] = [],
@@ -72,23 +51,17 @@ export class MST {
     return new MST(storage, pointer, entries, layer);
   }
 
-  /**
-   * Load MST from NodeData
-   */
   static async fromData(
     storage: ReadableBlockstore,
     data: NodeData,
     opts?: Partial<MstOpts>,
   ): Promise<MST> {
     const { layer = null } = opts || {};
-    const entries = await deserializeNodeData(storage, data, opts);
+    const entries = await deserializeNodeData(storage, data, MST.load, opts);
     const pointer = await util.cidForCbor(data);
     return new MST(storage, pointer, entries, layer);
   }
 
-  /**
-   * Lazy load MST from CID (doesn't fetch from storage yet)
-   */
   static load(
     storage: ReadableBlockstore,
     cid: CID,
@@ -98,18 +71,12 @@ export class MST {
     return new MST(storage, cid, null, layer);
   }
 
-  /**
-   * Create new tree with updated entries (immutable operation)
-   */
   async newTree(entries: NodeEntry[]): Promise<MST> {
     const mst = new MST(this.storage, this.pointer, entries, this.layer);
     mst.outdatedPointer = true;
     return mst;
   }
 
-  /**
-   * Get entries (lazy load from storage if needed)
-   */
   async getEntries(): Promise<NodeEntry[]> {
     if (this.entries) return [...this.entries];
 
@@ -119,49 +86,36 @@ export class MST {
       const layer = firstLeaf !== undefined
         ? await util.leadingZerosOnHash(firstLeaf.k)
         : undefined;
-
-      this.entries = await deserializeNodeData(this.storage, data, { layer });
+      this.entries = await deserializeNodeData(this.storage, data, MST.load, { layer });
       return this.entries;
     }
 
     throw new Error('No entries or CID provided');
   }
 
-  /**
-   * Get pointer CID (recalculate if outdated)
-   */
   async getPointer(): Promise<CID> {
     if (!this.outdatedPointer) return this.pointer;
-
     const { cid } = await this.serialize();
     this.pointer = cid;
     this.outdatedPointer = false;
     return this.pointer;
   }
 
-  /**
-   * Serialize MST to CBOR bytes
-   */
   async serialize(): Promise<{ cid: CID; bytes: Uint8Array }> {
     let entries = await this.getEntries();
 
-    // Update any outdated child pointers first
-    const outdated = entries.filter(e => e.isTree() && e.outdatedPointer) as MST[];
+    const outdated = entries.filter((e) => e.isTree() && e.outdatedPointer) as MST[];
     if (outdated.length > 0) {
-      await Promise.all(outdated.map(e => e.getPointer()));
+      await Promise.all(outdated.map((e) => e.getPointer()));
       entries = await this.getEntries();
     }
 
     const data = serializeNodeData(entries);
     const bytes = dagCbor.encode(data);
     const cid = await util.cidForCbor(data);
-
     return { cid, bytes };
   }
 
-  /**
-   * Get layer of this node
-   */
   async getLayer(): Promise<number> {
     this.layer = await this.attemptGetLayer();
     if (this.layer === null) this.layer = 0;
@@ -190,27 +144,20 @@ export class MST {
     return layer;
   }
 
-  /**
-   * Get blocks that need to be stored (not already in storage)
-   * This is the key method for efficient block storage - only stores what's new
-   */
+  // Returns the set of blocks reachable from this node that aren't yet
+  // persisted in storage. Used to compute the minimal write set per commit.
   async getUnstoredBlocks(): Promise<{ root: CID; blocks: BlockMap }> {
     const blocks = new BlockMap();
     const pointer = await this.getPointer();
 
-    // Check if this node's block is already stored
-    const alreadyHas = await this.storage.has(pointer);
-    if (alreadyHas) {
-      // Block already exists, no need to store anything
+    if (await this.storage.has(pointer)) {
       return { root: pointer, blocks };
     }
 
-    // This block doesn't exist - need to serialize and store it
     const entries = await this.getEntries();
     const data = serializeNodeData(entries);
     await blocks.add(data);
 
-    // Recursively collect unstored blocks from child trees
     for (const entry of entries) {
       if (entry.isTree()) {
         const subtree = await entry.getUnstoredBlocks();
@@ -221,9 +168,6 @@ export class MST {
     return { root: pointer, blocks };
   }
 
-  /**
-   * Add a new key/value pair to the MST
-   */
   async add(key: string, value: CID, knownZeros?: number): Promise<MST> {
     util.ensureValidMstKey(key);
     const keyZeros = knownZeros ?? (await util.leadingZerosOnHash(key));
@@ -231,7 +175,6 @@ export class MST {
     const newLeaf = new Leaf(key, value);
 
     if (keyZeros === layer) {
-      // Key belongs in this layer
       const index = await this.findGtOrEqualLeafIndex(key);
       const found = await this.atIndex(index);
 
@@ -242,49 +185,45 @@ export class MST {
       const prevNode = await this.atIndex(index - 1);
       if (!prevNode || prevNode.isLeaf()) {
         return this.spliceIn(newLeaf, index);
-      } else {
-        const splitSubTree = await prevNode.splitAround(key);
-        return this.replaceWithSplit(index - 1, splitSubTree[0], newLeaf, splitSubTree[1]);
       }
-    } else if (keyZeros < layer) {
-      // Key belongs on a lower layer
+      const splitSubTree = await prevNode.splitAround(key);
+      return this.replaceWithSplit(index - 1, splitSubTree[0], newLeaf, splitSubTree[1]);
+    }
+
+    if (keyZeros < layer) {
       const index = await this.findGtOrEqualLeafIndex(key);
       const prevNode = await this.atIndex(index - 1);
 
       if (prevNode && prevNode.isTree()) {
         const newSubtree = await prevNode.add(key, value, keyZeros);
         return this.updateEntry(index - 1, newSubtree);
-      } else {
-        const subTree = await this.createChild();
-        const newSubTree = await subTree.add(key, value, keyZeros);
-        return this.spliceIn(newSubTree, index);
       }
-    } else {
-      // Key belongs on a higher layer - push rest of tree down
-      const split = await this.splitAround(key);
-      let left: MST | null = split[0];
-      let right: MST | null = split[1];
-      const extraLayersToAdd = keyZeros - layer;
-
-      for (let i = 1; i < extraLayersToAdd; i++) {
-        if (left !== null) left = await left.createParent();
-        if (right !== null) right = await right.createParent();
-      }
-
-      const updated: NodeEntry[] = [];
-      if (left) updated.push(left);
-      updated.push(new Leaf(key, value));
-      if (right) updated.push(right);
-
-      const newRoot = await MST.create(this.storage, updated, { layer: keyZeros });
-      newRoot.outdatedPointer = true;
-      return newRoot;
+      const subTree = await this.createChild();
+      const newSubTree = await subTree.add(key, value, keyZeros);
+      return this.spliceIn(newSubTree, index);
     }
+
+    // keyZeros > layer: push rest of tree down
+    const split = await this.splitAround(key);
+    let left: MST | null = split[0];
+    let right: MST | null = split[1];
+    const extraLayersToAdd = keyZeros - layer;
+
+    for (let i = 1; i < extraLayersToAdd; i++) {
+      if (left !== null) left = await left.createParent();
+      if (right !== null) right = await right.createParent();
+    }
+
+    const updated: NodeEntry[] = [];
+    if (left) updated.push(left);
+    updated.push(new Leaf(key, value));
+    if (right) updated.push(right);
+
+    const newRoot = await MST.create(this.storage, updated, { layer: keyZeros });
+    newRoot.outdatedPointer = true;
+    return newRoot;
   }
 
-  /**
-   * Get value for a key
-   */
   async get(key: string): Promise<CID | null> {
     const index = await this.findGtOrEqualLeafIndex(key);
     const found = await this.atIndex(index);
@@ -301,9 +240,6 @@ export class MST {
     return null;
   }
 
-  /**
-   * Update value for existing key
-   */
   async update(key: string, value: CID): Promise<MST> {
     util.ensureValidMstKey(key);
     const index = await this.findGtOrEqualLeafIndex(key);
@@ -322,9 +258,6 @@ export class MST {
     throw new Error(`Could not find a record with key: ${key}`);
   }
 
-  /**
-   * Delete a key from the MST
-   */
   async delete(key: string): Promise<MST> {
     const altered = await this.deleteRecurse(key);
     return altered.trimTop();
@@ -345,29 +278,23 @@ export class MST {
           merged,
           ...(await this.slice(index + 2)),
         ]);
-      } else {
-        return this.removeEntry(index);
       }
+      return this.removeEntry(index);
     }
 
     const prev = await this.atIndex(index - 1);
     if (prev?.isTree()) {
       const subtree = await prev.deleteRecurse(key);
       const subTreeEntries = await subtree.getEntries();
-
       if (subTreeEntries.length === 0) {
         return this.removeEntry(index - 1);
-      } else {
-        return this.updateEntry(index - 1, subtree);
       }
-    } else {
-      throw new Error(`Could not find a record with key: ${key}`);
+      return this.updateEntry(index - 1, subtree);
     }
+
+    throw new Error(`Could not find a record with key: ${key}`);
   }
 
-  /**
-   * List entries with optional pagination
-   */
   async list(count = Number.MAX_SAFE_INTEGER, after?: string, before?: string): Promise<Leaf[]> {
     const vals: Leaf[] = [];
     for await (const leaf of this.walkLeavesFrom(after || '')) {
@@ -379,9 +306,6 @@ export class MST {
     return vals;
   }
 
-  /**
-   * List entries with a given prefix
-   */
   async listWithPrefix(prefix: string, count = Number.MAX_SAFE_INTEGER): Promise<Leaf[]> {
     const vals: Leaf[] = [];
     for await (const leaf of this.walkLeavesFrom(prefix)) {
@@ -391,23 +315,19 @@ export class MST {
     return vals;
   }
 
-  // Helper methods
-
   async updateEntry(index: number, entry: NodeEntry): Promise<MST> {
-    const update = [
+    return this.newTree([
       ...(await this.slice(0, index)),
       entry,
       ...(await this.slice(index + 1)),
-    ];
-    return this.newTree(update);
+    ]);
   }
 
   async removeEntry(index: number): Promise<MST> {
-    const updated = [
+    return this.newTree([
       ...(await this.slice(0, index)),
       ...(await this.slice(index + 1)),
-    ];
-    return this.newTree(updated);
+    ]);
   }
 
   async atIndex(index: number): Promise<NodeEntry | null> {
@@ -421,12 +341,11 @@ export class MST {
   }
 
   async spliceIn(entry: NodeEntry, index: number): Promise<MST> {
-    const update = [
+    return this.newTree([
       ...(await this.slice(0, index)),
       entry,
       ...(await this.slice(index)),
-    ];
-    return this.newTree(update);
+    ]);
   }
 
   async replaceWithSplit(
@@ -489,9 +408,8 @@ export class MST {
         merged,
         ...toMergeEntries.slice(1),
       ]);
-    } else {
-      return this.newTree([...thisEntries, ...toMergeEntries]);
     }
+    return this.newTree([...thisEntries, ...toMergeEntries]);
   }
 
   async append(entry: NodeEntry): Promise<MST> {
@@ -518,7 +436,7 @@ export class MST {
 
   async findGtOrEqualLeafIndex(key: string): Promise<number> {
     const entries = await this.getEntries();
-    const maybeIndex = entries.findIndex(entry => entry.isLeaf() && entry.key >= key);
+    const maybeIndex = entries.findIndex((entry) => entry.isLeaf() && entry.key >= key);
     return maybeIndex >= 0 ? maybeIndex : entries.length;
   }
 
@@ -566,110 +484,4 @@ export class MST {
   isLeaf(): this is Leaf {
     return false;
   }
-}
-
-/**
- * Leaf node in the MST
- */
-export class Leaf {
-  constructor(
-    public key: string,
-    public value: CID,
-  ) {}
-
-  isTree(): this is MST {
-    return false;
-  }
-
-  isLeaf(): this is Leaf {
-    return true;
-  }
-
-  equals(entry: NodeEntry): boolean {
-    if (entry.isLeaf()) {
-      return this.key === entry.key && this.value.equals(entry.value);
-    }
-    return false;
-  }
-}
-
-// Utility functions
-
-async function layerForEntries(entries: NodeEntry[]): Promise<number | null> {
-  const firstLeaf = entries.find(entry => entry.isLeaf());
-  if (!firstLeaf || firstLeaf.isTree()) return null;
-  return await util.leadingZerosOnHash(firstLeaf.key);
-}
-
-async function deserializeNodeData(
-  storage: ReadableBlockstore,
-  data: NodeData,
-  opts?: Partial<MstOpts>,
-): Promise<NodeEntry[]> {
-  const { layer } = opts || {};
-  const entries: NodeEntry[] = [];
-
-  if (data.l !== null) {
-    entries.push(MST.load(storage, data.l, { layer: layer ? layer - 1 : undefined }));
-  }
-
-  let lastKey = '';
-  for (const entry of data.e) {
-    const keyStr = uint8arrays.toString(entry.k, 'ascii');
-    const key = lastKey.slice(0, entry.p) + keyStr;
-    util.ensureValidMstKey(key);
-    entries.push(new Leaf(key, entry.v));
-    lastKey = key;
-
-    if (entry.t !== null) {
-      entries.push(MST.load(storage, entry.t, { layer: layer ? layer - 1 : undefined }));
-    }
-  }
-
-  return entries;
-}
-
-function serializeNodeData(entries: NodeEntry[]): NodeData {
-  const data: NodeData = { l: null, e: [] };
-  let i = 0;
-
-  if (entries[0]?.isTree()) {
-    i++;
-    data.l = entries[0].pointer;
-  }
-
-  let lastKey = '';
-  while (i < entries.length) {
-    const leaf = entries[i];
-    const next = entries[i + 1];
-
-    if (!leaf.isLeaf()) {
-      throw new Error('Not a valid node: two subtrees next to each other');
-    }
-    i++;
-
-    let subtree: CID | null = null;
-    if (next?.isTree()) {
-      subtree = next.pointer;
-      i++;
-    }
-
-    util.ensureValidMstKey(leaf.key);
-    const prefixLen = util.countPrefixLen(lastKey, leaf.key);
-    data.e.push({
-      p: prefixLen,
-      k: uint8arrays.fromString(leaf.key.slice(prefixLen), 'ascii'),
-      v: leaf.value,
-      t: subtree,
-    });
-
-    lastKey = leaf.key;
-  }
-
-  return data;
-}
-
-async function cidForEntries(entries: NodeEntry[]): Promise<CID> {
-  const data = serializeNodeData(entries);
-  return util.cidForCbor(data);
 }

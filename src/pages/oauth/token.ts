@@ -1,5 +1,7 @@
 import type { APIContext } from 'astro';
+import { errorMessage } from '../../lib/errors';
 import { verifyDpop, dpopErrorResponse, getAuthzNonce } from '../../lib/oauth/dpop';
+import { DpopNonceError } from '../../lib/oauth/dpop-errors';
 import { consumeCode } from '../../lib/oauth/store';
 import { sha256b64url } from '../../lib/oauth/dpop';
 import { issueSessionTokens, verifyRefreshToken, verifyAccessToken, computeGraceExpiry } from '../../lib/session-tokens';
@@ -41,12 +43,16 @@ export async function POST({ locals, request }: APIContext) {
 
       // If confidential client, verify assertion
       let clientMeta: any = null;
-      try { clientMeta = await fetchClientMetadata(client_id); } catch {}
+      try {
+        clientMeta = await fetchClientMetadata(client_id);
+      } catch {
+        // Public clients have no fetchable metadata; only confidential clients gate on it below.
+      }
       if (clientMeta?.token_endpoint_auth_method === 'private_key_jwt') {
         let jwks = clientMeta?.jwks;
         if (!jwks && typeof clientMeta?.jwks_uri === 'string') {
-          const res = await fetch(clientMeta.jwks_uri);
-          jwks = await res.json();
+          const response = await fetch(clientMeta.jwks_uri);
+          jwks = await response.json();
         }
         const origin = `${new URL(request.url).protocol}//${new URL(request.url).host}`;
         if (!client_assertion || client_assertion_type !== 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer')
@@ -86,12 +92,17 @@ export async function POST({ locals, request }: APIContext) {
 
       // If confidential client, verify assertion
       if (client_id) {
-        let clientMeta: any = null; try { clientMeta = await fetchClientMetadata(client_id); } catch {}
+        let clientMeta: any = null;
+        try {
+          clientMeta = await fetchClientMetadata(client_id);
+        } catch {
+          // Public clients have no fetchable metadata; only confidential clients gate on it below.
+        }
         if (clientMeta?.token_endpoint_auth_method === 'private_key_jwt') {
           let jwks = clientMeta?.jwks;
           if (!jwks && typeof clientMeta?.jwks_uri === 'string') {
-            const res = await fetch(clientMeta.jwks_uri);
-            jwks = await res.json();
+            const response = await fetch(clientMeta.jwks_uri);
+            jwks = await response.json();
           }
           const origin = `${new URL(request.url).protocol}//${new URL(request.url).host}`;
           if (!client_assertion || client_assertion_type !== 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer')
@@ -135,9 +146,9 @@ export async function POST({ locals, request }: APIContext) {
     }
 
     return jsonError('unsupported_grant_type', 'grant_type must be authorization_code or refresh_token');
-  } catch (e: any) {
-    if (e && e.code === 'use_dpop_nonce') return dpopErrorResponse(env, e);
-    return jsonError('invalid_request', e?.message ?? 'Unknown error');
+  } catch (e) {
+    if (e instanceof DpopNonceError) return dpopErrorResponse(env, e);
+    return jsonError('invalid_request', errorMessage(e) ?? 'Unknown error');
   }
 }
 

@@ -8,7 +8,7 @@ describe('JSON size limit boundary', () => {
     const body = JSON.stringify({ text });
     expect(body.length).toBeLessThanOrEqual(128);
     const req = new Request('http://localhost', { method: 'POST', body, headers: { 'content-type': 'application/json' } });
-    const parsed = await readJsonBounded(env, req);
+    const parsed = (await readJsonBounded(env, req)) as { text: string };
     expect(parsed.text).toBe(text);
   });
 });

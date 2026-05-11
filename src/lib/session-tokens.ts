@@ -2,6 +2,7 @@ import { bytesToHex, randomBytes } from '@noble/hashes/utils.js';
 import type { Env } from '../env';
 import { getRuntimeString } from './secrets';
 import { getOrCreateSecret } from '../db/account';
+import { InvalidToken, ServerMisconfigured } from './errors';
 import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
 
 const SESSION_SECRET_KEY = 'session_jwt_secret';
@@ -27,7 +28,7 @@ async function getJwtKey(env: Env): Promise<Uint8Array> {
 
 async function getServiceDid(env: Env): Promise<string> {
   const did = await getRuntimeString(env, 'PDS_DID', '');
-  if (!did) throw new Error('PDS_DID is not configured');
+  if (!did) throw new ServerMisconfigured('PDS_DID is not configured');
   return did;
 }
 
@@ -71,10 +72,10 @@ export async function verifyRefreshToken(env: Env, token: string) {
   const serviceDid = await getServiceDid(env);
   const { header, payload } = await decodeAndVerifyJwt(key, token, 'refresh+jwt', serviceDid);
   if (header.typ !== 'refresh+jwt') {
-    throw new Error('Invalid token type');
+    throw new InvalidToken('Invalid token type');
   }
   if (payload.scope !== 'refresh') {
-    throw new Error('Invalid refresh token scope');
+    throw new InvalidToken('Invalid refresh token scope');
   }
   return {
     payload,
@@ -92,10 +93,10 @@ export async function verifyAccessToken(env: Env, token: string) {
   const serviceDid = await getServiceDid(env);
   const { header, payload } = await decodeAndVerifyJwt(key, token, 'at+jwt', serviceDid);
   if (header.typ !== 'at+jwt') {
-    throw new Error('Invalid token type');
+    throw new InvalidToken('Invalid token type');
   }
   if (payload.scope === 'refresh') {
-    throw new Error('Unexpected scope for access token');
+    throw new InvalidToken('Unexpected scope for access token');
   }
   return payload;
 }
@@ -136,14 +137,13 @@ async function decodeAndVerifyJwt(key: Uint8Array, token: string, expectedTyp: T
     audience,
   });
   if (protectedHeader.typ !== expectedTyp) {
-    throw new Error('Unexpected token header');
+    throw new InvalidToken('Unexpected token header');
   }
-  // jose already validates exp/nbf/iat format and audience, but we keep minimal sanity checks
   if (!payload.sub || typeof payload.sub !== 'string') {
-    throw new Error('Token missing subject');
+    throw new InvalidToken('Token missing subject');
   }
   if (typeof payload.exp !== 'number') {
-    throw new Error('Token missing expiry');
+    throw new InvalidToken('Token missing expiry');
   }
   return { header: protectedHeader as TokenHeader, payload: payload as unknown as TokenPayload };
 }

@@ -16,6 +16,10 @@ export interface LogContext {
   [key: string]: unknown;
 }
 
+// Logger is a class because the inherited-context + child(context) pattern
+// maps cleanly onto an immutable object whose state is exactly the
+// accumulated context. Each child() returns a new Logger so request-scoped
+// loggers don't leak fields back into the global instance.
 export class Logger {
   constructor(private context: LogContext = {}) {}
 

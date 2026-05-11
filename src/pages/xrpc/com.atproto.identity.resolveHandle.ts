@@ -40,20 +40,20 @@ export async function GET({ locals, url }: APIContext) {
     const upstream = new URL('/xrpc/com.atproto.identity.resolveHandle', base);
     upstream.searchParams.set('handle', handle);
 
-    const res = await fetch(upstream.toString(), {
+    const response = await fetch(upstream.toString(), {
       headers: { accept: 'application/json' },
     });
 
-    if (res.ok) {
+    if (response.ok) {
       // Pass through upstream JSON (e.g. { did })
-      return new Response(await res.text(), {
+      return new Response(await response.text(), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
     }
 
     // Map upstream failures to the standard InvalidRequest shape used by PDS
-    const text = await res.text().catch(() => '');
+    const text = await response.text().catch(() => '');
     const body = text ? (() => { try { return JSON.parse(text); } catch { return null; } })() : null;
     const message = body?.message || 'Unable to resolve handle';
     return new Response(

@@ -1,17 +1,19 @@
 import type { Env } from '../../env';
+import { errorMessage } from '../errors';
 import { getOrCreateSecret, setSecret, getSecret } from '../../db/account';
 import { decodeProtectedHeader, importJWK, compactVerify, type JWK as JoseJWK } from 'jose';
+import { DpopNonceError } from './dpop-errors';
 
 // DPoP nonce management and proof verification utilities
 
 const NONCE_AUTHZ_KEY = 'oauth_dpop_nonce_authz';
 const NONCE_TTL_SEC = 120; // rotate roughly every 2 minutes
 
-export interface DpopVerification {
+export type DpopVerification = {
   jkt: string; // JWK thumbprint
   jwk: JsonWebKey;
-  payload: any;
-}
+  payload: Record<string, unknown>;
+};
 
 function b64url(bytes: Uint8Array | ArrayBuffer): string {
   const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -31,7 +33,9 @@ export async function getAuthzNonce(env: Env): Promise<string> {
       if (typeof parsed.v === 'string' && typeof parsed.ts === 'number') {
         if (now - parsed.ts < NONCE_TTL_SEC) return parsed.v;
       }
-    } catch {}
+    } catch {
+      // Corrupt cached nonce: fall through and mint a fresh one.
+    }
   }
   const v = crypto.randomUUID().replace(/-/g, '');
   const rec = JSON.stringify({ v, ts: now });
@@ -73,55 +77,37 @@ export async function verifyDpop(env: Env, request: Request, opts?: { requireNon
   const dpop = request.headers.get('DPoP');
   const nonce = await getAuthzNonce(env);
   if (!dpop) {
-    const err: any = new Error('DPoP required');
-    (err as any).code = 'use_dpop_nonce';
-    (err as any).nonce = nonce;
-    throw err;
+    throw new DpopNonceError('DPoP required', nonce);
   }
   const [h, p] = dpop.split('.');
   if (!h || !p) {
-    const err: any = new Error('Invalid DPoP');
-    (err as any).code = 'use_dpop_nonce';
-    (err as any).nonce = nonce;
-    throw err;
+    throw new DpopNonceError('Invalid DPoP', nonce);
   }
-  const header = decodeProtectedHeader(dpop) as any;
+  const header = decodeProtectedHeader(dpop) as Record<string, unknown>;
 
   if (header.typ !== 'dpop+jwt' || header.alg !== 'ES256' || !header.jwk) {
-    const err: any = new Error('Invalid DPoP header');
-    (err as any).code = 'use_dpop_nonce';
-    (err as any).nonce = nonce;
-    throw err;
+    throw new DpopNonceError('Invalid DPoP header', nonce);
   }
 
   // Verify signature using JOSE
   const key = await importJWK(header.jwk as JoseJWK, 'ES256');
   const verified = await compactVerify(dpop, key);
-  const payload = JSON.parse(new TextDecoder().decode(verified.payload));
+  const payload = JSON.parse(new TextDecoder().decode(verified.payload)) as Record<string, unknown>;
 
   const method = request.method.toUpperCase();
   const url = urlWithoutHash(request.url);
   if (payload.htm !== method || payload.htu !== url) {
-    const err: any = new Error('DPoP htm/htu mismatch');
-    (err as any).code = 'use_dpop_nonce';
-    (err as any).nonce = nonce;
-    throw err;
+    throw new DpopNonceError('DPoP htm/htu mismatch', nonce);
   }
 
   const now = Math.floor(Date.now() / 1000);
   if (typeof payload.iat !== 'number' || now - payload.iat > 300) {
-    const err: any = new Error('DPoP iat too old');
-    (err as any).code = 'use_dpop_nonce';
-    (err as any).nonce = nonce;
-    throw err;
+    throw new DpopNonceError('DPoP iat too old', nonce);
   }
 
   if (opts?.requireNonce !== false) {
     if (!payload.nonce || payload.nonce !== nonce) {
-      const err: any = new Error('use_dpop_nonce');
-      (err as any).code = 'use_dpop_nonce';
-      (err as any).nonce = nonce;
-      throw err;
+      throw new DpopNonceError('use_dpop_nonce', nonce);
     }
   }
 
@@ -129,11 +115,10 @@ export async function verifyDpop(env: Env, request: Request, opts?: { requireNon
   return { jkt, jwk: header.jwk as JsonWebKey, payload };
 }
 
-export function dpopErrorResponse(env: Env, error: any): Response {
-  const nonce = (error && (error.nonce as string)) || '';
+export function dpopErrorResponse(_env: Env, error: DpopNonceError): Response {
   const body = JSON.stringify({ error: 'use_dpop_nonce', error_description: 'Authorization server requires nonce in DPoP proof' });
   const headers = new Headers({ 'Content-Type': 'application/json' });
-  if (nonce) headers.set('DPoP-Nonce', nonce);
+  if (error.nonce) headers.set('DPoP-Nonce', error.nonce);
   return new Response(body, { status: 401, headers });
 }
 
@@ -150,12 +135,12 @@ export async function withDpop<T>(env: Env, request: Request, fn: (ver: DpopVeri
       return result;
     }
     return new Response(JSON.stringify(result), { status: 200, headers });
-  } catch (e: any) {
-    if (e && e.code === 'use_dpop_nonce') {
+  } catch (e) {
+    if (e instanceof DpopNonceError) {
       return dpopErrorResponse(env, e);
     }
     const headers = new Headers({ 'Content-Type': 'application/json' });
-    return new Response(JSON.stringify({ error: 'invalid_request', error_description: e?.message ?? 'Unknown error' }), { status: 400, headers });
+    return new Response(JSON.stringify({ error: 'invalid_request', error_description: errorMessage(e) ?? 'Unknown error' }), { status: 400, headers });
   }
 }
 

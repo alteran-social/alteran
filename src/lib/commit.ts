@@ -2,6 +2,7 @@ import { CID } from 'multiformats/cid';
 import * as dagCbor from '@ipld/dag-cbor';
 import { sha256 } from 'multiformats/hashes/sha2';
 import { Secp256k1Keypair, verifySignature } from '@atproto/crypto';
+import { ServerMisconfigured } from './errors';
 
 /**
  * AT Protocol Commit Structure
@@ -68,8 +69,8 @@ export async function signCommit(
       const priv = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) priv[i] = bin.charCodeAt(i);
       keypair = await Secp256k1Keypair.import(priv);
-    } catch (e) {
-      throw new Error('Invalid REPO_SIGNING_KEY format: expected 32-byte hex or base64');
+    } catch {
+      throw new ServerMisconfigured('Invalid REPO_SIGNING_KEY format: expected 32-byte hex or base64');
     }
   }
 
