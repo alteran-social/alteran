@@ -73,25 +73,25 @@ export async function verifyDpop(env: Env, request: Request, opts?: { requireNon
   const dpop = request.headers.get('DPoP');
   const nonce = await getAuthzNonce(env);
   if (!dpop) {
-    const err: any = new Error('DPoP required');
-    (err as any).code = 'use_dpop_nonce';
-    (err as any).nonce = nonce;
-    throw err;
+    const error: any = new Error('DPoP required');
+    (error as any).code = 'use_dpop_nonce';
+    (error as any).nonce = nonce;
+    throw error;
   }
   const [h, p] = dpop.split('.');
   if (!h || !p) {
-    const err: any = new Error('Invalid DPoP');
-    (err as any).code = 'use_dpop_nonce';
-    (err as any).nonce = nonce;
-    throw err;
+    const error: any = new Error('Invalid DPoP');
+    (error as any).code = 'use_dpop_nonce';
+    (error as any).nonce = nonce;
+    throw error;
   }
   const header = decodeProtectedHeader(dpop) as any;
 
   if (header.typ !== 'dpop+jwt' || header.alg !== 'ES256' || !header.jwk) {
-    const err: any = new Error('Invalid DPoP header');
-    (err as any).code = 'use_dpop_nonce';
-    (err as any).nonce = nonce;
-    throw err;
+    const error: any = new Error('Invalid DPoP header');
+    (error as any).code = 'use_dpop_nonce';
+    (error as any).nonce = nonce;
+    throw error;
   }
 
   // Verify signature using JOSE
@@ -102,26 +102,26 @@ export async function verifyDpop(env: Env, request: Request, opts?: { requireNon
   const method = request.method.toUpperCase();
   const url = urlWithoutHash(request.url);
   if (payload.htm !== method || payload.htu !== url) {
-    const err: any = new Error('DPoP htm/htu mismatch');
-    (err as any).code = 'use_dpop_nonce';
-    (err as any).nonce = nonce;
-    throw err;
+    const error: any = new Error('DPoP htm/htu mismatch');
+    (error as any).code = 'use_dpop_nonce';
+    (error as any).nonce = nonce;
+    throw error;
   }
 
   const now = Math.floor(Date.now() / 1000);
   if (typeof payload.iat !== 'number' || now - payload.iat > 300) {
-    const err: any = new Error('DPoP iat too old');
-    (err as any).code = 'use_dpop_nonce';
-    (err as any).nonce = nonce;
-    throw err;
+    const error: any = new Error('DPoP iat too old');
+    (error as any).code = 'use_dpop_nonce';
+    (error as any).nonce = nonce;
+    throw error;
   }
 
   if (opts?.requireNonce !== false) {
     if (!payload.nonce || payload.nonce !== nonce) {
-      const err: any = new Error('use_dpop_nonce');
-      (err as any).code = 'use_dpop_nonce';
-      (err as any).nonce = nonce;
-      throw err;
+      const error: any = new Error('use_dpop_nonce');
+      (error as any).code = 'use_dpop_nonce';
+      (error as any).nonce = nonce;
+      throw error;
     }
   }
 

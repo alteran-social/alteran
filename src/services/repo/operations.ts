@@ -77,8 +77,8 @@ export async function collectLeavesBatched(
           const left = coerceCid(node.l);
           if (!visited.has(left.toString())) toFetch.push(left);
         }
-      } catch (err) {
-        console.warn('[RepoManager] collectLeavesBatched: failed to decode node', cidStr, err);
+      } catch (error) {
+        console.warn('[RepoManager] collectLeavesBatched: failed to decode node', cidStr, error);
       }
     }
   }

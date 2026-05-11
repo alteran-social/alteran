@@ -17,11 +17,11 @@ export async function POST({ locals, request }: APIContext) {
 
   try {
     if (!(await isAuthorized(request, env))) return unauthorized();
-  } catch (err) {
-    if (err instanceof AuthTokenExpiredError) {
+  } catch (error) {
+    if (error instanceof AuthTokenExpiredError) {
       return expiredToken();
     }
-    throw err;
+    throw error;
   }
 
   try {

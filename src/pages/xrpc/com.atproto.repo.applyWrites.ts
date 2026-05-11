@@ -21,10 +21,10 @@ export async function POST({ locals, request }: APIContext) {
   try {
     const auth = await verifyResourceRequestHybrid(env, request);
     if (!auth) return dpopResourceUnauthorized(env);
-  } catch (err) {
-    const handled = await handleResourceAuthError(env, err);
+  } catch (error) {
+    const handled = await handleResourceAuthError(env, error);
     if (handled) return handled;
-    throw err;
+    throw error;
   }
 
   // Check if account is active
@@ -157,8 +157,8 @@ export async function POST({ locals, request }: APIContext) {
         ops: opsForCommit,
         ...(blocks ? { blocks } : {}),
       });
-    } catch (err) {
-      console.error('Failed to notify sequencer:', err);
+    } catch (error) {
+      console.error('Failed to notify sequencer:', error);
       // Don't fail the request if sequencer notification fails
     }
 

@@ -10,10 +10,10 @@ export async function GET({ locals, request }: APIContext) {
   try {
     auth = await verifyResourceRequestHybrid(env, request);
     if (!auth) return dpopResourceUnauthorized(env);
-  } catch (err) {
-    const handled = await handleResourceAuthError(env, err);
+  } catch (error) {
+    const handled = await handleResourceAuthError(env, error);
     if (handled) return handled;
-    throw err;
+    throw error;
   }
 
   const url = new URL(request.url);

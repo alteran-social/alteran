@@ -12,10 +12,10 @@ export async function POST({ locals, request }: APIContext) {
   try {
     const auth = await verifyResourceRequestHybrid(env, request);
     if (!auth) return dpopResourceUnauthorized(env);
-  } catch (err) {
-    const handled = await handleResourceAuthError(env, err);
+  } catch (error) {
+    const handled = await handleResourceAuthError(env, error);
     if (handled) return handled;
-    throw err;
+    throw error;
   }
 
   const rateLimitResponse = await checkRate(env, request, 'writes');

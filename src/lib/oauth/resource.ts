@@ -178,13 +178,13 @@ function jsonError(error: string, message: string, status: number): Response {
   });
 }
 
-export async function handleResourceAuthError(env: Env, err: unknown): Promise<Response | null> {
-  if (!(err instanceof ResourceAuthError)) {
+export async function handleResourceAuthError(env: Env, error: unknown): Promise<Response | null> {
+  if (!(error instanceof ResourceAuthError)) {
     return null;
   }
-  switch (err.code) {
+  switch (error.code) {
     case 'use_dpop_nonce':
-      return dpopResourceUnauthorized(env, undefined, err.nonce);
+      return dpopResourceUnauthorized(env, undefined, error.nonce);
     case 'expired_token':
       return jsonError('ExpiredToken', 'Access token expired', 400);
     case 'invalid_token':

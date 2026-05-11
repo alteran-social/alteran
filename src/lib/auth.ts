@@ -31,11 +31,11 @@ export async function isAuthorized(request: Request, env: Env): Promise<boolean>
   let ver;
   try {
     ver = await verifyJwt(env, token);
-  } catch (err) {
-    if (err instanceof AuthTokenExpiredError) {
-      throw err;
+  } catch (error) {
+    if (error instanceof AuthTokenExpiredError) {
+      throw error;
     }
-    console.error('JWT VERIFICATION ERROR:', err instanceof Error ? err.message : String(err));
+    console.error('JWT VERIFICATION ERROR:', error instanceof Error ? error.message : String(error));
     return false;
   }
 
@@ -75,11 +75,11 @@ export async function authenticateRequest(request: Request, env: Env): Promise<A
   let ver;
   try {
     ver = await verifyJwt(env, token);
-  } catch (err) {
-    if (err instanceof AuthTokenExpiredError) {
-      throw err;
+  } catch (error) {
+    if (error instanceof AuthTokenExpiredError) {
+      throw error;
     }
-    console.error('JWT verification error:', err);
+    console.error('JWT verification error:', error);
     return null;
   }
   if (!ver || !ver.valid) return null;

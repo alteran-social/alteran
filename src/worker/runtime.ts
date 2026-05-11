@@ -89,7 +89,7 @@ export function createPdsFetchHandler(options?: CreatePdsFetchHandlerOptions): P
       if (!isRelayPath) {
         ctx.waitUntil(notifyRelaysIfNeeded(resolvedEnv as any, request.url));
       }
-    } catch (err) {
+    } catch (error) {
       // Never block on relay notification
     }
 
@@ -109,7 +109,7 @@ export function createPdsFetchHandler(options?: CreatePdsFetchHandlerOptions): P
         const headers = new Headers(res.headers);
         headers.set('Content-Type', 'application/json');
         return new Response(await res.text(), { status: res.status, headers }) as unknown as WorkersResponse;
-      } catch (err) {
+      } catch (error) {
         return new Response(JSON.stringify({ error: 'InternalError', message: 'Failed to fetch sequencer metrics' }), { status: 500, headers: { 'Content-Type': 'application/json' } }) as unknown as WorkersResponse;
       }
     }

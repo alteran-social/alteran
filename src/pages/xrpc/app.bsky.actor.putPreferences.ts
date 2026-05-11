@@ -9,18 +9,18 @@ export async function POST({ locals, request }: APIContext) {
   const { env } = locals.runtime;
   try {
     if (!(await isAuthorized(request, env))) return unauthorized();
-  } catch (err) {
-    if (err instanceof AuthTokenExpiredError) {
+  } catch (error) {
+    if (error instanceof AuthTokenExpiredError) {
       return expiredToken();
     }
-    throw err;
+    throw error;
   }
 
   let body: any;
   try {
     body = await readJsonBounded(env, request);
-  } catch (err: any) {
-    if (err?.code === 'PayloadTooLarge') {
+  } catch (error: any) {
+    if (error?.code === 'PayloadTooLarge') {
       return new Response(JSON.stringify({ error: 'PayloadTooLarge' }), { status: 413 });
     }
     return new Response(JSON.stringify({ error: 'BadRequest' }), { status: 400 });

@@ -92,8 +92,8 @@ export async function notifyRelaysIfNeeded(env: Env, requestUrl?: string): Promi
         if (!res.ok) {
           console.warn('requestCrawl failed', { relay, status: res.status });
         }
-      } catch (err) {
-        console.warn('requestCrawl error', { relay, error: String(err) });
+      } catch (error) {
+        console.warn('requestCrawl error', { relay, error: String(error) });
       }
     }),
   );

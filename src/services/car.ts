@@ -389,8 +389,8 @@ async function collectMstBfs(
             if (!seen.has(key)) toFetch.push(t);
           }
         }
-      } catch (err) {
-        console.warn('collectMstBfs: failed to decode node', cidStr, err);
+      } catch (error) {
+        console.warn('collectMstBfs: failed to decode node', cidStr, error);
       }
     }
     // Ignore missing here; caller might not need full tree for snapshots

@@ -19,11 +19,11 @@ export async function POST({ locals, request }: APIContext) {
     if (!(await isAuthorized(request, env))) {
       return unauthorized();
     }
-  } catch (err) {
-    if (err instanceof AuthTokenExpiredError) {
+  } catch (error) {
+    if (error instanceof AuthTokenExpiredError) {
       return expiredToken();
     }
-    throw err;
+    throw error;
   }
 
   return new Response(null, { status: 200 });
