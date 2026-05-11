@@ -1,4 +1,5 @@
 import type { Env } from '../../env';
+import { ServerMisconfigured } from '../errors';
 import type { AppViewConfig, ServiceConfig, ServiceId } from './types';
 
 const DEFAULT_APPVIEW_URL = 'https://api.bsky.app';
@@ -41,7 +42,7 @@ function getOzoneConfig(env: Env): ServiceConfig {
 export function getServiceRegistry(env: Env): Record<ServiceId, ServiceConfig> {
   const app = getAppViewConfig(env);
   if (!app) {
-    throw new Error('AppView not configured');
+    throw new ServerMisconfigured('AppView not configured');
   }
   return {
     bsky_appview: { id: 'bsky_appview', url: app.url, did: app.did },

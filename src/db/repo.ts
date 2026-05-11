@@ -7,6 +7,7 @@ import { createCommit, signCommit, commitCid, generateTid, serializeCommit } fro
 import { CID } from 'multiformats/cid';
 import { resolveSecret } from '../lib/secrets';
 import { encodeBlocksForCommit } from '../services/car';
+import { ServerMisconfigured } from '../lib/errors';
 
 export async function getRoot(env: Env) {
   const db = drizzle(env.DB);
@@ -147,5 +148,5 @@ async function getSigningKey(env: Env): Promise<string> {
     return cachedDevSigningKey;
   }
 
-  throw new Error('REPO_SIGNING_KEY not configured');
+  throw new ServerMisconfigured('REPO_SIGNING_KEY not configured');
 }

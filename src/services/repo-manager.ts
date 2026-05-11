@@ -11,6 +11,7 @@ import { generateTid } from '../lib/commit';
 import { resolveSecret } from '../lib/secrets';
 import { storeRecord, storeMstBlocks } from './repo/blockstore-ops';
 import { extractOps as extractOpsImpl } from './repo/operations';
+import { ServerMisconfigured } from '../lib/errors';
 
 interface RecordMutation {
   mst: MST;
@@ -39,7 +40,7 @@ export class RepoManager {
 
   private async getDid(): Promise<string> {
     const did = await resolveSecret(this.env.PDS_DID);
-    if (!did) throw new Error('PDS_DID is required');
+    if (!did) throw new ServerMisconfigured('PDS_DID is required');
     return did;
   }
 

@@ -1,5 +1,6 @@
 import type { Env } from '../../env';
 import { getRuntimeString } from '../secrets';
+import { ServerMisconfigured } from '../errors';
 import { getAppViewConfig } from './service-config';
 
 function encodeBase64Url(bytes: Uint8Array): string {
@@ -56,7 +57,7 @@ export async function createServiceJwt(
 
   const privateKey = ((await getRuntimeString(env, 'REPO_SIGNING_KEY', '')) ?? '').trim();
   if (!privateKey) {
-    throw new Error('REPO_SIGNING_KEY not configured for ES256K service-auth');
+    throw new ServerMisconfigured('REPO_SIGNING_KEY not configured for ES256K service-auth');
   }
 
   const header = { typ: 'JWT', alg: 'ES256K' };
@@ -76,7 +77,7 @@ export async function getAppViewServiceToken(
 ): Promise<string> {
   const config = getAppViewConfig(env);
   if (!config) {
-    throw new Error('AppView not configured');
+    throw new ServerMisconfigured('AppView not configured');
   }
   return createServiceJwt(env, did, aud ?? config.did, lxm ?? null, expiresInSeconds);
 }
