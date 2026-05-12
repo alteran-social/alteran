@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { normalizeXrpcRequestForAstro } from '../src/worker/runtime';
+import { normalizePdsRequestForAstro, normalizeXrpcRequestForAstro } from '../src/worker/runtime';
 
 describe('normalizeXrpcRequestForAstro', () => {
   it('leaves non-XRPC requests unchanged', () => {
@@ -41,5 +41,38 @@ describe('normalizeXrpcRequestForAstro', () => {
 
     expect(normalized.headers.get('origin')).toBe('https://rawkode.dev');
     expect(await normalized.text()).toBe('{"collection":"app.bsky.feed.post"}');
+  });
+
+  it('normalizes OAuth backchannel POST origins for Astro', async () => {
+    const request = new Request('https://rawkode.dev/oauth/par', {
+      method: 'POST',
+      headers: {
+        origin: 'https://client.example',
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: 'client_id=https%3A%2F%2Fclient.example%2Fmetadata',
+    });
+
+    const normalized = normalizePdsRequestForAstro(request as any) as unknown as Request;
+
+    expect(normalized.headers.get('origin')).toBe('https://rawkode.dev');
+    expect(await normalized.text()).toBe('client_id=https%3A%2F%2Fclient.example%2Fmetadata');
+  });
+
+  it('does not normalize OAuth consent POST origins', () => {
+    const request = new Request('https://rawkode.dev/oauth/consent', {
+      method: 'POST',
+      headers: { origin: 'https://client.example' },
+    });
+
+    expect(normalizePdsRequestForAstro(request as any) as unknown).toBe(request);
+  });
+
+  it('keeps the legacy XRPC normalization export working', () => {
+    const request = new Request('https://rawkode.dev/oauth/token', { method: 'POST' });
+
+    const normalized = normalizeXrpcRequestForAstro(request as any) as unknown as Request;
+
+    expect(normalized.headers.get('origin')).toBe('https://rawkode.dev');
   });
 });

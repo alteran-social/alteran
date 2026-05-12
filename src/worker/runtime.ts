@@ -140,20 +140,27 @@ export function createPdsFetchHandler(options?: CreatePdsFetchHandlerOptions): P
     }
 
     const astroFetch = await getAstroFetch(options);
-    const response = await astroFetch(normalizeXrpcRequestForAstro(request), resolvedEnv as any, ctx);
+    const response = await astroFetch(normalizePdsRequestForAstro(request), resolvedEnv as any, ctx);
     return response as unknown as WorkersResponse;
   };
 }
 
-export function normalizeXrpcRequestForAstro(request: WorkersRequest): WorkersRequest {
+const OAUTH_BACKCHANNEL_PATHS = new Set([
+  '/oauth/par',
+  '/oauth/token',
+  '/oauth/revoke',
+]);
+
+export function normalizePdsRequestForAstro(request: WorkersRequest): WorkersRequest {
   const url = new URL(request.url);
-  if (!url.pathname.startsWith('/xrpc/')) {
+  if (!url.pathname.startsWith('/xrpc/') && !OAUTH_BACKCHANNEL_PATHS.has(url.pathname)) {
     return request;
   }
 
   // Astro's SSR origin-check middleware rejects unsafe requests when Origin is
-  // absent or cross-origin. XRPC is a bearer-token API, not cookie/form auth,
-  // and atproto clients legitimately send bodyless POSTs from native runtimes.
+  // absent or cross-origin. XRPC and OAuth backchannel endpoints are token-bound
+  // APIs, not cookie/form auth, and atproto clients legitimately send them from
+  // native runtimes or separate origins. Browser consent POSTs stay protected.
   if (request.headers.get('origin') === url.origin) {
     return request;
   }
@@ -166,6 +173,8 @@ export function normalizeXrpcRequestForAstro(request: WorkersRequest): WorkersRe
 
   return new Request(request as any, { headers: headerRecord }) as unknown as WorkersRequest;
 }
+
+export const normalizeXrpcRequestForAstro = normalizePdsRequestForAstro;
 
 type AstroFetchHandler = (
   request: WorkersRequest,
