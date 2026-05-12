@@ -16,9 +16,9 @@ export const prerender = false;
 export async function POST({ locals, request }: APIContext) {
   const { env } = locals.runtime;
 
-  // Enforce DPoP with nonce; if missing or stale, return use_dpop_nonce
+  // Enforce DPoP binding, but do not require a nonce on the initial PAR request.
   try {
-    const ver = await verifyDpop(env, request, { consumeJti: false });
+    const ver = await verifyDpop(env, request, { consumeJti: false, requireNonce: false });
 
     // Parse form-encoded body
     const bodyText = await request.text();

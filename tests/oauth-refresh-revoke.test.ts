@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'bun:test';
 import { makeEnv } from './helpers/env';
-import { makeDpopKey, mockClientMetadata, signAuthzDpop, signResourceDpop } from './helpers/oauth';
+import { makeDpopKey, mockClientMetadata, signAuthzDpop, signDpopProof, signResourceDpop } from './helpers/oauth';
 import { createOAuthSession, getOAuthSession, getRefreshToken, storeRefreshToken } from '../src/db/account';
 import { issueSessionTokens } from '../src/lib/session-tokens';
+import { saveCode } from '../src/lib/oauth/store';
+import { sha256b64url } from '../src/lib/oauth/dpop';
 import { POST as tokenPost } from '../src/pages/oauth/token';
 import { POST as revokePost } from '../src/pages/oauth/revoke';
 import { POST as deleteSessionPost } from '../src/pages/xrpc/com.atproto.server.deleteSession';
@@ -53,6 +55,51 @@ function apiContext(env: any, request: Request) {
 }
 
 describe('OAuth refresh and revocation state', () => {
+  it('exchanges authorization codes with a DPoP proof that has no nonce', async () => {
+    const restore = mockClientMetadata(clientId);
+    try {
+      const env = await makeEnv();
+      const key = await makeDpopKey();
+      const url = 'https://pds.example/oauth/token';
+      const code = 'code-without-dpop-nonce';
+      const codeVerifier = 'correct horse battery staple';
+      const now = Math.floor(Date.now() / 1000);
+      await saveCode(env, code, {
+        code,
+        client_id: clientId,
+        redirect_uri: 'https://client.example/callback',
+        code_challenge: await sha256b64url(codeVerifier),
+        scope: 'atproto',
+        dpopJkt: key.jkt,
+        clientAuthMethod: 'none',
+        clientAuthKeyId: null,
+        did: 'did:example:test',
+        createdAt: now,
+        expiresAt: now + 300,
+      });
+
+      const proof = await signDpopProof({ key, method: 'POST', url });
+      const res = await tokenPost(apiContext(env, new Request(url, {
+        method: 'POST',
+        headers: { dpop: proof, 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code,
+          client_id: clientId,
+          redirect_uri: 'https://client.example/callback',
+          code_verifier: codeVerifier,
+        }).toString(),
+      })));
+      expect(res.status).toBe(200);
+      expect(res.headers.get('DPoP-Nonce')).toBeTruthy();
+      const body = await res.json() as any;
+      expect(body.token_type).toBe('DPoP');
+      expect(typeof body.refresh_token).toBe('string');
+    } finally {
+      restore();
+    }
+  });
+
   it('binds refresh to client and DPoP key, then fails closed on replay', async () => {
     const restore = mockClientMetadata(clientId);
     try {
@@ -89,6 +136,30 @@ describe('OAuth refresh and revocation state', () => {
         body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: okBody.refresh_token, client_id: clientId }).toString(),
       })));
       expect(successor.status).toBe(400);
+    } finally {
+      restore();
+    }
+  });
+
+  it('refreshes with a DPoP proof that has no nonce', async () => {
+    const restore = mockClientMetadata(clientId);
+    try {
+      const env = await makeEnv();
+      const key = await makeDpopKey();
+      const issued = await issueOauthRefresh(env, key);
+      const url = 'https://pds.example/oauth/token';
+      const proof = await signDpopProof({ key, method: 'POST', url });
+
+      const res = await tokenPost(apiContext(env, new Request(url, {
+        method: 'POST',
+        headers: { dpop: proof, 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: issued.refreshJwt, client_id: clientId }).toString(),
+      })));
+      expect(res.status).toBe(200);
+      expect(res.headers.get('DPoP-Nonce')).toBeTruthy();
+      const body = await res.json() as any;
+      expect(body.token_type).toBe('DPoP');
+      expect(typeof body.refresh_token).toBe('string');
     } finally {
       restore();
     }
@@ -190,6 +261,26 @@ describe('OAuth refresh and revocation state', () => {
         body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: issued2.refreshJwt, client_id: clientId }).toString(),
       })));
       expect(refresh.status).toBe(400);
+    } finally {
+      restore();
+    }
+  });
+
+  it('revokes with a DPoP proof that has no nonce', async () => {
+    const restore = mockClientMetadata(clientId);
+    try {
+      const env = await makeEnv();
+      const key = await makeDpopKey();
+      const issued = await issueOauthRefresh(env, key);
+      const revokeUrl = 'https://pds.example/oauth/revoke';
+      const revokeProof = await signDpopProof({ key, method: 'POST', url: revokeUrl });
+      const revoked = await revokePost(apiContext(env, new Request(revokeUrl, {
+        method: 'POST',
+        headers: { dpop: revokeProof, 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ token: issued.refreshJwt, client_id: clientId }).toString(),
+      })));
+      expect(revoked.status).toBe(200);
+      expect((await getOAuthSession(env, issued.sessionId))?.revokedAt).toBeTruthy();
     } finally {
       restore();
     }

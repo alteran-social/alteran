@@ -14,7 +14,7 @@ export async function signDpopProof(input: {
   key: Awaited<ReturnType<typeof makeDpopKey>>;
   method: string;
   url: string;
-  nonce: string;
+  nonce?: string;
   accessToken?: string;
   jti?: string;
 }) {
@@ -24,8 +24,8 @@ export async function signDpopProof(input: {
     htu: input.url,
     iat: now,
     jti: input.jti ?? crypto.randomUUID(),
-    nonce: input.nonce,
   };
+  if (input.nonce) payload.nonce = input.nonce;
   if (input.accessToken) payload.ath = await sha256b64url(input.accessToken);
   return new SignJWT(payload)
     .setProtectedHeader({ typ: 'dpop+jwt', alg: 'ES256', jwk: input.key.jwk as any })

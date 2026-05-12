@@ -41,6 +41,37 @@ describe('OAuth PAR endpoint', () => {
     }
   });
 
+  it('accepts a first PAR DPoP proof without a nonce challenge', async () => {
+    const restore = mockClientMetadata(clientId);
+    try {
+      const env = await makeEnv();
+      const key = await makeDpopKey();
+      const url = 'https://pds.example/oauth/par';
+      const proof = await signDpopProof({ key, method: 'POST', url });
+      const res = await parPost({ locals: { runtime: { env } }, request: new Request(url, {
+        method: 'POST',
+        headers: { dpop: proof, 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: clientId,
+          response_type: 'code',
+          redirect_uri: 'https://client.example/callback',
+          scope: 'atproto',
+          state: 'state123',
+          code_challenge: 'challenge',
+          code_challenge_method: 'S256',
+        }).toString(),
+      }) } as any);
+      expect(res.status).toBe(201);
+      expect(res.headers.get('DPoP-Nonce')).toBeTruthy();
+      const body = await res.json() as any;
+      const id = String(body.request_uri).replace('urn:ietf:params:oauth:request_uri:', '');
+      const stored = await loadPar(env, id);
+      expect(stored?.dpopJkt).toBe(key.jkt);
+    } finally {
+      restore();
+    }
+  });
+
   it('rejects unsafe client metadata URLs before fetching', async () => {
     const env = await makeEnv();
     const key = await makeDpopKey();

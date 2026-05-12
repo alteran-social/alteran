@@ -12,7 +12,7 @@ export const prerender = false;
 export async function POST({ locals, request }: APIContext) {
   const { env } = locals.runtime;
   try {
-    const dpop = await verifyDpop(env, request, { consumeJti: false });
+    const dpop = await verifyDpop(env, request, { consumeJti: false, requireNonce: false });
     const form = new URLSearchParams(await request.text());
     const token = form.get('token') || '';
     const client_id = form.get('client_id') || '';

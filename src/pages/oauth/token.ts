@@ -25,7 +25,7 @@ export async function POST({ locals, request }: APIContext) {
   const { env } = locals.runtime;
 
   try {
-    const ver = await verifyDpop(env, request, { consumeJti: false });
+    const ver = await verifyDpop(env, request, { consumeJti: false, requireNonce: false });
     const form = new URLSearchParams(await request.text());
     const grant_type = form.get('grant_type') || '';
     const issuer = publicPdsOrigin(env, request);
