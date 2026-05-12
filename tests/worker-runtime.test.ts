@@ -5,7 +5,7 @@ describe('normalizeXrpcRequestForAstro', () => {
   it('leaves non-XRPC requests unchanged', () => {
     const request = new Request('https://rawkode.dev/health', { method: 'POST' });
 
-    expect(normalizeXrpcRequestForAstro(request as any)).toBe(request);
+    expect(normalizeXrpcRequestForAstro(request as any) as unknown).toBe(request);
   });
 
   it('adds a same-origin Origin header to bodyless XRPC POSTs', () => {

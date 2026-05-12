@@ -154,13 +154,17 @@ export function normalizeXrpcRequestForAstro(request: WorkersRequest): WorkersRe
   // Astro's SSR origin-check middleware rejects unsafe requests when Origin is
   // absent or cross-origin. XRPC is a bearer-token API, not cookie/form auth,
   // and atproto clients legitimately send bodyless POSTs from native runtimes.
-  const headers = new Headers(request.headers);
-  if (headers.get('origin') === url.origin) {
+  if (request.headers.get('origin') === url.origin) {
     return request;
   }
 
-  headers.set('origin', url.origin);
-  return new Request(request as any, { headers }) as unknown as WorkersRequest;
+  const headerRecord: Record<string, string> = {};
+  request.headers.forEach((value, key) => {
+    headerRecord[key] = value;
+  });
+  headerRecord.origin = url.origin;
+
+  return new Request(request as any, { headers: headerRecord }) as unknown as WorkersRequest;
 }
 
 type AstroFetchHandler = (
