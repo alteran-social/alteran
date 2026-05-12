@@ -109,6 +109,10 @@ Refresh an expired access token.
 Authorization: Bearer <refreshJwt>
 ```
 
+**Request Body**: None. This endpoint is intentionally a bodyless `POST`; the refresh token is supplied only via the `Authorization` header.
+
+**Cloudflare note**: If Cloudflare security products protect the deployment, allow this exact bodyless request shape for `POST /xrpc/com.atproto.server.refreshSession`. This is not a `wrangler.jsonc` setting; configure WAF/API Shield, Terraform/OpenTofu, or the Cloudflare Rulesets API.
+
 **Response**:
 ```json
 {

@@ -254,6 +254,18 @@ validateConfigOrThrow(env);
 - Handle format is valid
 - Numeric values are positive
 
+### Cloudflare Security Rules
+
+`com.atproto.server.refreshSession` is a valid bodyless `POST`. Production Cloudflare security configuration must allow this request shape through to the Worker:
+
+```txt
+(http.request.method eq "POST" and http.request.uri.path eq "/xrpc/com.atproto.server.refreshSession")
+```
+
+This exception is not configured in `wrangler.jsonc`; Wrangler only manages the Worker deployment and bindings. Configure it in Cloudflare WAF/API Shield, Terraform/OpenTofu, or the Cloudflare Rulesets API.
+
+For WAF Managed Rules false positives, create a Custom Rule with action `Skip` and skip phase `http_request_firewall_managed` for the expression above. If Security Events show Super Bot Fight Mode as the blocker, also skip `http_request_sbfm` for the same expression. If API Shield schema validation blocks the request, configure that operation to accept no request body or set its mitigation action to `none`.
+
 ### Environment-Specific Settings
 
 See [`wrangler.jsonc`](wrangler.jsonc:40) for environment-specific configurations:
