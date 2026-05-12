@@ -1,12 +1,18 @@
-import type { APIContext } from 'astro';
 import type { Env } from '../env';
-import { AuthTokenExpiredError } from './auth-errors';
+import { AuthTokenExpiredError, expiredToken } from './auth-errors';
 import { verifyJwt, type JwtClaims } from './jwt';
+import { handleResourceAuthError, verifyResourceRequestHybrid } from './oauth/resource';
 import { bearerToken } from './util';
 
 export interface AuthContext {
   token: string;
   claims: JwtClaims;
+}
+
+function authScheme(request: Request): string | null {
+  const auth = request.headers.get('authorization');
+  const match = auth?.match(/^(\S+)\s+(.+)$/);
+  return match?.[1]?.toLowerCase() ?? null;
 }
 
 export async function isAuthorized(request: Request, env: Env): Promise<boolean> {
@@ -18,9 +24,14 @@ export async function isAuthorized(request: Request, env: Env): Promise<boolean>
   console.error('Auth Prefix:', auth?.substring(0, 30));
   console.error('=== AUTH DEBUG END ===');
 
+  if (authScheme(request) === 'dpop') {
+    const result = await verifyResourceRequestHybrid(env, request);
+    return !!result;
+  }
+
   const token = bearerToken(request);
   if (!token) {
-    console.error('RESULT: No Bearer or DPoP token found');
+    console.error('RESULT: No Bearer token found');
     return false;
   }
 
@@ -69,7 +80,27 @@ export function unauthorized() {
   return new Response(JSON.stringify({ error: 'AuthRequired' }), { status: 401 });
 }
 
+export async function authErrorResponse(env: Env, error: unknown): Promise<Response | null> {
+  if (error instanceof AuthTokenExpiredError) {
+    return expiredToken();
+  }
+  return handleResourceAuthError(env, error);
+}
+
 export async function authenticateRequest(request: Request, env: Env): Promise<AuthContext | null> {
+  if (authScheme(request) === 'dpop') {
+    const result = await verifyResourceRequestHybrid(env, request);
+    if (!result) return null;
+    return {
+      token: result.token,
+      claims: {
+        sub: result.did,
+        scope: result.scope,
+        t: 'access',
+      } as JwtClaims,
+    };
+  }
+
   const token = bearerToken(request);
   if (!token) return null;
   let ver;

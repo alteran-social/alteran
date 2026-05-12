@@ -1,6 +1,6 @@
 import type { APIContext } from 'astro';
 import { proxyAppView } from '../../lib/appview';
-import { AuthTokenExpiredError, expiredToken, isAuthorized, unauthorized } from '../../lib/auth';
+import { authErrorResponse, authenticateRequest, unauthorized } from '../../lib/auth';
 
 export const prerender = false;
 
@@ -20,12 +20,13 @@ function nsidFromParams(params: Record<string, any>): string {
 
 async function handle({ locals, request, params }: APIContext): Promise<Response> {
   const { env } = locals.runtime;
+  let auth;
   try {
-    if (!(await isAuthorized(request, env))) return unauthorized();
+    auth = await authenticateRequest(request, env);
+    if (!auth) return unauthorized();
   } catch (error) {
-    if (error instanceof AuthTokenExpiredError) {
-      return expiredToken();
-    }
+    const handled = await authErrorResponse(env, error);
+    if (handled) return handled;
     throw error;
   }
 
@@ -45,7 +46,7 @@ async function handle({ locals, request, params }: APIContext): Promise<Response
     });
   }
 
-  return proxyAppView({ request, env, lxm: nsid });
+  return proxyAppView({ request, env, lxm: nsid, auth });
 }
 
 export async function GET(ctx: APIContext) {

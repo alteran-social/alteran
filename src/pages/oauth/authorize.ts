@@ -1,78 +1,57 @@
 import type { APIContext } from 'astro';
-import { loadPar, saveCode, deletePar } from '../../lib/oauth/store';
+import { deletePar, loadPar } from '../../lib/oauth/store';
+import { loginHintMatchesSingleUser, publicPdsOrigin, redirectWithOAuthError } from '../../lib/oauth/consent';
 
 export const prerender = false;
 
-function parseRequestUri(u: string): string | null {
+function parseRequestUri(v: string | null): string | null {
   const p = 'urn:ietf:params:oauth:request_uri:';
-  if (!u || !u.startsWith(p)) return null;
-  const id = u.slice(p.length);
+  if (!v || !v.startsWith(p)) return null;
+  const id = v.slice(p.length);
   return /^[A-Za-z0-9]+$/.test(id) ? id : null;
 }
 
 export async function GET({ locals, request }: APIContext) {
   const { env } = locals.runtime;
   const url = new URL(request.url);
-  const request_uri = url.searchParams.get('request_uri') || '';
+  const issuer = publicPdsOrigin(env, request);
   const client_id = url.searchParams.get('client_id') || '';
-  const deny = url.searchParams.get('deny') === '1';
-  const prompt = url.searchParams.get('prompt') || '';
-
+  const request_uri = url.searchParams.get('request_uri');
+  const frontChannelPrompt = (url.searchParams.get('prompt') || '').split(' ').filter(Boolean);
   const id = parseRequestUri(request_uri);
   if (!id) {
-    return new Response('invalid request_uri', { status: 400 });
+    return new Response(JSON.stringify({ error: 'invalid_request', error_description: 'invalid request_uri' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
+
   const par = await loadPar(env, id);
   if (!par) {
-    return new Response('request expired or not found', { status: 400 });
+    return new Response(JSON.stringify({ error: 'invalid_request_uri' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
+
   if (client_id && client_id !== par.client_id) {
-    return new Response('client_id mismatch', { status: 400 });
+    await deletePar(env, id);
+    return redirectWithOAuthError(par.redirect_uri, 'invalid_request', par.state, issuer, 'client_id mismatch');
   }
 
-  if (deny) {
-    const redirectDeny = new URL(par.redirect_uri);
-    redirectDeny.searchParams.set('state', par.state);
-    redirectDeny.searchParams.set('error', 'access_denied');
-    return new Response(null, { status: 302, headers: { Location: redirectDeny.toString() } });
+  if (!(await loginHintMatchesSingleUser(env, par.login_hint))) {
+    await deletePar(env, id);
+    return redirectWithOAuthError(par.redirect_uri, 'login_required', par.state, issuer, 'login_hint does not match this PDS account');
   }
 
-  const requireConsent = String((env as any).PDS_REQUIRE_CONSENT ?? '1') !== '0' || prompt === 'consent';
-  if (requireConsent && prompt !== 'none') {
-    const consentUrl = new URL('/oauth/consent', `${url.protocol}//${url.host}`);
-    consentUrl.searchParams.set('request_uri', request_uri);
-    consentUrl.searchParams.set('client_id', par.client_id);
-    return new Response(null, { status: 302, headers: { Location: consentUrl.toString() } });
+  const parPrompt = (par.prompt || '').split(' ').filter(Boolean);
+  if (frontChannelPrompt.includes('none') || parPrompt.includes('none')) {
+    await deletePar(env, id);
+    return redirectWithOAuthError(par.redirect_uri, 'login_required', par.state, issuer);
   }
 
-  // TODO: implement user authentication + consent UI.
-  // For single-user PDS, auto-approve using configured DID.
-  const did = String((env as any).PDS_DID ?? 'did:example:single-user');
-
-  // Issue a short-lived authorization code
-  const code = crypto.randomUUID().replace(/-/g, '');
-  const now = Math.floor(Date.now() / 1000);
-  await saveCode(env, code, {
-    code,
-    client_id: par.client_id,
-    redirect_uri: par.redirect_uri,
-    code_challenge: par.code_challenge,
-    scope: par.scope,
-    dpopJkt: par.dpopJkt,
-    did,
-    createdAt: now,
-    expiresAt: now + 600, // 10 minutes
-    used: false,
-  });
-  await deletePar(env, id);
-
-  const redirect = new URL(par.redirect_uri);
-  redirect.searchParams.set('state', par.state);
-  redirect.searchParams.set('iss', `${url.protocol}//${url.host}`);
-  redirect.searchParams.set('code', code);
-
-  return new Response(null, {
-    status: 302,
-    headers: { Location: redirect.toString() },
-  });
+  const consentUrl = new URL('/oauth/consent', issuer);
+  consentUrl.searchParams.set('request_uri', request_uri ?? '');
+  consentUrl.searchParams.set('client_id', par.client_id);
+  return Response.redirect(consentUrl.toString(), 302);
 }

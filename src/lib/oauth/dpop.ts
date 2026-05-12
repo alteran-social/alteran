@@ -1,6 +1,6 @@
 import type { Env } from '../../env';
 import { errorMessage } from '../errors';
-import { getOrCreateSecret, setSecret, getSecret } from '../../db/account';
+import { cleanupExpiredOAuthReplaySecrets, createSecretOnce, getOrCreateSecret, setSecret, getSecret } from '../../db/account';
 import { decodeProtectedHeader, importJWK, compactVerify, type JWK as JoseJWK } from 'jose';
 import { DpopNonceError } from './dpop-errors';
 
@@ -15,7 +15,7 @@ export type DpopVerification = {
   payload: Record<string, unknown>;
 };
 
-function b64url(bytes: Uint8Array | ArrayBuffer): string {
+export function b64url(bytes: Uint8Array | ArrayBuffer): string {
   const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   let s = '';
   for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
@@ -48,7 +48,7 @@ export function setDpopNonceHeader(headers: Headers, nonce: string) {
 }
 
 // Compute RFC7638 JWK thumbprint for P-256 JWK
-async function jwkThumbprint(jwk: JsonWebKey): Promise<string> {
+export async function jwkThumbprint(jwk: JsonWebKey): Promise<string> {
   // Per RFC7638, canonical JSON with these members in lexicographic order
   const obj: Record<string, string> = {
     crv: String(jwk.crv ?? ''),
@@ -59,6 +59,29 @@ async function jwkThumbprint(jwk: JsonWebKey): Promise<string> {
   const json = JSON.stringify(obj);
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
   return b64url(digest);
+}
+
+export async function consumeDpopJti(env: Env, kind: string, jti: unknown, iat: number): Promise<void> {
+  if (typeof jti !== 'string' || jti.length < 8) {
+    throw new DpopNonceError('DPoP jti required', await getAuthzNonce(env));
+  }
+
+  const key = `oauth:dpop:jti:${kind}:${jti}`;
+  const now = Math.floor(Date.now() / 1000);
+  await cleanupExpiredOAuthReplaySecrets(env, now);
+  const inserted = await createSecretOnce(env, key, JSON.stringify({ iat, exp: now + 300 }));
+  if (!inserted) {
+    throw new DpopNonceError('DPoP proof replayed', await getAuthzNonce(env));
+  }
+}
+
+export async function consumeDpopVerificationJti(
+  env: Env,
+  verification: DpopVerification,
+  kind = 'authz',
+): Promise<void> {
+  const iat = verification.payload.iat;
+  await consumeDpopJti(env, kind, verification.payload.jti, typeof iat === 'number' ? iat : 0);
 }
 
 function urlWithoutHash(u: string): string {
@@ -73,7 +96,11 @@ function urlWithoutHash(u: string): string {
 
 // removed local DER conversion; jose handles verification
 
-export async function verifyDpop(env: Env, request: Request, opts?: { requireNonce?: boolean }): Promise<DpopVerification> {
+export async function verifyDpop(
+  env: Env,
+  request: Request,
+  opts?: { requireNonce?: boolean; consumeJti?: boolean },
+): Promise<DpopVerification> {
   const dpop = request.headers.get('DPoP');
   const nonce = await getAuthzNonce(env);
   if (!dpop) {
@@ -104,6 +131,9 @@ export async function verifyDpop(env: Env, request: Request, opts?: { requireNon
   if (typeof payload.iat !== 'number' || now - payload.iat > 300) {
     throw new DpopNonceError('DPoP iat too old', nonce);
   }
+  if (payload.iat - now > 30) {
+    throw new DpopNonceError('DPoP iat is in the future', nonce);
+  }
 
   if (opts?.requireNonce !== false) {
     if (!payload.nonce || payload.nonce !== nonce) {
@@ -112,7 +142,11 @@ export async function verifyDpop(env: Env, request: Request, opts?: { requireNon
   }
 
   const jkt = await jwkThumbprint(header.jwk as JsonWebKey);
-  return { jkt, jwk: header.jwk as JsonWebKey, payload };
+  const verification = { jkt, jwk: header.jwk as JsonWebKey, payload };
+  if (opts?.consumeJti !== false) {
+    await consumeDpopVerificationJti(env, verification);
+  }
+  return verification;
 }
 
 export function dpopErrorResponse(_env: Env, error: DpopNonceError): Response {

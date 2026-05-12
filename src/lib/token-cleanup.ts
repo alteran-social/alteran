@@ -1,5 +1,5 @@
 import type { Env } from '../env';
-import { cleanupExpiredRefreshTokens } from '../db/account';
+import { cleanupExpiredOAuthReplaySecrets, cleanupExpiredRefreshTokens } from '../db/account';
 
 /**
  * Clean up expired tokens from the revocation table
@@ -7,7 +7,9 @@ import { cleanupExpiredRefreshTokens } from '../db/account';
  */
 export async function cleanupExpiredTokens(env: Env): Promise<number> {
   const now = Math.floor(Date.now() / 1000);
-  return cleanupExpiredRefreshTokens(env, now);
+  const refreshTokens = await cleanupExpiredRefreshTokens(env, now);
+  const oauthReplayEntries = await cleanupExpiredOAuthReplaySecrets(env, now);
+  return refreshTokens + oauthReplayEntries;
 }
 
 /**

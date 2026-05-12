@@ -23,8 +23,39 @@ export const refresh_token_store = sqliteTable('refresh_token', {
   expiresAt: integer('expires_at', { mode: 'number' }).notNull(),
   appPasswordName: text('app_password_name'),
   nextId: text('next_id'),
+  tokenKind: text('token_kind').notNull().default('legacy'),
+  oauthSessionId: text('oauth_session_id'),
+  clientId: text('client_id'),
+  clientAuthMethod: text('client_auth_method'),
+  clientAuthKeyId: text('client_auth_key_id'),
+  dpopJkt: text('dpop_jkt'),
+  oauthScope: text('oauth_scope'),
+  accessJti: text('access_jti'),
+  revokedAt: integer('revoked_at', { mode: 'number' }),
 }, (table) => ({
   didIdx: index('refresh_token_did_idx').on(table.did),
+  oauthSessionIdx: index('refresh_token_oauth_session_idx').on(table.oauthSessionId),
+  accessJtiIdx: index('refresh_token_access_jti_idx').on(table.accessJti),
+}));
+
+export const oauth_session = sqliteTable('oauth_session', {
+  id: text('id').primaryKey().notNull(),
+  did: text('did').notNull(),
+  clientId: text('client_id').notNull(),
+  clientAuthMethod: text('client_auth_method').notNull(),
+  clientAuthKeyId: text('client_auth_key_id'),
+  dpopJkt: text('dpop_jkt').notNull(),
+  scope: text('scope').notNull(),
+  currentRefreshTokenId: text('current_refresh_token_id').notNull(),
+  accessJti: text('access_jti').notNull(),
+  createdAt: integer('created_at', { mode: 'number' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'number' }).notNull(),
+  expiresAt: integer('expires_at', { mode: 'number' }).notNull(),
+  revokedAt: integer('revoked_at', { mode: 'number' }),
+}, (table) => ({
+  clientIdx: index('oauth_session_client_idx').on(table.clientId),
+  currentRefreshIdx: index('oauth_session_current_refresh_idx').on(table.currentRefreshTokenId),
+  accessJtiIdx: index('oauth_session_access_jti_idx').on(table.accessJti),
 }));
 
 export const repo_root = sqliteTable('repo_root', {

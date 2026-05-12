@@ -1,5 +1,5 @@
 import type { Env } from '../../env';
-import { AuthTokenExpiredError, authenticateRequest, expiredToken, unauthorized } from '../auth';
+import { authErrorResponse, authenticateRequest, unauthorized, type AuthContext } from '../auth';
 import { InvalidProxyHeader } from '../errors';
 import {
   PRIVILEGED_METHODS,
@@ -47,6 +47,7 @@ export interface ProxyAppViewOptions {
   readonly request: Request;
   readonly env: Env;
   readonly lxm: string;
+  readonly auth?: AuthContext;
   readonly fallback?: () => Promise<Response>;
 }
 
@@ -54,6 +55,7 @@ export async function proxyAppView({
   request,
   env,
   lxm,
+  auth: suppliedAuth,
   fallback,
 }: ProxyAppViewOptions): Promise<Response> {
   console.log('proxyAppView called:', { lxm, url: request.url });
@@ -71,14 +73,15 @@ export async function proxyAppView({
     return fallback();
   }
 
-  let auth;
-  try {
-    auth = await authenticateRequest(request, env);
-  } catch (error) {
-    if (error instanceof AuthTokenExpiredError) {
-      return expiredToken();
+  let auth: AuthContext | null | undefined = suppliedAuth;
+  if (!auth) {
+    try {
+      auth = await authenticateRequest(request, env);
+    } catch (error) {
+      const handled = await authErrorResponse(env, error);
+      if (handled) return handled;
+      throw error;
     }
-    throw error;
   }
   if (!auth) {
     return unauthorized();

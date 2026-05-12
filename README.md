@@ -392,13 +392,24 @@ USER_PASSWORD=your-password
 REFRESH_TOKEN=your-access-secret
 REFRESH_TOKEN_SECRET=your-refresh-secret
 PDS_SEQ_WINDOW=512
+PDS_OAUTH_CLIENT_HOSTS=client.example,another-client.example
 ```
+
+`PDS_OAUTH_CLIENT_HOSTS` is required for OAuth clients that use dynamic
+client metadata. It is a comma-separated allowlist of hostnames that this
+single-user PDS may fetch for client metadata and JWKS documents.
 
 ### 3. Run Database Migration
 ```bash
 bun run db:generate
 bun run db:apply:local
 ```
+
+Upgrade note: migration `0009_oauth_session_state` revokes existing refresh
+tokens when adding OAuth session state. Existing clients may need to sign in
+again after this migration. This is intentional because older refresh-token
+rows cannot prove whether they came from legacy sessions or pre-hardening OAuth
+flows.
 
 ### 4. Run Tests
 ```bash
