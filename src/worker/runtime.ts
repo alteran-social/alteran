@@ -140,9 +140,27 @@ export function createPdsFetchHandler(options?: CreatePdsFetchHandlerOptions): P
     }
 
     const astroFetch = await getAstroFetch(options);
-    const response = await astroFetch(request, resolvedEnv as any, ctx);
+    const response = await astroFetch(normalizeXrpcRequestForAstro(request), resolvedEnv as any, ctx);
     return response as unknown as WorkersResponse;
   };
+}
+
+export function normalizeXrpcRequestForAstro(request: WorkersRequest): WorkersRequest {
+  const url = new URL(request.url);
+  if (!url.pathname.startsWith('/xrpc/')) {
+    return request;
+  }
+
+  // Astro's SSR origin-check middleware rejects unsafe requests when Origin is
+  // absent or cross-origin. XRPC is a bearer-token API, not cookie/form auth,
+  // and atproto clients legitimately send bodyless POSTs from native runtimes.
+  const headers = new Headers(request.headers);
+  if (headers.get('origin') === url.origin) {
+    return request;
+  }
+
+  headers.set('origin', url.origin);
+  return new Request(request as any, { headers }) as unknown as WorkersRequest;
 }
 
 type AstroFetchHandler = (

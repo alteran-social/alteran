@@ -256,15 +256,15 @@ validateConfigOrThrow(env);
 
 ### Cloudflare Security Rules
 
-`com.atproto.server.refreshSession` is a valid bodyless `POST`. Production Cloudflare security configuration must allow this request shape through to the Worker:
+`com.atproto.server.refreshSession` is a valid bodyless `POST`. Production deployments must allow this request shape through to the XRPC handler:
 
 ```txt
 (http.request.method eq "POST" and http.request.uri.path eq "/xrpc/com.atproto.server.refreshSession")
 ```
 
-This exception is not configured in `wrangler.jsonc`; Wrangler only manages the Worker deployment and bindings. Configure it in Cloudflare WAF/API Shield, Terraform/OpenTofu, or the Cloudflare Rulesets API.
+Astro's SSR origin-check middleware rejects unsafe requests with no `Origin` header before project middleware runs. Alteran normalizes `/xrpc/*` requests at the Worker entrypoint so bearer-token XRPC clients can send bodyless POSTs without tripping Astro's form CSRF guard.
 
-For WAF Managed Rules false positives, create a Custom Rule with action `Skip` and skip phase `http_request_firewall_managed` for the expression above. If Security Events show Super Bot Fight Mode as the blocker, also skip `http_request_sbfm` for the same expression. If API Shield schema validation blocks the request, configure that operation to accept no request body or set its mitigation action to `none`.
+If Cloudflare WAF/API Shield also protects the deployment, keep any exception narrow to the expression above. This exception is not configured in `wrangler.jsonc`; Wrangler only manages the Worker deployment and bindings.
 
 ### Environment-Specific Settings
 
