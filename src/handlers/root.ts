@@ -81,7 +81,7 @@ const HTML_TEMPLATE = (
         <strong>DID:</strong>
         <span class="pill">${did}</span>
       </p>
-      <a href="https://github.com/alteran-dev/alteran" target="_blank" rel="noopener noreferrer">
+      <a href="https://github.com/alteran-social/alteran" target="_blank" rel="noopener noreferrer">
         <svg viewBox="0 0 24 24" role="img" aria-hidden="true" focusable="false">
           <path
             fill="currentColor"
