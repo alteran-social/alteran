@@ -45,6 +45,7 @@ export async function makeEnv(overrides: Partial<Env> = {}): Promise<Env> {
       REFRESH_TOKEN_SECRET: "refresh-secret",
       PDS_MAX_BLOB_SIZE: "5242880",
       PDS_ALLOWED_MIME: "image/png,image/jpeg",
+      PDS_OAUTH_CLIENT_HOSTS: "client.example",
     },
   });
   const ALTERAN_DB = (await mf.getD1Database("DB")) as unknown as D1Database;
@@ -56,6 +57,7 @@ export async function makeEnv(overrides: Partial<Env> = {}): Promise<Env> {
     PDS_DID: "did:example:test",
     PDS_HANDLE: "test.example",
     USER_PASSWORD: "pwd",
+    PDS_OAUTH_CLIENT_HOSTS: "client.example",
     ...overrides,
   } as Env;
 }

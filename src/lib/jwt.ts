@@ -73,6 +73,10 @@ export async function verifyJwt(
       console.error('[verifyJwt] No sub in payload');
       return null;
     }
+    if ((payload as any).cnf) {
+      console.error('[verifyJwt] Rejecting DPoP-bound OAuth token on Bearer path');
+      return null;
+    }
     const claims: JwtClaims = {
       sub: String(payload.sub),
       aud: payload.aud as string | undefined,

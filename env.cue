@@ -6,6 +6,7 @@ env: {
 		PDS_DID: "did:example:test"
 		PDS_HANDLE: "test"
 		REFRESH_TOKEN_SECRET: "refresh-secret"
+		PDS_OAUTH_CLIENT_HOSTS: "client.example"
 		USER_PASSWORD: "pwd"
 	}
 }

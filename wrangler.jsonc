@@ -12,7 +12,8 @@
   },
   // Secrets to set in env (via `wrangler secret put`):
   // USER_PASSWORD, REFRESH_TOKEN, REFRESH_TOKEN_SECRET
-  // Optional: PDS_ALLOWED_MIME, PDS_MAX_BLOB_SIZE, PDS_MAX_JSON_BYTES, PDS_RATE_LIMIT_PER_MIN, PDS_CORS_ORIGIN
+  // Optional: PDS_ALLOWED_MIME, PDS_MAX_BLOB_SIZE, PDS_MAX_JSON_BYTES, PDS_RATE_LIMIT_PER_MIN, PDS_CORS_ORIGIN,
+  // PDS_OAUTH_CLIENT_HOSTS (CSV of trusted OAuth client metadata/JWKS hostnames)
   "d1_databases": [
     {
       "binding": "ALTERAN_DB",

@@ -60,6 +60,7 @@ declare global {
     // Relay crawl configuration
     PDS_RELAY_HOSTS?: string; // CSV of relay hostnames (no scheme). Default: bsky.network
     PDS_RELAY_NOTIFY?: string; // 'false' to disable auto notify
+    PDS_OAUTH_CLIENT_HOSTS?: string; // CSV of trusted OAuth client metadata/JWKS hostnames
   }
 
   namespace App {

@@ -1,16 +1,21 @@
 import type { APIContext } from 'astro';
 import { withCache, CACHE_CONFIGS } from '../../lib/cache';
+import { publicPdsOrigin } from '../../lib/oauth/consent';
 
 export const prerender = false;
 
-export async function GET({ request }: APIContext) {
+export async function GET({ locals, request }: APIContext) {
+  const { env } = locals.runtime;
   return withCache(
     request,
     async () => {
-      const url = new URL(request.url);
-      const origin = `${url.protocol}//${url.host}`;
+      const origin = publicPdsOrigin(env, request);
       const json = {
+        resource: origin,
         authorization_servers: [origin],
+        bearer_methods_supported: ['header'],
+        scopes_supported: ['atproto', 'transition:generic'],
+        resource_documentation: `${origin}/.well-known/oauth-protected-resource`,
       };
       return new Response(JSON.stringify(json, null, 2), {
         headers: { 'Content-Type': 'application/json' },
@@ -19,4 +24,3 @@ export async function GET({ request }: APIContext) {
     CACHE_CONFIGS.WELL_KNOWN,
   );
 }
-

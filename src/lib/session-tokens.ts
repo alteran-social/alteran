@@ -32,19 +32,34 @@ async function getServiceDid(env: Env): Promise<string> {
   return did;
 }
 
-export async function issueSessionTokens(env: Env, did: string, opts: { jti?: string } = {}) {
+export type IssueSessionTokenOptions = {
+  jti?: string;
+  accessJti?: string;
+  scope?: string;
+  clientId?: string;
+  dpopJkt?: string;
+  oauthSessionId?: string;
+};
+
+export async function issueSessionTokens(env: Env, did: string, opts: IssueSessionTokenOptions = {}) {
   const jwtKey = await getJwtKey(env);
   const serviceDid = await getServiceDid(env);
   const now = Math.floor(Date.now() / 1000);
 
   const accessExp = now + ACCESS_TTL_SECONDS;
   const accessPayload: TokenPayload = {
-    scope: 'access',
+    scope: opts.dpopJkt ? (opts.scope ?? 'atproto') : 'access',
     aud: serviceDid,
     sub: did,
     iat: now,
     exp: accessExp,
   };
+  if (opts.dpopJkt) {
+    accessPayload.cnf = { jkt: opts.dpopJkt };
+    accessPayload.jti = opts.accessJti ?? generateTokenId();
+    if (opts.clientId) accessPayload.client_id = opts.clientId;
+    if (opts.oauthSessionId) accessPayload.oauth_session = opts.oauthSessionId;
+  }
   const accessJwt = await signJwt(jwtKey, 'at+jwt', accessPayload);
 
   const jti = opts.jti ?? generateTokenId();
@@ -57,20 +72,26 @@ export async function issueSessionTokens(env: Env, did: string, opts: { jti?: st
     exp: refreshExp,
     jti,
   };
+  if (opts.dpopJkt) {
+    refreshPayload.cnf = { jkt: opts.dpopJkt };
+    if (opts.clientId) refreshPayload.client_id = opts.clientId;
+    if (opts.oauthSessionId) refreshPayload.oauth_session = opts.oauthSessionId;
+  }
   const refreshJwt = await signJwt(jwtKey, 'refresh+jwt', refreshPayload);
 
   return {
     accessJwt,
     refreshJwt,
+    accessPayload,
     refreshPayload,
     refreshExpiry: refreshPayload.exp,
   } as const;
 }
 
-export async function verifyRefreshToken(env: Env, token: string) {
+export async function verifyRefreshToken(env: Env, token: string, opts: { ignoreExpiration?: boolean } = {}) {
   const key = await getJwtKey(env);
   const serviceDid = await getServiceDid(env);
-  const { header, payload } = await decodeAndVerifyJwt(key, token, 'refresh+jwt', serviceDid);
+  const { header, payload } = await decodeAndVerifyJwt(key, token, 'refresh+jwt', serviceDid, opts);
   if (header.typ !== 'refresh+jwt') {
     throw new InvalidToken('Invalid token type');
   }
@@ -131,10 +152,17 @@ async function signJwt(key: Uint8Array, typ: TokenHeader['typ'], payload: TokenP
   return await signer.sign(key);
 }
 
-async function decodeAndVerifyJwt(key: Uint8Array, token: string, expectedTyp: TokenHeader['typ'], audience: string) {
+async function decodeAndVerifyJwt(
+  key: Uint8Array,
+  token: string,
+  expectedTyp: TokenHeader['typ'],
+  audience: string,
+  opts: { ignoreExpiration?: boolean } = {},
+) {
   const { payload, protectedHeader } = await jwtVerify(token, key, {
     algorithms: ['HS256'],
     audience,
+    ...(opts.ignoreExpiration ? { currentDate: new Date(0) } : {}),
   });
   if (protectedHeader.typ !== expectedTyp) {
     throw new InvalidToken('Unexpected token header');

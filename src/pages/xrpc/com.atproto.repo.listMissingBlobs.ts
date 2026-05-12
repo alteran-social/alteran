@@ -1,6 +1,6 @@
 import type { APIContext } from 'astro';
 import { errorMessage } from '../../lib/errors';
-import { AuthTokenExpiredError, expiredToken, isAuthorized, unauthorized } from '../../lib/auth';
+import { authErrorResponse, isAuthorized, unauthorized } from '../../lib/auth';
 import { getDb } from '../../db/client';
 import { record, blob_ref } from '../../db/schema';
 import { eq } from 'drizzle-orm';
@@ -20,9 +20,8 @@ export async function GET({ locals, request, url }: APIContext) {
   try {
     if (!(await isAuthorized(request, env))) return unauthorized();
   } catch (error) {
-    if (error instanceof AuthTokenExpiredError) {
-      return expiredToken();
-    }
+    const handled = await authErrorResponse(env, error);
+    if (handled) return handled;
     throw error;
   }
 

@@ -26,6 +26,11 @@ describe('verifyResourceRequestHybrid', () => {
     } as any;
 
     const result = await verifyResourceRequestHybrid({} as any, req, deps);
-    expect(result).toEqual({ did: 'did:example:1234', token: 'good-token' });
+    expect(result).toEqual({
+      did: 'did:example:1234',
+      token: 'good-token',
+      scope: undefined,
+      authType: 'bearer',
+    });
   });
 });

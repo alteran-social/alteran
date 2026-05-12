@@ -2,6 +2,8 @@ import type { Env } from '../../env';
 import { errorCode, errorMessage } from '../errors';
 import { verifyAccessToken } from '../session-tokens';
 import { decodeProtectedHeader, importJWK, compactVerify, type JWK as JoseJWK } from 'jose';
+import { cleanupExpiredOAuthReplaySecrets, createSecretOnce, getOAuthSession, getSecret, setSecret } from '../../db/account';
+import { jwkThumbprint } from './dpop';
 
 const NONCE_PDS_KEY = 'oauth_dpop_nonce_pds';
 
@@ -31,7 +33,6 @@ function urlWithoutHash(u: string): string {
 // removed local b64urlToBytes and DER helpers; jose handles verification
 
 async function getNonce(env: Env): Promise<string> {
-  const { getSecret, setSecret } = await import('../../db/account');
   const now = Math.floor(Date.now() / 1000);
   const raw = await getSecret(env, NONCE_PDS_KEY);
   if (raw) {
@@ -47,7 +48,27 @@ async function getNonce(env: Env): Promise<string> {
   return v;
 }
 
-export async function verifyResourceRequest(env: Env, request: Request): Promise<{ did: string; token: string } | null> {
+async function consumeResourceDpopJti(env: Env, jti: unknown, iat: number, nonce: string): Promise<void> {
+  if (typeof jti !== 'string' || jti.length < 8) {
+    throw new ResourceAuthError('use_dpop_nonce', { nonce, message: 'DPoP jti required' });
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const key = `oauth:dpop:jti:resource:${jti}`;
+  await cleanupExpiredOAuthReplaySecrets(env, now);
+  const inserted = await createSecretOnce(env, key, JSON.stringify({ iat, exp: now + 300 }));
+  if (!inserted) {
+    throw new ResourceAuthError('invalid_token', { message: 'DPoP proof replayed' });
+  }
+}
+
+export type ResourceAuthContext = {
+  did: string;
+  token: string;
+  scope?: string;
+  authType: 'bearer' | 'oauth-dpop';
+};
+
+export async function verifyResourceRequest(env: Env, request: Request): Promise<ResourceAuthContext | null> {
   const auth = request.headers.get('authorization');
   if (!auth) return null;
 
@@ -64,8 +85,13 @@ export async function verifyResourceRequest(env: Env, request: Request): Promise
   }
 
   if (scheme === 'bearer') {
-    const payload = await verifyAccessTokenOrThrow(env, token);
-    return { did: payload.sub as string, token };
+    const payload = await verifyAccessTokenOrThrow(env, token, { allowOAuth: false });
+    return {
+      did: payload.sub as string,
+      token,
+      scope: typeof payload.scope === 'string' ? payload.scope : undefined,
+      authType: 'bearer',
+    };
   }
 
   return null;
@@ -89,6 +115,7 @@ async function verifyDpopAccess(env: Env, request: Request, accessToken: string)
   if (payload.htm !== method || payload.htu !== url) throw new ResourceAuthError('use_dpop_nonce', { nonce });
   const now = Math.floor(Date.now()/1000);
   if (typeof payload.iat !== 'number' || now - payload.iat > 300) throw new ResourceAuthError('use_dpop_nonce', { nonce });
+  if (payload.iat - now > 30) throw new ResourceAuthError('use_dpop_nonce', { nonce });
   if (!payload.nonce || payload.nonce !== nonce) throw new ResourceAuthError('use_dpop_nonce', { nonce });
   // Verify ath binding
   const enc = new TextEncoder();
@@ -96,16 +123,29 @@ async function verifyDpopAccess(env: Env, request: Request, accessToken: string)
   const accessBuf = (() => { const b = new ArrayBuffer(accessBytes.byteLength); new Uint8Array(b).set(accessBytes); return b; })();
   const expectedAth = await crypto.subtle.digest('SHA-256', accessBuf);
   const expectedAthB64 = b64url(expectedAth);
-  if (payload.ath !== expectedAthB64) throw new ResourceAuthError('use_dpop_nonce', { nonce });
+  if (payload.ath !== expectedAthB64) throw new ResourceAuthError('invalid_token', { message: 'DPoP ath mismatch' });
   // Verify signature with JOSE
-  const key = await importJWK(header.jwk as JoseJWK, 'ES256');
-  // already verified above, nothing else to do
+  await importJWK(header.jwk as JoseJWK, 'ES256');
 
-  const tokenPayload = await verifyAccessTokenOrThrow(env, accessToken);
-  return { did: tokenPayload.sub as string, token: accessToken };
+  const tokenPayload = await verifyAccessTokenOrThrow(env, accessToken, { allowOAuth: true });
+  const tokenJkt = (tokenPayload.cnf as any)?.jkt;
+  if (typeof tokenJkt !== 'string') {
+    throw new ResourceAuthError('invalid_token', { message: 'DPoP access token missing cnf.jkt' });
+  }
+  const proofJkt = await jwkThumbprint(header.jwk as JsonWebKey);
+  if (proofJkt !== tokenJkt) {
+    throw new ResourceAuthError('invalid_token', { message: 'DPoP key mismatch' });
+  }
+  await consumeResourceDpopJti(env, payload.jti, payload.iat, nonce);
+  return {
+    did: tokenPayload.sub as string,
+    token: accessToken,
+    scope: typeof tokenPayload.scope === 'string' ? tokenPayload.scope : undefined,
+    authType: 'oauth-dpop' as const,
+  };
 }
 
-async function verifyAccessTokenOrThrow(env: Env, token: string) {
+async function verifyAccessTokenOrThrow(env: Env, token: string, opts: { allowOAuth?: boolean } = {}) {
   let payloadJwt: Awaited<ReturnType<typeof verifyAccessToken>>;
   try {
     payloadJwt = await verifyAccessToken(env, token);
@@ -121,6 +161,30 @@ async function verifyAccessTokenOrThrow(env: Env, token: string) {
 
   if (!payloadJwt || !payloadJwt.sub) {
     throw new ResourceAuthError('invalid_token');
+  }
+  const isOAuthToken = !!(payloadJwt.cnf as any)?.jkt;
+  if (isOAuthToken && !opts.allowOAuth) {
+    throw new ResourceAuthError('invalid_token');
+  }
+  if (isOAuthToken) {
+    const sessionId = payloadJwt.oauth_session;
+    const accessJti = payloadJwt.jti;
+    const clientId = payloadJwt.client_id;
+    if (typeof sessionId !== 'string' || typeof accessJti !== 'string' || typeof clientId !== 'string') {
+      throw new ResourceAuthError('invalid_token');
+    }
+    const session = await getOAuthSession(env, sessionId);
+    const now = Math.floor(Date.now() / 1000);
+  if (
+      !session ||
+      session.revokedAt ||
+      session.expiresAt <= now ||
+      session.accessJti !== accessJti ||
+      session.clientId !== clientId ||
+      session.did !== payloadJwt.sub
+    ) {
+      throw new ResourceAuthError('invalid_token');
+    }
   }
   return payloadJwt;
 }
@@ -151,27 +215,35 @@ export async function verifyResourceRequestHybrid(
   env: Env,
   request: Request,
   deps: VerifyResourceHybridDeps = defaultVerifyHybridDeps,
-): Promise<{ did: string; token: string } | null> {
+): Promise<ResourceAuthContext | null> {
   const auth = request.headers.get('authorization');
   if (!auth) return null;
 
-  // Try DPoP authentication first (new OAuth flow)
-  if (auth.startsWith('DPoP ')) {
+  const match = auth.match(/^(\S+)\s+(.+)$/);
+  if (!match) return null;
+
+  const [, schemeRaw, tokenRaw] = match;
+  const scheme = schemeRaw?.toLowerCase();
+  const token = tokenRaw?.trim();
+  if (!scheme || !token) return null;
+
+  if (scheme === 'dpop') {
     try {
       const result = await verifyResourceRequest(env, request);
       if (result) return result;
     } catch (e) {
-      // If it's a nonce error, propagate it
-      if (errorCode(e) === 'use_dpop_nonce') throw e;
-      // Otherwise fall through to Bearer
+      throw e;
     }
   }
 
-  // Fall back to Bearer token authentication (legacy XRPC flow)
-  if (auth.startsWith('Bearer ')) {
-    const token = auth.slice(7).trim();
-    const payloadJwt = await deps.verifyAccessToken(env, token);
-    return { did: payloadJwt.sub as string, token };
+  if (scheme === 'bearer') {
+    const payloadJwt = await deps.verifyAccessToken(env, token, { allowOAuth: false });
+    return {
+      did: payloadJwt.sub as string,
+      token,
+      scope: typeof payloadJwt.scope === 'string' ? payloadJwt.scope : undefined,
+      authType: 'bearer',
+    };
   }
 
   return null;

@@ -31,7 +31,6 @@ export function bearerToken(request: Request): string | null {
   const auth = request.headers.get('authorization');
   if (!auth) return null;
   if (auth.startsWith('Bearer ')) return auth.slice(7);
-  if (auth.startsWith('DPoP ')) return auth.slice(5);
   return null;
 }
 
