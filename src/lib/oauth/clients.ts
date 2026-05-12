@@ -428,10 +428,7 @@ export async function verifyClientAuthentication(
   form: URLSearchParams,
 ): Promise<VerifiedClientAuth> {
   if (metadata.token_endpoint_auth_method === 'none') {
-    if (form.get('client_assertion') || form.get('client_assertion_type')) {
-      throw new Error('public client must not send client_assertion');
-    }
-    return { method: 'none', keyId: null };
+    return verifyPublicClientAuthentication(form);
   }
 
   const client_assertion_type = form.get('client_assertion_type') || '';
@@ -445,6 +442,27 @@ export async function verifyClientAuthentication(
     throw new Error('invalid client assertion');
   }
   return { method: 'private_key_jwt', keyId: result.keyId };
+}
+
+export function verifyPublicClientAuthentication(form: URLSearchParams): VerifiedClientAuth {
+  if (form.get('client_assertion') || form.get('client_assertion_type')) {
+    throw new Error('public client must not send client_assertion');
+  }
+  return { method: 'none', keyId: null };
+}
+
+export async function requireStoredClientAuthentication(
+  env: Env,
+  clientId: string,
+  issuerOrigin: string,
+  form: URLSearchParams,
+  expected: { method: string | null; keyId?: string | null },
+): Promise<VerifiedClientAuth> {
+  if (expected.method === 'none') {
+    return verifyPublicClientAuthentication(form);
+  }
+  const metadata = await fetchClientMetadata(env, clientId);
+  return requireSameClientAuth(env, clientId, issuerOrigin, metadata, form, expected);
 }
 
 async function consumeClientAssertionJti(env: Env, clientId: string, jti: string, exp: number): Promise<boolean> {

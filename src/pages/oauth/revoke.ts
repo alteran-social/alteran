@@ -4,7 +4,7 @@ import { consumeDpopVerificationJti, verifyDpop, dpopErrorResponse } from '../..
 import { DpopNonceError } from '../../lib/oauth/dpop-errors';
 import { publicPdsOrigin } from '../../lib/oauth/consent';
 import { verifyAccessToken, verifyRefreshToken } from '../../lib/session-tokens';
-import { fetchClientMetadata, requireSameClientAuth } from '../../lib/oauth/clients';
+import { requireStoredClientAuthentication } from '../../lib/oauth/clients';
 import { getOAuthSession, getRefreshToken, revokeOAuthSession, revokeRefreshToken } from '../../db/account';
 
 export const prerender = false;
@@ -21,7 +21,6 @@ export async function POST({ locals, request }: APIContext) {
     }
 
     const issuer = publicPdsOrigin(env, request);
-    const clientMeta = await fetchClientMetadata(env, client_id);
 
     const refresh = await verifyRefreshToken(env, token, { ignoreExpiration: true }).catch(() => null);
     if (refresh?.decoded?.jti) {
@@ -29,7 +28,7 @@ export async function POST({ locals, request }: APIContext) {
       if (stored?.tokenKind === 'oauth' && stored.oauthSessionId) {
         const session = await getOAuthSession(env, stored.oauthSessionId);
         if (session && session.clientId === client_id && session.dpopJkt === dpop.jkt) {
-          await requireSameClientAuth(env, client_id, issuer, clientMeta, form, {
+          await requireStoredClientAuthentication(env, client_id, issuer, form, {
             method: session.clientAuthMethod,
             keyId: session.clientAuthKeyId,
           });
@@ -46,7 +45,7 @@ export async function POST({ locals, request }: APIContext) {
     if (typeof sessionId === 'string') {
       const session = await getOAuthSession(env, sessionId);
       if (session && session.clientId === client_id && session.dpopJkt === dpop.jkt) {
-        await requireSameClientAuth(env, client_id, issuer, clientMeta, form, {
+        await requireStoredClientAuthentication(env, client_id, issuer, form, {
           method: session.clientAuthMethod,
           keyId: session.clientAuthKeyId,
         });

@@ -5,10 +5,7 @@ import { DpopNonceError } from '../../lib/oauth/dpop-errors';
 import { publicPdsOrigin } from '../../lib/oauth/consent';
 import { consumeCode } from '../../lib/oauth/store';
 import { issueSessionTokens, verifyRefreshToken, verifyAccessToken } from '../../lib/session-tokens';
-import {
-  fetchClientMetadata,
-  requireSameClientAuth,
-} from '../../lib/oauth/clients';
+import { requireStoredClientAuthentication } from '../../lib/oauth/clients';
 import {
   createOAuthSession,
   getOAuthSession,
@@ -48,12 +45,11 @@ export async function POST({ locals, request }: APIContext) {
       if (expected !== rec.code_challenge) return jsonError('invalid_grant', 'PKCE verification failed');
       if (ver.jkt !== rec.dpopJkt) return jsonError('invalid_dpop', 'DPoP key mismatch');
 
-      const clientMeta = await fetchClientMetadata(env, client_id).catch((error) => {
-        throw new Error(`Client metadata fetch failed: ${errorMessage(error) ?? error}`);
-      });
-      await requireSameClientAuth(env, client_id, issuer, clientMeta, form, {
+      await requireStoredClientAuthentication(env, client_id, issuer, form, {
         method: rec.clientAuthMethod,
         keyId: rec.clientAuthKeyId ?? null,
+      }).catch((error) => {
+        throw new Error(`Client authentication failed: ${errorMessage(error) ?? error}`);
       });
       await consumeDpopVerificationJti(env, ver);
 
@@ -138,12 +134,11 @@ export async function POST({ locals, request }: APIContext) {
       if (client_id !== session.clientId) return jsonError('invalid_grant', 'client_id mismatch');
       if (ver.jkt !== session.dpopJkt) return jsonError('invalid_dpop', 'DPoP key mismatch');
 
-      const clientMeta = await fetchClientMetadata(env, client_id).catch((error) => {
-        throw new Error(`Client metadata fetch failed: ${errorMessage(error) ?? error}`);
-      });
-      await requireSameClientAuth(env, client_id, issuer, clientMeta, form, {
+      await requireStoredClientAuthentication(env, client_id, issuer, form, {
         method: session.clientAuthMethod,
         keyId: session.clientAuthKeyId,
+      }).catch((error) => {
+        throw new Error(`Client authentication failed: ${errorMessage(error) ?? error}`);
       });
       await consumeDpopVerificationJti(env, ver);
 
