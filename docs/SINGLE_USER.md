@@ -12,13 +12,8 @@ This is the minimal, one‑time checklist to run a single‑user PDS on Cloudfla
   - `wrangler secret put REFRESH_TOKEN_SECRET`
   - `wrangler secret put REPO_SIGNING_KEY`
 
-  Configure OAuth client metadata/JWKS fetches with a trusted-host allowlist:
-
-  ```bash
-  PDS_OAUTH_CLIENT_HOSTS=client.example,another-client.example
-  ```
-
-  Use a comma-separated list of OAuth client metadata/JWKS hostnames.
+  OAuth client metadata/JWKS are fetched dynamically from public HTTPS URLs
+  using hardened fetch checks.
 
   Or run the bootstrap script to generate everything and print commands:
 

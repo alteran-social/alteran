@@ -80,15 +80,45 @@ describe('OAuth client metadata validation', () => {
     }
   });
 
-  it('requires client metadata and JWKS hosts to be explicitly trusted', async () => {
-    const env = await makeEnv({ PDS_OAUTH_CLIENT_HOSTS: 'trusted.example' } as any);
-    await expect(safeFetchJson(env, 'https://client.example/metadata', 'client metadata')).rejects.toThrow('not allowlisted');
+  it('fetches public client metadata without prior host registration', async () => {
+    const env = await makeEnv({ PDS_OAUTH_CLIENT_HOSTS: '' } as any);
+    const original = globalThis.fetch;
+    try {
+      globalThis.fetch = (async (url: RequestInfo | URL) => {
+        const href = url instanceof Request ? url.url : String(url);
+        if (href.startsWith('https://cloudflare-dns.com/dns-query')) {
+          return new Response(JSON.stringify({ Answer: [{ type: 1, data: '93.184.216.34' }] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(JSON.stringify(metadata), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }) as typeof fetch;
+      await expect(safeFetchJson(env, 'https://client.example/metadata', 'client metadata')).resolves.toEqual(metadata);
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 
   it('supports loopback redirect ports while rejecting private-use schemes', () => {
     expect(isAllowedRedirectUri('https://client.example/callback')).toBe(true);
     expect(isAllowedRedirectUri('http://127.0.0.1:43210/callback')).toBe(true);
     expect(isAllowedRedirectUri('com.example.app:/callback')).toBe(false);
+    expect(isAllowedRedirectUri('com.example.client:/callback', {
+      applicationType: 'native',
+      clientId: clientId,
+    })).toBe(false);
+    expect(isAllowedRedirectUri('com.example.app:/callback', {
+      applicationType: 'native',
+      clientId: 'https://app.example.com/oauth-client-metadata.json',
+    })).toBe(true);
+    expect(isAllowedRedirectUri('app.example.client:/callback', {
+      applicationType: 'native',
+      clientId: clientId,
+    })).toBe(false);
     expect(redirectUriMatches('http://127.0.0.1/callback', 'http://127.0.0.1:43210/callback')).toBe(true);
   });
 
@@ -97,6 +127,15 @@ describe('OAuth client metadata validation', () => {
     expect(() => validateClientMetadataShape({ ...metadata, token_endpoint_auth_method: 'private_key_jwt', jwks_uri: 'https://127.0.0.1/jwks' }, clientId)).toThrow();
     expect(() => validateClientMetadataShape({ ...metadata, token_endpoint_auth_method: 'private_key_jwt' }, clientId)).toThrow();
     const valid = validateClientMetadataShape(metadata, clientId);
+    expect(validateClientMetadataShape({ ...metadata, token_endpoint_auth_method: undefined }, clientId).token_endpoint_auth_method).toBe('none');
+    const nativeClientId = 'https://app.example.com/oauth-client-metadata.json';
+    const native = validateClientMetadataShape({
+      ...metadata,
+      client_id: nativeClientId,
+      application_type: 'native',
+      redirect_uris: ['com.example.app:/callback'],
+    }, nativeClientId);
+    expect(native.application_type).toBe('native');
     expect(() => validateParRequest(valid, {
       response_type: 'code',
       grant_type: 'authorization_code',
@@ -127,6 +166,13 @@ describe('OAuth client metadata validation', () => {
       code_challenge: 'challenge',
       code_challenge_method: 'S256',
     })).toThrow();
+    expect(() => validateParRequest(native, {
+      response_type: 'code',
+      redirect_uri: 'com.example.app:/callback',
+      scope: 'atproto',
+      code_challenge: 'challenge',
+      code_challenge_method: 'S256',
+    })).not.toThrow();
   });
 
   it('verifies private_key_jwt clients and rejects assertion replay', async () => {

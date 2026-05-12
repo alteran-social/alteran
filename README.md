@@ -392,12 +392,11 @@ USER_PASSWORD=your-password
 REFRESH_TOKEN=your-access-secret
 REFRESH_TOKEN_SECRET=your-refresh-secret
 PDS_SEQ_WINDOW=512
-PDS_OAUTH_CLIENT_HOSTS=client.example,another-client.example
 ```
 
-`PDS_OAUTH_CLIENT_HOSTS` is required for OAuth clients that use dynamic
-client metadata. It is a comma-separated allowlist of hostnames that this
-single-user PDS may fetch for client metadata and JWKS documents.
+OAuth client metadata and JWKS documents are fetched dynamically from public
+HTTPS URLs using hardened fetch checks: no redirects, public DNS only, size
+limits, and timeouts.
 
 ### 3. Run Database Migration
 ```bash

@@ -8,6 +8,7 @@ const MAX_CLIENT_JSON_BYTES = 128 * 1024;
 const CLIENT_ASSERTION_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
 
 export type ClientAuthMethod = 'none' | 'private_key_jwt';
+export type OAuthApplicationType = 'web' | 'native';
 
 export type OAuthClientMetadata = {
   client_id: string;
@@ -19,33 +20,13 @@ export type OAuthClientMetadata = {
   dpop_bound_access_tokens: true;
   jwks?: { keys: JsonWebKey[] };
   jwks_uri?: string;
-  application_type?: string;
+  application_type: OAuthApplicationType;
 };
 
 export type VerifiedClientAuth = {
   method: ClientAuthMethod;
   keyId: string | null;
 };
-
-function configuredClientHosts(env: Env): Set<string> {
-  return new Set(
-    String(env.PDS_OAUTH_CLIENT_HOSTS || '')
-      .split(',')
-      .map((host) => host.trim().toLowerCase())
-      .filter(Boolean),
-  );
-}
-
-function assertClientHostAllowed(env: Env, url: URL, label: string): void {
-  const allowed = configuredClientHosts(env);
-  if (allowed.size === 0) {
-    throw new Error(`${label} host is not allowlisted`);
-  }
-  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (!allowed.has(host)) {
-    throw new Error(`${label} host is not allowlisted`);
-  }
-}
 
 function isIpLiteral(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
@@ -153,15 +134,51 @@ function isLoopbackHostname(hostname: string): boolean {
   return host === 'localhost' || host === '127.0.0.1' || host === '::1';
 }
 
-export function isAllowedRedirectUri(uri: string): boolean {
+function reverseDomain(hostname: string): string {
+  return hostname
+    .toLowerCase()
+    .split('.')
+    .filter(Boolean)
+    .reverse()
+    .join('.');
+}
+
+function isNativePrivateUseRedirect(url: URL, uri: string, clientId: string | undefined): boolean {
+  if (!clientId) return false;
+  let clientUrl: URL;
+  try {
+    clientUrl = new URL(clientId);
+  } catch {
+    return false;
+  }
+  if (clientUrl.protocol !== 'https:') return false;
+
+  const scheme = url.protocol.slice(0, -1);
+  if (!scheme || scheme !== reverseDomain(clientUrl.hostname)) return false;
+  if (!uri.startsWith(`${scheme}:/`) || uri.startsWith(`${scheme}://`)) return false;
+  if (url.username || url.password || url.hash || url.host) return false;
+  return url.pathname.startsWith('/');
+}
+
+export function isAllowedRedirectUri(
+  uri: string,
+  opts: { applicationType?: OAuthApplicationType; clientId?: string } = {},
+): boolean {
   try {
     const url = new URL(uri);
     if (url.username || url.password || url.hash) return false;
     if (url.protocol === 'https:') {
+      if (opts.applicationType === 'native' && opts.clientId) {
+        const clientUrl = new URL(opts.clientId);
+        if (url.origin !== clientUrl.origin) return false;
+      }
       return !isBlockedHost(url.hostname);
     }
     if (url.protocol === 'http:') {
       return isLoopbackHostname(url.hostname);
+    }
+    if (opts.applicationType === 'native') {
+      return isNativePrivateUseRedirect(url, uri, opts.clientId);
     }
     return false;
   } catch {
@@ -190,7 +207,6 @@ export async function safeFetchJson(env: Env, url: string, label: string): Promi
   }
 
   const parsed = new URL(url);
-  assertClientHostAllowed(env, parsed, label);
   await assertHostnameResolvesPublic(parsed, label);
 
   const ctl = new AbortController();
@@ -290,14 +306,21 @@ export function validateClientMetadataShape(metadata: any, clientId: string): OA
     throw new Error('redirect_uris required');
   }
   const redirect_uris = metadata.redirect_uris;
-  if (!redirect_uris.every((uri: unknown) => typeof uri === 'string' && isAllowedRedirectUri(uri))) {
+  const application_type = metadata.application_type ?? 'web';
+  if (application_type !== 'web' && application_type !== 'native') {
+    throw new Error('unsupported application_type');
+  }
+  if (!redirect_uris.every((uri: unknown) => (
+    typeof uri === 'string' &&
+    isAllowedRedirectUri(uri, { applicationType: application_type, clientId })
+  ))) {
     throw new Error('redirect_uris contains unsupported URI');
   }
   if (metadata.dpop_bound_access_tokens !== true) {
     throw new Error('client must require DPoP');
   }
 
-  const method = metadata.token_endpoint_auth_method;
+  const method = metadata.token_endpoint_auth_method ?? 'none';
   if (method !== 'none' && method !== 'private_key_jwt') {
     throw new Error('unsupported token_endpoint_auth_method');
   }
@@ -337,7 +360,7 @@ export function validateClientMetadataShape(metadata: any, clientId: string): OA
     dpop_bound_access_tokens: true,
     jwks: metadata.jwks,
     jwks_uri: metadata.jwks_uri,
-    application_type: typeof metadata.application_type === 'string' ? metadata.application_type : undefined,
+    application_type,
   };
 }
 
@@ -355,7 +378,10 @@ export function validateParRequest(metadata: OAuthClientMetadata, request: {
   if (request.response_type !== 'code') {
     throw new Error('unsupported response_type');
   }
-  if (!request.redirect_uri || !isAllowedRedirectUri(request.redirect_uri)) {
+  if (!request.redirect_uri || !isAllowedRedirectUri(request.redirect_uri, {
+    applicationType: metadata.application_type,
+    clientId: metadata.client_id,
+  })) {
     throw new Error('unsupported redirect_uri');
   }
   if (!metadata.redirect_uris.some((uri) => redirectUriMatches(uri, request.redirect_uri))) {
