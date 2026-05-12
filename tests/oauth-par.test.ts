@@ -94,6 +94,51 @@ describe('OAuth PAR endpoint', () => {
     expect(((await res.json()) as any).error).toBe('invalid_client');
   });
 
+  it('rejects metadata responses that redirect (Workers cannot use redirect: error)', async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      const href = url instanceof Request ? url.url : String(url);
+      if (href.startsWith('https://cloudflare-dns.com/dns-query')) {
+        return new Response(JSON.stringify({ Answer: [{ type: 1, data: '93.184.216.34' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (init?.redirect === 'error') {
+        throw new TypeError('Invalid redirect value');
+      }
+      return new Response('', {
+        status: 301,
+        headers: { location: 'https://elsewhere.example/metadata', 'Content-Type': 'text/html' },
+      });
+    }) as typeof fetch;
+    try {
+      const env = await makeEnv();
+      const key = await makeDpopKey();
+      const url = 'https://pds.example/oauth/par';
+      const proof = await signAuthzDpop(env, key, 'POST', url);
+      const res = await parPost({ locals: { runtime: { env } }, request: new Request(url, {
+        method: 'POST',
+        headers: { dpop: proof, 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: clientId,
+          response_type: 'code',
+          redirect_uri: 'https://client.example/callback',
+          scope: 'atproto',
+          state: 'state123',
+          code_challenge: 'challenge',
+          code_challenge_method: 'S256',
+        }).toString(),
+      }) } as any);
+      expect(res.status).toBe(400);
+      const body = await res.json() as any;
+      expect(body.error).toBe('invalid_client');
+      expect(body.error_description).toMatch(/redirect|301/i);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
   it('does not persist DPoP replay entries for invalid clients', async () => {
     const env = await makeEnv();
     const key = await makeDpopKey();

@@ -212,15 +212,46 @@ export async function safeFetchJson(env: Env, url: string, label: string): Promi
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 3000);
   try {
-    const response = await fetch(url, {
-      signal: ctl.signal,
-      redirect: 'error',
-      headers: { accept: 'application/json' },
-    });
-    if (!response.ok) throw new Error(`${label} fetch failed: ${response.status}`);
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        signal: ctl.signal,
+        // Cloudflare Workers' fetch rejects redirect: 'error' at the edge.
+        // Use 'manual' and treat any 3xx as a refused redirect.
+        redirect: 'manual',
+        headers: { accept: 'application/json' },
+      });
+    } catch (e) {
+      const err = new Error(`${label} fetch error: ${e instanceof Error ? e.message : String(e)}`);
+      throw err;
+    }
+    if ((response.status >= 300 && response.status < 400) || response.type === 'opaqueredirect') {
+      const err = new Error(`${label} fetch failed: redirected (status ${response.status})`);
+      Object.assign(err, {
+        metadataStatus: response.status,
+        metadataContentType: response.headers.get('content-type'),
+        metadataRedirected: true,
+      });
+      throw err;
+    }
+    if (!response.ok) {
+      const err = new Error(`${label} fetch failed: ${response.status}`);
+      Object.assign(err, {
+        metadataStatus: response.status,
+        metadataContentType: response.headers.get('content-type'),
+        metadataRedirected: response.redirected,
+      });
+      throw err;
+    }
     const ctype = response.headers.get('content-type') || '';
     if (!ctype.includes('application/json') && !ctype.includes('json')) {
-      throw new Error(`${label} must be JSON`);
+      const err = new Error(`${label} must be JSON`);
+      Object.assign(err, {
+        metadataStatus: response.status,
+        metadataContentType: ctype,
+        metadataRedirected: response.redirected,
+      });
+      throw err;
     }
     const text = await readResponseTextBounded(response, label);
     return JSON.parse(text || '{}');
@@ -276,7 +307,7 @@ async function resolveHostAddresses(hostname: string): Promise<string[]> {
     url.searchParams.set('type', type);
     const response = await fetch(url.toString(), {
       headers: { accept: 'application/dns-json' },
-      redirect: 'error',
+      redirect: 'manual',
     });
     if (!response.ok) continue;
     const body = await response.json().catch(() => null) as any;
