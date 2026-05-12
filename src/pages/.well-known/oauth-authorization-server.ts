@@ -30,7 +30,6 @@ export async function GET({ locals, request }: APIContext) {
         require_pushed_authorization_requests: true,
         request_parameter_supported: false,
         request_uri_parameter_supported: true,
-        require_request_uri_registration: false,
         authorization_response_iss_parameter_supported: true,
         client_id_metadata_document_supported: true,
         protected_resources: [origin],

@@ -18,6 +18,7 @@ describe('OAuth metadata and route injection', () => {
     expect(body.revocation_endpoint).toBe('https://pds.example/oauth/revoke');
     expect(body.scopes_supported).toContain('atproto');
     expect(body.require_pushed_authorization_requests).toBe(true);
+    expect(body.require_request_uri_registration).toBeUndefined();
     expect(body.dpop_signing_alg_values_supported).toEqual(['ES256']);
   });
 
