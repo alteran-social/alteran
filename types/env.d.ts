@@ -16,9 +16,9 @@ export interface SecretsStoreSecret {
 
 declare global {
   interface Env {
-    DB: D1Database;
-    BLOBS: R2Bucket;
-    SEQUENCER?: DurableObjectNamespace;
+    ALTERAN_DB: D1Database;
+    ALTERAN_BLOBS: R2Bucket;
+    ALTERAN_SEQUENCER?: DurableObjectNamespace;
     ASSETS?: {
       fetch: (req: Request | string) => Promise<Response>;
     };

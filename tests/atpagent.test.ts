@@ -184,7 +184,7 @@ describeIntegration('AtpAgent integration', () => {
     expect(labelerViews.data.views.length).toBeGreaterThan(0);
 
     await ensureChatTables(env as any);
-    await env.DB.exec('DELETE FROM chat_convo_member; DELETE FROM chat_convo;');
+    await env.ALTERAN_DB.exec('DELETE FROM chat_convo_member; DELETE FROM chat_convo;');
 
     const now = Date.now();
     const lastMessage = {
@@ -197,19 +197,19 @@ describeIntegration('AtpAgent integration', () => {
       facets: [],
     };
 
-    await env.DB.prepare(
+    await env.ALTERAN_DB.prepare(
       'INSERT INTO chat_convo (id, rev, status, muted, unread_count, last_message_json, last_reaction_json, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     )
       .bind('convo-test', '0', 'accepted', 0, 1, JSON.stringify(lastMessage), null, now, now)
       .run();
 
-    await env.DB.prepare(
+    await env.ALTERAN_DB.prepare(
       'INSERT OR REPLACE INTO chat_convo_member (convo_id, did, handle, display_name, avatar, position) VALUES (?, ?, ?, ?, ?, ?)',
     )
       .bind('convo-test', did, String(env.PDS_HANDLE ?? 'user.example.com'), 'Owner', null, 0)
       .run();
 
-    await env.DB.prepare(
+    await env.ALTERAN_DB.prepare(
       'INSERT OR REPLACE INTO chat_convo_member (convo_id, did, handle, display_name, avatar, position) VALUES (?, ?, ?, ?, ?, ?)',
     )
       .bind('convo-test', 'did:example:friend', 'friend.test', 'Friend', null, 1)

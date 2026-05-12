@@ -8,7 +8,7 @@ export async function POST({ locals }: APIContext) {
   const keys = await listOrphanBlobKeys(env);
   let deleted = 0;
   for (const key of keys) {
-    await env.BLOBS.delete(key).catch(() => {});
+    await env.ALTERAN_BLOBS.delete(key).catch(() => {});
     await deleteBlobByKey(env, key);
     deleted++;
   }

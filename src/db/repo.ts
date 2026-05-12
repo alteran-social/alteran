@@ -10,7 +10,7 @@ import { encodeBlocksForCommit } from '../services/car';
 import { ServerMisconfigured } from '../lib/errors';
 
 export async function getRoot(env: Env) {
-  const db = drizzle(env.DB);
+  const db = drizzle(env.ALTERAN_DB);
   const did = (await resolveSecret(env.PDS_DID)) ?? 'did:example:single-user';
   return db.select().from(repo_root).where(eq(repo_root.did, did)).get();
 }
@@ -30,7 +30,7 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
   sig: string;
   blocks: string; // base64-encoded CAR
 }> {
-  const db = drizzle(env.DB);
+  const db = drizzle(env.ALTERAN_DB);
   const did = (await resolveSecret(env.PDS_DID)) ?? 'did:example:single-user';
 
   // Falls back to an ephemeral key only in non-production so dev runs work
@@ -107,7 +107,7 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
 }
 
 export async function appendCommit(env: Env, cid: string, rev: string, data: string, sig: string) {
-  const db = drizzle(env.DB);
+  const db = drizzle(env.ALTERAN_DB);
   const ts = Date.now();
 
   await db

@@ -88,7 +88,7 @@ export async function GET({ locals, url }: APIContext) {
     }
 
     // Fetch blob from R2
-    const r2 = env.BLOBS;
+    const r2 = env.ALTERAN_BLOBS;
     const object = await r2.get(key);
 
     if (!object) {

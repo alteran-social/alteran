@@ -46,7 +46,7 @@ export class RepoManager {
 
   async getRoot(): Promise<MST | null> {
     try {
-      const db = drizzle(this.env.DB);
+      const db = drizzle(this.env.ALTERAN_DB);
       const did = await this.getDid();
 
       const rows = await db
@@ -58,7 +58,7 @@ export class RepoManager {
       const row = rows[0];
       if (!row) return null;
 
-      const commit = await this.env.DB.prepare(
+      const commit = await this.env.ALTERAN_DB.prepare(
         `SELECT data FROM commit_log WHERE cid = ? LIMIT 1`,
       )
         .bind(row.commitCid)
@@ -215,7 +215,7 @@ export class RepoManager {
     const did = await this.getDid();
     const uri = `at://${did}/${collection}/${rkey}`;
 
-    const result = await this.env.DB.prepare(`SELECT json FROM record WHERE uri = ?`)
+    const result = await this.env.ALTERAN_DB.prepare(`SELECT json FROM record WHERE uri = ?`)
       .bind(uri)
       .first();
 
@@ -265,10 +265,10 @@ export class RepoManager {
       String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
 
     const stmt = cursor
-      ? this.env.DB.prepare(
+      ? this.env.ALTERAN_DB.prepare(
           `SELECT uri, cid FROM record WHERE uri >= ? AND uri < ? AND uri > ? ORDER BY uri LIMIT ?`,
         ).bind(prefix, rangeEnd, prefix + cursor, limit)
-      : this.env.DB.prepare(
+      : this.env.ALTERAN_DB.prepare(
           `SELECT uri, cid FROM record WHERE uri >= ? AND uri < ? ORDER BY uri LIMIT ?`,
         ).bind(prefix, rangeEnd, limit);
 
@@ -282,7 +282,7 @@ export class RepoManager {
   }
 
   async updateRoot(mst: MST, rev: number): Promise<void> {
-    const db = drizzle(this.env.DB);
+    const db = drizzle(this.env.ALTERAN_DB);
     const rootCid = await mst.getPointer();
     const did = await this.getDid();
     const revStr = String(rev);

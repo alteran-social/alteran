@@ -33,7 +33,7 @@ export async function ensureChatTables(env: Env) {
   if (tablesEnsured) return;
 
   // Create chat_convo table
-  await env.DB.prepare(
+  await env.ALTERAN_DB.prepare(
     'CREATE TABLE IF NOT EXISTS chat_convo (' +
     'id TEXT PRIMARY KEY, ' +
     'rev TEXT NOT NULL, ' +
@@ -48,7 +48,7 @@ export async function ensureChatTables(env: Env) {
   ).run();
 
   // Create chat_convo_member table
-  await env.DB.prepare(
+  await env.ALTERAN_DB.prepare(
     'CREATE TABLE IF NOT EXISTS chat_convo_member (' +
     'convo_id TEXT NOT NULL, ' +
     'did TEXT NOT NULL, ' +
@@ -61,7 +61,7 @@ export async function ensureChatTables(env: Env) {
   ).run();
 
   // Create index
-  await env.DB.prepare(
+  await env.ALTERAN_DB.prepare(
     'CREATE INDEX IF NOT EXISTS chat_convo_member_did_idx ON chat_convo_member (did)'
   ).run();
 
@@ -103,7 +103,7 @@ export async function listChatConvos(
   query += ' ORDER BY rowid DESC LIMIT ?';
   params.push(limit);
 
-  const result = await env.DB.prepare(query).bind(...params).all<{
+  const result = await env.ALTERAN_DB.prepare(query).bind(...params).all<{
     rowid: number;
     id: string;
     rev: string;
@@ -119,7 +119,7 @@ export async function listChatConvos(
 
   if (result.results) {
     for (const row of result.results) {
-      const members = await env.DB.prepare(
+      const members = await env.ALTERAN_DB.prepare(
         `SELECT did, handle, display_name, avatar FROM chat_convo_member WHERE convo_id = ? ORDER BY position ASC`
       )
         .bind(row.id)
@@ -186,7 +186,7 @@ export async function listChatConvoLogs(env: Env, did: string, cursor?: number, 
   query += ' ORDER BY rowid DESC LIMIT ?';
   params.push(limit);
 
-  const result = await env.DB.prepare(query).bind(...params).all<{
+  const result = await env.ALTERAN_DB.prepare(query).bind(...params).all<{
     rowid: number;
     id: string;
     rev: string;

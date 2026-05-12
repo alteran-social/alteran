@@ -24,7 +24,7 @@ export async function encodeRecordBlock(value: unknown) {
 
 export async function buildRepoCar(env: Env, did: string): Promise<CarSnapshot> {
   // Prefer the latest signed commit from commit_log (authoritative root)
-  const db = drizzle(env.DB);
+  const db = drizzle(env.ALTERAN_DB);
   const tip = await db.select().from(commit_log).orderBy(desc(commit_log.seq)).limit(1).get();
 
   if (tip) {
@@ -99,7 +99,7 @@ export async function buildRepoCar(env: Env, did: string): Promise<CarSnapshot> 
 }
 
 export async function buildRepoCarRange(env: Env, fromSeq: number, toSeq: number): Promise<CarSnapshot> {
-  const db = drizzle(env.DB);
+  const db = drizzle(env.ALTERAN_DB);
   const rows = await db.select().from(commit_log).where(and(gte(commit_log.seq, fromSeq), lte(commit_log.seq, toSeq))).all();
   const blocks: { cid: CID; bytes: Uint8Array }[] = [];
   for (const r of rows) {
@@ -189,7 +189,7 @@ export async function encodeBlocksForCommit(
       // Attempt to reconstruct commit block from commit_log if this is the commit cid
       if (cidStr === commitCid.toString()) {
         try {
-          const row = await (env.DB as any)
+          const row = await (env.ALTERAN_DB as any)
             .prepare('SELECT data, sig FROM commit_log WHERE cid = ? LIMIT 1')
             .bind(cidStr)
             .first();
@@ -260,7 +260,7 @@ export async function buildRecordProofCar(
   collection: string,
   rkey: string,
 ): Promise<{ bytes: Uint8Array }> {
-  const db = drizzle(env.DB);
+  const db = drizzle(env.ALTERAN_DB);
   const tip = await db.select().from(commit_log).orderBy(desc(commit_log.seq)).limit(1).get();
   if (!tip) {
     throw new NotFound('HeadNotFound');

@@ -46,7 +46,7 @@ export class Sequencer {
   constructor(state: DurableObjectState, env: Env) {
     this.state = state as HibernatableState;
     this.env = env;
-    this.db = env.DB;
+    this.db = env.ALTERAN_DB;
     this.maxWindow = parseInt(env.PDS_SEQ_WINDOW || '512', 10);
 
     // Reconcile nextSeq with DB on construction so replay and append agree

@@ -7,7 +7,7 @@ export async function GET({ locals, params }: APIContext) {
   const key = params.key;
   if (!key) return new Response('missing key', { status: 400 });
 
-  const obj = await env.BLOBS.get(key);
+  const obj = await env.ALTERAN_BLOBS.get(key);
   if (!obj) return new Response('not found', { status: 404 });
 
   const body = obj.body as unknown as BodyInit | null;
@@ -22,6 +22,6 @@ export async function PUT({ locals, request, params }: APIContext) {
   if (!key) return new Response('missing key', { status: 400 });
 
   const body = await request.arrayBuffer();
-  await env.BLOBS.put(key, body, { httpMetadata: { contentType: request.headers.get('content-type') ?? 'application/octet-stream' } });
+  await env.ALTERAN_BLOBS.put(key, body, { httpMetadata: { contentType: request.headers.get('content-type') ?? 'application/octet-stream' } });
   return new Response('uploaded');
 }

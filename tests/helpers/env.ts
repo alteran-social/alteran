@@ -47,12 +47,12 @@ export async function makeEnv(overrides: Partial<Env> = {}): Promise<Env> {
       PDS_ALLOWED_MIME: "image/png,image/jpeg",
     },
   });
-  const DB = (await mf.getD1Database("DB")) as unknown as D1Database;
-  const BLOBS = await mf.getR2Bucket("BLOBS");
-  await applyMigrations(DB);
+  const ALTERAN_DB = (await mf.getD1Database("DB")) as unknown as D1Database;
+  const ALTERAN_BLOBS = await mf.getR2Bucket("BLOBS");
+  await applyMigrations(ALTERAN_DB);
   return {
-    DB,
-    BLOBS,
+    ALTERAN_DB,
+    ALTERAN_BLOBS,
     PDS_DID: "did:example:test",
     PDS_HANDLE: "test.example",
     USER_PASSWORD: "pwd",

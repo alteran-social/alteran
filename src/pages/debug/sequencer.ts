@@ -6,7 +6,7 @@ export const prerender = false;
 export async function GET({ locals }: APIContext) {
   const { env } = locals.runtime;
 
-  if (!env.SEQUENCER) {
+  if (!env.ALTERAN_SEQUENCER) {
     return new Response(JSON.stringify({ error: 'SequencerNotConfigured' }), {
       status: 503,
       headers: { 'Content-Type': 'application/json' },
@@ -14,8 +14,8 @@ export async function GET({ locals }: APIContext) {
   }
 
   try {
-    const id = env.SEQUENCER.idFromName('default');
-    const stub = env.SEQUENCER.get(id);
+    const id = env.ALTERAN_SEQUENCER.idFromName('default');
+    const stub = env.ALTERAN_SEQUENCER.get(id);
     const response = await stub.fetch(new Request('http://internal/metrics') as any);
     const text = await response.text();
     return new Response(text, { status: response.status, headers: { 'Content-Type': 'application/json' } });

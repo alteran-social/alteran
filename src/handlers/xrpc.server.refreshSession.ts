@@ -23,9 +23,9 @@ export async function POST(ctx: APIContext) {
   if (!ver || ver.payload.t !== 'refresh') return Response.json({ error: 'InvalidToken' }, { status: 401 });
 
   const jtiOld = String(ver.payload.jti || '');
-  if (jtiOld && env.DB) {
-    await env.DB.exec('CREATE TABLE IF NOT EXISTS token_revocation (refresh_jti TEXT PRIMARY KEY, exp INTEGER NOT NULL);');
-    const row: any = await env.DB.prepare('SELECT refresh_jti FROM token_revocation WHERE refresh_jti=?').bind(jtiOld).first();
+  if (jtiOld && env.ALTERAN_DB) {
+    await env.ALTERAN_DB.exec('CREATE TABLE IF NOT EXISTS token_revocation (refresh_jti TEXT PRIMARY KEY, exp INTEGER NOT NULL);');
+    const row: any = await env.ALTERAN_DB.prepare('SELECT refresh_jti FROM token_revocation WHERE refresh_jti=?').bind(jtiOld).first();
     if (row?.refresh_jti) return Response.json({ error: 'InvalidToken' }, { status: 401 });
   }
 
@@ -34,9 +34,9 @@ export async function POST(ctx: APIContext) {
   const jtiNew = crypto.randomUUID();
   const accessJwt = await signJwt(ctx, { sub: did, handle, t: 'access' }, 'access');
   const refreshJwt = await signJwt(ctx, { sub: did, handle, t: 'refresh', jti: jtiNew }, 'refresh');
-  if (jtiOld && ver.payload.exp && env.DB) {
-    await env.DB.exec('CREATE TABLE IF NOT EXISTS token_revocation (refresh_jti TEXT PRIMARY KEY, exp INTEGER NOT NULL);');
-    await env.DB.prepare('INSERT OR REPLACE INTO token_revocation (refresh_jti, exp) VALUES (?,?)').bind(jtiOld, Number(ver.payload.exp)).run();
+  if (jtiOld && ver.payload.exp && env.ALTERAN_DB) {
+    await env.ALTERAN_DB.exec('CREATE TABLE IF NOT EXISTS token_revocation (refresh_jti TEXT PRIMARY KEY, exp INTEGER NOT NULL);');
+    await env.ALTERAN_DB.prepare('INSERT OR REPLACE INTO token_revocation (refresh_jti, exp) VALUES (?,?)').bind(jtiOld, Number(ver.payload.exp)).run();
   }
   return Response.json({ did, handle, accessJwt, refreshJwt });
 }

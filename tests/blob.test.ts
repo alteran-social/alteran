@@ -15,7 +15,7 @@ import { putBlobRef, setRecordBlobUsage, listOrphanBlobKeys, deleteBlobByKey } f
 
 // Mock environment for testing
 const createMockEnv = () => ({
-  BLOBS: {
+  ALTERAN_BLOBS: {
     put: async (key: string, value: ArrayBuffer, options?: any) => {
       // Mock R2 put
       return { key };
@@ -28,7 +28,7 @@ const createMockEnv = () => ({
       // Mock R2 delete
     },
   },
-  DB: {} as any, // Mock D1
+  ALTERAN_DB: {} as any, // Mock D1
   PDS_MAX_BLOB_SIZE: '5242880', // 5MB
   PDS_ALLOWED_MIME: 'image/jpeg,image/png,image/gif,image/webp',
 });

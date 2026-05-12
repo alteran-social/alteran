@@ -18,9 +18,9 @@ describe('RepoManager.extractOps', () => {
   /* it('detects create, update, and delete', async () => {
     const env = await makeEnv();
     // Bootstrap minimal schema used by RepoManager
-    await env.DB.exec("CREATE TABLE IF NOT EXISTS repo_root (did TEXT PRIMARY KEY, commit_cid TEXT, rev INTEGER);");
-    await env.DB.exec("CREATE TABLE IF NOT EXISTS record (uri TEXT PRIMARY KEY, cid TEXT NOT NULL, json TEXT NOT NULL, created_at INTEGER DEFAULT 0);");
-    await env.DB.exec("CREATE TABLE IF NOT EXISTS blockstore (cid TEXT PRIMARY KEY, bytes TEXT);");
+    await env.ALTERAN_DB.exec("CREATE TABLE IF NOT EXISTS repo_root (did TEXT PRIMARY KEY, commit_cid TEXT, rev INTEGER);");
+    await env.ALTERAN_DB.exec("CREATE TABLE IF NOT EXISTS record (uri TEXT PRIMARY KEY, cid TEXT NOT NULL, json TEXT NOT NULL, created_at INTEGER DEFAULT 0);");
+    await env.ALTERAN_DB.exec("CREATE TABLE IF NOT EXISTS blockstore (cid TEXT PRIMARY KEY, bytes TEXT);");
     const mgr = new RepoManager(env);
 
     // Start with empty MST

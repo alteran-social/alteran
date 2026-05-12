@@ -53,7 +53,7 @@ export async function fetchProfileRecord(env: Env, did: string): Promise<Profile
   const upperBound = `at://~`; // '~' sorts after all valid DIDs
 
   // Find any profile record - scan from "at://" to "at://~" and filter in app
-  const fallback = await env.DB.prepare(
+  const fallback = await env.ALTERAN_DB.prepare(
     'SELECT json FROM record WHERE uri >= ? AND uri < ? ORDER BY rowid DESC LIMIT 50'
   )
     .bind(prefix, upperBound)

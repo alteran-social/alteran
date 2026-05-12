@@ -18,7 +18,7 @@ export async function POST({ locals, request }: APIContext) {
   const { env } = locals.runtime;
   const clientIp = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || 'unknown';
 
-  const db = drizzle(env.DB);
+  const db = drizzle(env.ALTERAN_DB);
   const now = Math.floor(Date.now() / 1000);
 
   // Check if IP is locked out

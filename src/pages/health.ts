@@ -22,8 +22,8 @@ export async function GET({ locals }: APIContext) {
 
   // Check D1 database connectivity
   try {
-    if (env.DB) {
-      await env.DB.prepare('SELECT 1').first();
+    if (env.ALTERAN_DB) {
+      await env.ALTERAN_DB.prepare('SELECT 1').first();
       checks.database.status = 'ok';
     } else {
       checks.database.status = 'error';
@@ -38,9 +38,9 @@ export async function GET({ locals }: APIContext) {
 
   // Check R2 storage connectivity
   try {
-    if (env.BLOBS) {
+    if (env.ALTERAN_BLOBS) {
       // Simple list operation to verify connectivity
-      await env.BLOBS.list({ limit: 1 });
+      await env.ALTERAN_BLOBS.list({ limit: 1 });
       checks.storage.status = 'ok';
     } else {
       checks.storage.status = 'error';

@@ -75,7 +75,7 @@ export function createPdsFetchHandler(options?: CreatePdsFetchHandlerOptions): P
       return new Response(null, { status: 204, headers }) as unknown as WorkersResponse;
     }
 
-    await seed(resolvedEnv.DB, resolvedEnv.PDS_DID as string);
+    await seed(resolvedEnv.ALTERAN_DB, resolvedEnv.PDS_DID as string);
 
     // Fire-and-forget: let relays know this PDS exists and is reachable.
     // Throttled per isolate and safe to call frequently.
@@ -98,11 +98,11 @@ export function createPdsFetchHandler(options?: CreatePdsFetchHandlerOptions): P
     // Lightweight debug endpoint for Sequencer metrics
     if (url.pathname === '/debug/sequencer' && request.method === 'GET') {
       try {
-        if (!('SEQUENCER' in resolvedEnv) || !resolvedEnv.SEQUENCER) {
+        if (!('ALTERAN_SEQUENCER' in resolvedEnv) || !resolvedEnv.ALTERAN_SEQUENCER) {
           return new Response('Sequencer not configured', { status: 503 }) as unknown as WorkersResponse;
         }
-        const id = (resolvedEnv as any).SEQUENCER.idFromName('default');
-        const stub = (resolvedEnv as any).SEQUENCER.get(id);
+        const id = (resolvedEnv as any).ALTERAN_SEQUENCER.idFromName('default');
+        const stub = (resolvedEnv as any).ALTERAN_SEQUENCER.get(id);
         const proxyRequest = new Request(new URL('/metrics', request.url).toString(), { method: 'GET' });
         const response = await stub.fetch(proxyRequest as any);
         // Pass through JSON
@@ -130,12 +130,12 @@ export function createPdsFetchHandler(options?: CreatePdsFetchHandlerOptions): P
         }
         return new Response('This endpoint requires a WebSocket (wss://) upgrade', { status: 426 }) as unknown as WorkersResponse;
       }
-      if (!resolvedEnv.SEQUENCER) {
+      if (!resolvedEnv.ALTERAN_SEQUENCER) {
         return new Response('Sequencer not configured', { status: 503 }) as unknown as WorkersResponse;
       }
 
-      const id = resolvedEnv.SEQUENCER.idFromName('default');
-      const stub = resolvedEnv.SEQUENCER.get(id);
+      const id = resolvedEnv.ALTERAN_SEQUENCER.idFromName('default');
+      const stub = resolvedEnv.ALTERAN_SEQUENCER.get(id);
       return (await stub.fetch(request as any)) as unknown as WorkersResponse;
     }
 

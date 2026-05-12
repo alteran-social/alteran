@@ -11,7 +11,7 @@ import * as dagCbor from '@ipld/dag-cbor';
  * This traverses the MST structure to find all blocks that are still in use
  */
 async function collectReferencedCids(env: Env, keepCommits: number = 10000): Promise<Set<string>> {
-  const db = drizzle(env.DB);
+  const db = drizzle(env.ALTERAN_DB);
   const referenced = new Set<string>();
 
   // Get recent commits
@@ -60,7 +60,7 @@ async function collectReferencedCids(env: Env, keepCommits: number = 10000): Pro
  * Recursively traverse MST nodes to collect all CIDs
  */
 async function traverseMst(env: Env, rootCid: string, referenced: Set<string>): Promise<void> {
-  const db = drizzle(env.DB);
+  const db = drizzle(env.ALTERAN_DB);
   const visited = new Set<string>();
   const queue = [rootCid];
 
@@ -128,7 +128,7 @@ async function traverseMst(env: Env, rootCid: string, referenced: Set<string>): 
  * @returns Number of blocks removed
  */
 export async function pruneOrphanedBlocks(env: Env, keepCommits: number = 10000): Promise<number> {
-  const db = drizzle(env.DB);
+  const db = drizzle(env.ALTERAN_DB);
 
   // Collect all CIDs referenced by recent commits
   const referenced = await collectReferencedCids(env, keepCommits);
@@ -181,7 +181,7 @@ export async function getBlockstoreStats(env: Env): Promise<{
   total: number;
   totalSize: number;
 }> {
-  const db = drizzle(env.DB);
+  const db = drizzle(env.ALTERAN_DB);
   const blocks = await db.select().from(blockstore).all();
 
   const totalSize = blocks.reduce((sum, block) => {

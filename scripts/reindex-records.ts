@@ -25,11 +25,11 @@ async function reindexRecords() {
   // Create mock env for local execution
   // Note: This needs to be run with wrangler for D1 access
   const env = {
-    DB: (globalThis as any).DB,
+    ALTERAN_DB: (globalThis as any).ALTERAN_DB ?? (globalThis as any).DB,
     PDS_DID: did,
   } as Env;
 
-  if (!env.DB) {
+  if (!env.ALTERAN_DB) {
     console.error('[ERROR] D1 database not available. Run with: npx wrangler d1 execute alteran --remote --file=<(bun run scripts/reindex-records.ts)');
     process.exit(1);
   }

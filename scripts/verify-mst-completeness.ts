@@ -24,8 +24,8 @@ async function main() {
     process.exit(1);
   }
 
-  const env = { DB: (globalThis as any).DB } as unknown as Env;
-  if (!env.DB) {
+  const env = { ALTERAN_DB: (globalThis as any).ALTERAN_DB ?? (globalThis as any).DB } as unknown as Env;
+  if (!env.ALTERAN_DB) {
     console.error('No DB binding found. Run with wrangler d1 execute.');
     process.exit(1);
   }

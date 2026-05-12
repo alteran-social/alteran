@@ -15,7 +15,7 @@
   // Optional: PDS_ALLOWED_MIME, PDS_MAX_BLOB_SIZE, PDS_MAX_JSON_BYTES, PDS_RATE_LIMIT_PER_MIN, PDS_CORS_ORIGIN
   "d1_databases": [
     {
-      "binding": "DB",
+      "binding": "ALTERAN_DB",
       "database_name": "alteran",
       "database_id": "local-dev",
       "migrations_dir": "migrations",
@@ -23,12 +23,12 @@
   ],
   "r2_buckets": [
     {
-      "binding": "BLOBS",
+      "binding": "ALTERAN_BLOBS",
       "bucket_name": "alteran-blobs",
     },
   ],
   "durable_objects": {
-    "bindings": [{ "name": "SEQUENCER", "class_name": "Sequencer" }],
+    "bindings": [{ "name": "ALTERAN_SEQUENCER", "class_name": "Sequencer" }],
   },
   "migrations": [
     { "tag": "v1", "new_classes": ["Sequencer"] },
@@ -59,7 +59,7 @@
       },
       "d1_databases": [
         {
-          "binding": "DB",
+          "binding": "ALTERAN_DB",
           "database_name": "alteran-dev",
           "database_id": "local-dev",
           "migrations_dir": "migrations",
@@ -67,7 +67,7 @@
       ],
       "r2_buckets": [
         {
-          "binding": "BLOBS",
+          "binding": "ALTERAN_BLOBS",
           "bucket_name": "alteran-blobs-dev",
         },
       ],
@@ -80,7 +80,7 @@
       },
       "d1_databases": [
         {
-          "binding": "DB",
+          "binding": "ALTERAN_DB",
           "database_name": "alteran-staging",
           "database_id": "YOUR_STAGING_D1_ID",
           "migrations_dir": "migrations",
@@ -88,12 +88,12 @@
       ],
       "r2_buckets": [
         {
-          "binding": "BLOBS",
+          "binding": "ALTERAN_BLOBS",
           "bucket_name": "alteran-blobs-staging",
         },
       ],
       "durable_objects": {
-        "bindings": [{ "name": "SEQUENCER", "class_name": "Sequencer" }],
+        "bindings": [{ "name": "ALTERAN_SEQUENCER", "class_name": "Sequencer" }],
       },
       "migrations": [
         { "tag": "v1", "new_classes": ["Sequencer"] },
@@ -111,7 +111,7 @@
       },
       "d1_databases": [
         {
-          "binding": "DB",
+          "binding": "ALTERAN_DB",
           "database_name": "alteran-production",
           "database_id": "YOUR_PRODUCTION_D1_ID",
           "migrations_dir": "migrations",
@@ -119,12 +119,12 @@
       ],
       "r2_buckets": [
         {
-          "binding": "BLOBS",
+          "binding": "ALTERAN_BLOBS",
           "bucket_name": "alteran-blobs-production",
         },
       ],
       "durable_objects": {
-        "bindings": [{ "name": "SEQUENCER", "class_name": "Sequencer" }],
+        "bindings": [{ "name": "ALTERAN_SEQUENCER", "class_name": "Sequencer" }],
       },
       "migrations": [
         { "tag": "v1", "new_classes": ["Sequencer"] },

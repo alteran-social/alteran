@@ -17,7 +17,7 @@ export async function GET({ locals, url }: APIContext) {
   const limit = parseInt(url.searchParams.get('limit') || '500', 10);
 
   try {
-    const db = drizzle(env.DB);
+    const db = drizzle(env.ALTERAN_DB);
 
     const blobs = since
       ? await db

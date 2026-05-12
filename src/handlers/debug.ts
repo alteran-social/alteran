@@ -3,7 +3,7 @@ import { putRecord as dalPutRecord, getRecord as dalGetRecord } from '../db/dal'
 
 export async function POST_db_bootstrap(ctx: APIContext) {
   const env: any = (ctx.locals as any).runtime?.env ?? (ctx.locals as any) ?? (globalThis as any);
-  const db = env.DB;
+  const db = env.ALTERAN_DB;
   await db.exec("CREATE TABLE IF NOT EXISTS record (uri TEXT PRIMARY KEY, cid TEXT NOT NULL, json TEXT NOT NULL, created_at INTEGER DEFAULT (strftime('%s','now')));");
   await db.exec("CREATE TABLE IF NOT EXISTS blob (cid TEXT PRIMARY KEY, key TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL);");
   await db.exec("CREATE TABLE IF NOT EXISTS blob_usage (record_uri TEXT NOT NULL, key TEXT NOT NULL);");

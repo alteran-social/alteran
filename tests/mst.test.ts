@@ -11,7 +11,7 @@ describe('MST (Merkle Search Tree)', () => {
   beforeAll(() => {
     // Mock environment for testing
     mockEnv = {
-      DB: {
+      ALTERAN_DB: {
         // Mock D1 database
         prepare: () => ({
           bind: () => ({

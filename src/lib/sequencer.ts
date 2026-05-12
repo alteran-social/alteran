@@ -1,13 +1,13 @@
 import type { Env } from '../env';
 
 export async function notifySequencer(env: Env, obj: unknown) {
-  if (!env.SEQUENCER) {
+  if (!env.ALTERAN_SEQUENCER) {
     console.warn('notifySequencer: SEQUENCER binding missing');
     return;
   }
   try {
-    const id = env.SEQUENCER.idFromName('default');
-    const stub = env.SEQUENCER.get(id);
+    const id = env.ALTERAN_SEQUENCER.idFromName('default');
+    const stub = env.ALTERAN_SEQUENCER.get(id);
     await stub.fetch('https://sequencer/commit', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

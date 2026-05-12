@@ -18,7 +18,7 @@ import { logger } from './logger';
  * @returns Number of commits pruned
  */
 export async function pruneOldCommits(env: Env, keepCount: number = 10000): Promise<number> {
-  const db = drizzle(env.DB);
+  const db = drizzle(env.ALTERAN_DB);
 
   // Get the sequence number of the Nth most recent commit
   const threshold = await db
@@ -60,7 +60,7 @@ export async function getCommitLogStats(env: Env): Promise<{
   oldest: number | null;
   newest: number | null;
 }> {
-  const db = drizzle(env.DB);
+  const db = drizzle(env.ALTERAN_DB);
 
   const [oldest, newest, count] = await Promise.all([
     db.select({ seq: commit_log.seq }).from(commit_log).orderBy(commit_log.seq).limit(1).get(),

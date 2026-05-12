@@ -15,7 +15,7 @@ async function putBlock(env: Env, value: unknown): Promise<{ cid: CID; bytes: Ui
   const hash = await sha256.digest(bytes);
   const cid = CID.createV1(dagCbor.code, hash);
   const store = new D1Blockstore(env);
-  await env.DB.exec("CREATE TABLE IF NOT EXISTS blockstore (cid TEXT PRIMARY KEY, bytes TEXT)");
+  await env.ALTERAN_DB.exec("CREATE TABLE IF NOT EXISTS blockstore (cid TEXT PRIMARY KEY, bytes TEXT)");
   await store.put(cid, bytes);
   return { cid, bytes };
 }

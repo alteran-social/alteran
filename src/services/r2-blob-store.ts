@@ -73,15 +73,15 @@ export class R2BlobStore {
     const shaB64 = R2BlobStore.b64url(sha);
     const key = R2BlobStore.cidKey(shaB64);
     const buffer = R2BlobStore.toArrayBuffer(view);
-    await this.env.BLOBS.put(key, buffer, { httpMetadata: { contentType } });
+    await this.env.ALTERAN_BLOBS.put(key, buffer, { httpMetadata: { contentType } });
     return { key, size, sha256: shaB64 };
   }
 
   async get(key: string): Promise<R2ObjectBody | null> {
-    return this.env.BLOBS.get(key);
+    return this.env.ALTERAN_BLOBS.get(key);
   }
 
   async delete(key: string): Promise<void> {
-    await this.env.BLOBS.delete(key);
+    await this.env.ALTERAN_BLOBS.delete(key);
   }
 }

@@ -71,7 +71,7 @@ export async function listPosts(env: Env, limit: number, cursor?: string): Promi
   }
   params.push(safeLimit);
 
-  const response = await env.DB.prepare(
+  const response = await env.ALTERAN_DB.prepare(
     `SELECT rowid, uri, cid, json FROM record WHERE ${where} ORDER BY rowid DESC LIMIT ?`
   )
     .bind(...params)
@@ -84,7 +84,7 @@ export async function listPosts(env: Env, limit: number, cursor?: string): Promi
 export async function getPostsByUris(env: Env, uris: string[]): Promise<ParsedPost[]> {
   if (!uris.length) return [];
   const placeholders = uris.map(() => '?').join(',');
-  const response = await env.DB.prepare(
+  const response = await env.ALTERAN_DB.prepare(
     `SELECT rowid, uri, cid, json FROM record WHERE uri IN (${placeholders})`
   )
     .bind(...uris)
@@ -142,7 +142,7 @@ export async function countPosts(env: Env): Promise<number> {
   const actor = await getPrimaryActor(env);
   const prefix = `at://${actor.did}/${POST_COLLECTION}/`;
   const upperBound = `${prefix}{`; // '{' sorts after 'z', safely bounding rkeys
-  const response = await env.DB.prepare(
+  const response = await env.ALTERAN_DB.prepare(
     'SELECT COUNT(*) as count FROM record WHERE uri >= ? AND uri < ?'
   )
     .bind(prefix, upperBound)
@@ -151,7 +151,7 @@ export async function countPosts(env: Env): Promise<number> {
 }
 
 export async function getPostByUri(env: Env, uri: string): Promise<ParsedPost | null> {
-  const response = await env.DB.prepare(
+  const response = await env.ALTERAN_DB.prepare(
     'SELECT rowid, uri, cid, json FROM record WHERE uri = ? LIMIT 1'
   )
     .bind(uri)

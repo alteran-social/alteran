@@ -6,7 +6,7 @@ let tableEnsured = false;
 
 async function ensureTable(env: Env) {
   if (tableEnsured) return;
-  await env.DB.exec(
+  await env.ALTERAN_DB.exec(
     'CREATE TABLE IF NOT EXISTS actor_preferences (did TEXT PRIMARY KEY, json TEXT NOT NULL, updated_at INTEGER NOT NULL)'
   );
   tableEnsured = true;
@@ -18,7 +18,7 @@ export async function getActorPreferences(env: Env): Promise<{ did: string; pref
   await ensureTable(env);
   const did = await resolveSecret(env.PDS_DID);
   if (!did) throw new ServerMisconfigured('PDS_DID is not configured');
-  const row = await env.DB.prepare('SELECT json FROM actor_preferences WHERE did = ?')
+  const row = await env.ALTERAN_DB.prepare('SELECT json FROM actor_preferences WHERE did = ?')
     .bind(did)
     .first<{ json: string }>();
 
@@ -40,7 +40,7 @@ export async function setActorPreferences(env: Env, preferences: any[]): Promise
   const did = await resolveSecret(env.PDS_DID);
   if (!did) throw new ServerMisconfigured('PDS_DID is not configured');
   const now = Date.now();
-  await env.DB.prepare(
+  await env.ALTERAN_DB.prepare(
     'INSERT INTO actor_preferences (did, json, updated_at) VALUES (?, ?, ?) ON CONFLICT(did) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at'
   )
     .bind(did, JSON.stringify(preferences ?? []), now)

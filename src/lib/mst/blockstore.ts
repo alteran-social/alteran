@@ -31,7 +31,7 @@ export class D1Blockstore implements WritableBlockstore {
   constructor(private env: Env) {}
 
   async get(cid: CID): Promise<Uint8Array | null> {
-    const row = await this.env.DB.prepare(
+    const row = await this.env.ALTERAN_DB.prepare(
       `SELECT bytes FROM blockstore WHERE cid = ? LIMIT 1`
     ).bind(cid.toString()).first();
 
@@ -43,7 +43,7 @@ export class D1Blockstore implements WritableBlockstore {
 
   async has(cid: CID): Promise<boolean> {
     // Treat rows with NULL or empty bytes as missing
-    const row = await this.env.DB.prepare(
+    const row = await this.env.ALTERAN_DB.prepare(
       `SELECT bytes FROM blockstore WHERE cid = ? LIMIT 1`
     ).bind(cid.toString()).first();
 
@@ -65,7 +65,7 @@ export class D1Blockstore implements WritableBlockstore {
     for (let i = 0; i < cids.length; i += BATCH) {
       const chunk = cids.slice(i, i + BATCH);
       const placeholders = new Array(chunk.length).fill('?').join(',');
-      const stmt = this.env.DB.prepare(`SELECT cid, bytes FROM blockstore WHERE cid IN (${placeholders})`);
+      const stmt = this.env.ALTERAN_DB.prepare(`SELECT cid, bytes FROM blockstore WHERE cid IN (${placeholders})`);
       const binds = chunk.map((c) => c.toString());
       const response = await stmt.bind(...binds).all();
       const rows = (response.results ?? []) as Array<{ cid: string; bytes: string }>;
@@ -97,7 +97,7 @@ export class D1Blockstore implements WritableBlockstore {
 
     // Always upsert: replace rows with NULL/empty bytes
     try {
-      await this.env.DB.prepare(
+      await this.env.ALTERAN_DB.prepare(
         `INSERT OR REPLACE INTO blockstore (cid, bytes) VALUES (?, ?)`
       ).bind(cidStr, base64).run();
     } catch (error) {
@@ -117,7 +117,7 @@ export class D1Blockstore implements WritableBlockstore {
     const entries = Array.from(blocks.entries());
     for (let i = 0; i < entries.length; i += BATCH_SIZE) {
       const batch = entries.slice(i, i + BATCH_SIZE);
-      const stmts = [] as Array<ReturnType<typeof this.env.DB['prepare']>>;
+      const stmts = [] as Array<ReturnType<typeof this.env.ALTERAN_DB['prepare']>>;
       for (const [cid, bytes] of batch) {
         const cidStr = cid.toString();
         let binary = '';
@@ -127,12 +127,12 @@ export class D1Blockstore implements WritableBlockstore {
         }
         const base64 = btoa(binary);
         stmts.push(
-          this.env.DB.prepare(`INSERT OR REPLACE INTO blockstore (cid, bytes) VALUES (?, ?)`)
+          this.env.ALTERAN_DB.prepare(`INSERT OR REPLACE INTO blockstore (cid, bytes) VALUES (?, ?)`)
             .bind(cidStr, base64)
         );
       }
       if (stmts.length > 0) {
-        await this.env.DB.batch(stmts);
+        await this.env.ALTERAN_DB.batch(stmts);
       }
     }
   }

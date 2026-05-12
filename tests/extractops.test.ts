@@ -28,7 +28,7 @@ async function storeMst(blockstore: D1Blockstore, mst: MST): Promise<void> {
 describe('RepoManager.extractOps (functional)', () => {
   it('detects create, update, and delete by diffing MST roots', async () => {
     const env = await makeEnv();
-    await env.DB.exec("CREATE TABLE IF NOT EXISTS blockstore (cid TEXT PRIMARY KEY, bytes TEXT)");
+    await env.ALTERAN_DB.exec("CREATE TABLE IF NOT EXISTS blockstore (cid TEXT PRIMARY KEY, bytes TEXT)");
     const store = new D1Blockstore(env);
 
     // Start with empty tree
