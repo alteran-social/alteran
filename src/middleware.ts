@@ -1,5 +1,13 @@
 import { defineMiddleware, sequence } from 'astro/middleware';
 
+// Response.redirect() (and a few other constructors) returns a Response whose
+// headers are immutable. Re-wrap into a fresh Response so downstream middleware
+// can attach CORS / X-Request-ID without throwing "Can't modify immutable
+// headers" at the Workers runtime.
+function ensureMutableResponse(response: Response): Response {
+  return new Response(response.body, response);
+}
+
 const cors = defineMiddleware(async ({ locals, request }, next) => {
   // Match atproto CORS implementation: use wildcard for public endpoints
   // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin
@@ -20,7 +28,7 @@ const cors = defineMiddleware(async ({ locals, request }, next) => {
     return new Response(null, { status: 204, headers });
   }
 
-  const response = await next();
+  const response = ensureMutableResponse(await next());
 
   // Set CORS headers on all responses (atproto standard)
   response.headers.set('Access-Control-Allow-Origin', '*');
@@ -43,7 +51,7 @@ const logger = defineMiddleware(async ({ request, locals }, next) => {
   const url = new URL(request.url);
 
   try {
-    const response = await next();
+    const response = ensureMutableResponse(await next());
     const dur = Date.now() - start;
 
     // Structured logging
