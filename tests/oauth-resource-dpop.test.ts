@@ -11,6 +11,8 @@ import { GET as getSession } from '../src/pages/xrpc/com.atproto.server.getSessi
 import { GET as getPreferences } from '../src/pages/xrpc/app.bsky.actor.getPreferences';
 import { GET as catchallGet } from '../src/pages/xrpc/[...nsid]';
 
+const testRepoSigningKey = '8b5e3d226b44c4c88fbd3d4529f6283fb2b20f6deee8a0b34e7f0a9b12d3e4f1';
+
 async function issueOAuthAccess(
   env: any,
   key: Awaited<ReturnType<typeof makeDpopKey>>,
@@ -96,7 +98,7 @@ describe('OAuth resource DPoP binding', () => {
   });
 
   it('accepts DPoP tokens through shared authenticated XRPC routes', async () => {
-    const env = await makeEnv();
+    const env = await makeEnv({ REPO_SIGNING_KEY: testRepoSigningKey });
     const key = await makeDpopKey();
     const access = await issueOAuthAccess(env, key);
 

@@ -251,7 +251,7 @@ describe('ATProto auth scopes', () => {
       auth: {
         token: 'bad-token',
         claims: { sub: did, scope: 'mystery.scope', t: 'access' },
-        access: bearerAccessContext(AuthScope.Access),
+        access: bearerAccessContext(AuthScope.Access, 'active'),
       },
     });
     expect(response.status).toBe(401);
@@ -269,7 +269,7 @@ describe('ATProto auth scopes', () => {
       auth: {
         token: 'oauth-token',
         claims: { sub: did, scope: 'atproto', t: 'access' },
-        access: oauthAccessContext('atproto'),
+        access: oauthAccessContext('atproto', 'active'),
       },
     });
     expect(oauth.status).toBe(400);
@@ -281,7 +281,7 @@ describe('ATProto auth scopes', () => {
       auth: {
         token: 'app-pass-token',
         claims: { sub: did, scope: AuthScope.AppPass, t: 'access' },
-        access: bearerAccessContext(AuthScope.AppPass),
+        access: bearerAccessContext(AuthScope.AppPass, 'active'),
       },
     });
     expect(appPass.status).toBe(400);

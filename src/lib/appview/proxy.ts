@@ -100,8 +100,8 @@ export async function proxyAppView({
     );
   }
 
-  if (auth.access.isTakendown) {
-    return new Response(JSON.stringify({ error: 'AccountTakendown' }), {
+  if (auth.access.accountStatus !== 'active') {
+    return new Response(JSON.stringify({ error: 'AccountInactive', message: 'Account is not active' }), {
       status: 403,
       headers: { 'Content-Type': 'application/json' },
     });
@@ -169,24 +169,22 @@ export async function proxyAppView({
     }
   }
 
-  // Service JWT is best-effort. Public AppView endpoints accept unauthenticated
-  // reads, so a mint failure here should not block the proxy — we forward
-  // without an Authorization header and let the upstream decide. Common
-  // reasons we silently fall through: missing signing key on the viewer's DID
-  // document, transient PLC lookup failure, or unsupported issuer DID method.
-  let serviceJwt: string | null = null;
+  let serviceJwt: string;
   try {
     const issuerDid = auth.claims.sub;
     if (!issuerDid || !issuerDid.startsWith('did:')) {
       throw new Error(`Invalid issuer DID: ${issuerDid || '(empty)'}`);
     }
-    serviceJwt = await createServiceJwt(env, issuerDid, target.did, lxm);
+    serviceJwt = await createServiceJwt(env, issuerDid, audience, lxm);
   } catch (error) {
     console.error('AppView service token error:', error);
-    serviceJwt = null;
+    return new Response(JSON.stringify({ error: 'ServiceAuthFailed' }), {
+      status: 502,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
-  if (serviceJwt) headers.set('authorization', `Bearer ${serviceJwt}`);
+  headers.set('authorization', `Bearer ${serviceJwt}`);
 
   const method = request.method.toUpperCase();
   if (method !== 'GET' && method !== 'HEAD' && method !== 'POST') {
