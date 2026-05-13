@@ -5,10 +5,12 @@ import { canWriteRepo } from '../../lib/auth-scope';
 import { checkRate } from '../../lib/ratelimit';
 import { readJsonBounded } from '../../lib/util';
 import { notifySequencer } from '../../lib/sequencer';
-import { setRecordBlobUsage } from '../../db/dal';
 import {
+  assertRepoWriteInput,
   handleRepoWriteError,
+  jsonError,
   preparePutRecord,
+  putRecordAuthorizations,
 } from '../../lib/repo-write-validation';
 
 export const prerender = false;
@@ -26,43 +28,53 @@ export async function POST({ locals, request }: APIContext) {
     throw error;
   }
 
-  const rateLimitResponse = await checkRate(env, request, 'writes');
-  if (rateLimitResponse) return rateLimitResponse;
-
   let body: any;
   try {
     body = await readJsonBounded(env, request);
   } catch (e) {
     if (errorCode(e) === 'PayloadTooLarge') {
-      return new Response(JSON.stringify({ error: 'PayloadTooLarge' }), { status: 413 });
+      return jsonError('PayloadTooLarge', undefined, 413);
     }
-    return new Response(JSON.stringify({ error: 'BadRequest' }), { status: 400 });
+    return jsonError('BadRequest');
   }
 
   try {
-    const prepared = await preparePutRecord(env, auth, body);
-    const { write, repo } = prepared;
-    if (!canWriteRepo(auth.access, write.collection, 'update')) return insufficientScopeResponse();
+    const input = assertRepoWriteInput('com.atproto.repo.putRecord', body);
+    for (const write of putRecordAuthorizations(input)) {
+      if (!canWriteRepo(auth.access, write.collection, write.action)) return insufficientScopeResponse();
+    }
 
-    const result = await repo.putRecord(write.collection, write.rkey, write.record);
-    await setRecordBlobUsage(env, result.uri, write.blobKeys);
-    await notifySequencer(env, {
-      did: prepared.did,
-      commitCid: result.commitCid,
-      rev: result.rev,
-      data: result.commitData,
-      sig: result.sig,
-      ops: result.ops,
-      blocks: result.blocks
-    });
+    const rateLimitResponse = await checkRate(env, request, 'writes');
+    if (rateLimitResponse) return rateLimitResponse;
+
+    const prepared = await preparePutRecord(env, auth, input);
+    const { write, repo } = prepared;
+    const result = await repo.putRecord(
+      write.collection,
+      write.rkey,
+      write.record,
+      write.blobKeys,
+      prepared.currentCommitCid,
+    );
+    if (result.commitCid && result.rev && result.commitData && result.sig && result.blocks) {
+      await notifySequencer(env, {
+        did: prepared.did,
+        commitCid: result.commitCid,
+        rev: result.rev,
+        data: result.commitData,
+        sig: result.sig,
+        ops: result.ops,
+        blocks: result.blocks
+      });
+    }
 
     return new Response(JSON.stringify({
       uri: result.uri,
       cid: result.cid,
-      commit: {
+      ...(result.commitCid && result.rev ? { commit: {
         cid: result.commitCid,
         rev: result.rev,
-      },
+      } } : {}),
       validationStatus: write.validationStatus,
     }), {
       headers: { 'Content-Type': 'application/json' },

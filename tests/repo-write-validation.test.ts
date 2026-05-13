@@ -3,6 +3,8 @@ import { CID } from 'multiformats/cid';
 import { sha256 } from 'multiformats/hashes/sha2';
 import { makeEnv } from './helpers/env';
 import { issueSessionTokens } from '../src/lib/session-tokens';
+import { makeDpopKey, signResourceDpop } from './helpers/oauth';
+import { createOAuthSession, storeRefreshToken } from '../src/db/account';
 import { putBlobRef, listRecords } from '../src/db/dal';
 import * as CreateRecord from '../src/pages/xrpc/com.atproto.repo.createRecord';
 import * as PutRecord from '../src/pages/xrpc/com.atproto.repo.putRecord';
@@ -19,6 +21,55 @@ function apiContext(env: Awaited<ReturnType<typeof makeEnv>>, request: Request) 
 async function authHeader(env: Awaited<ReturnType<typeof makeEnv>>, did = String(env.PDS_DID)) {
   const { accessJwt } = await issueSessionTokens(env, did);
   return { authorization: `Bearer ${accessJwt}` };
+}
+
+async function issueOAuthAccess(
+  env: Awaited<ReturnType<typeof makeEnv>>,
+  scope: string,
+  url: string,
+) {
+  const key = await makeDpopKey();
+  const sessionId = crypto.randomUUID().replace(/-/g, '');
+  const accessJti = crypto.randomUUID().replace(/-/g, '');
+  const { accessJwt, refreshPayload, refreshExpiry, accessPayload } = await issueSessionTokens(
+    env,
+    String(env.PDS_DID),
+    {
+      scope,
+      clientId: 'https://client.example/metadata',
+      dpopJkt: key.jkt,
+      oauthSessionId: sessionId,
+      accessJti,
+    },
+  );
+  await createOAuthSession(env, {
+    id: sessionId,
+    did: String(env.PDS_DID),
+    clientId: 'https://client.example/metadata',
+    clientAuthMethod: 'none',
+    clientAuthKeyId: null,
+    dpopJkt: key.jkt,
+    scope,
+    currentRefreshTokenId: refreshPayload.jti,
+    accessJti: String(accessPayload.jti),
+    expiresAt: refreshExpiry,
+  });
+  await storeRefreshToken(env, {
+    id: refreshPayload.jti,
+    did: String(env.PDS_DID),
+    expiresAt: refreshExpiry,
+    tokenKind: 'oauth',
+    oauthSessionId: sessionId,
+    clientId: 'https://client.example/metadata',
+    clientAuthMethod: 'none',
+    dpopJkt: key.jkt,
+    oauthScope: scope,
+    accessJti: String(accessPayload.jti),
+  });
+  return {
+    authorization: `DPoP ${accessJwt}`,
+    dpop: await signResourceDpop(env, key, 'POST', url, accessJwt),
+  };
 }
 
 function postRecord(text = 'hello', extra: Record<string, unknown> = {}) {
@@ -43,12 +94,14 @@ async function callRoute(
   env: Awaited<ReturnType<typeof makeEnv>>,
   body: unknown,
   did = String(env.PDS_DID),
+  headers?: Record<string, string>,
+  url = 'https://pds.example/xrpc',
 ) {
-  const request = new Request('https://pds.example/xrpc', {
+  const request = new Request(url, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      ...(await authHeader(env, did)),
+      ...(headers ?? await authHeader(env, did)),
     },
     body: JSON.stringify(body),
   });
@@ -141,6 +194,18 @@ describe('repo write validation', () => {
     expect((await json(res)).error).toBe('InvalidRequest');
   });
 
+  it('accepts the configured handle case-insensitively as the repo identifier', async () => {
+    const env = await makeEnv();
+    const res = await callRoute(CreateRecord, env, {
+      repo: 'TEST.EXAMPLE',
+      collection: 'app.bsky.feed.post',
+      record: postRecord('by handle'),
+    });
+
+    expect(res.status).toBe(200);
+    expect((await json(res)).uri).toMatch(/^at:\/\/did:example:test\/app\.bsky\.feed\.post\//);
+  });
+
   it('preserves validate tri-state behavior', async () => {
     const env = await makeEnv();
 
@@ -159,7 +224,7 @@ describe('repo write validation', () => {
       record: { $type: 'app.bsky.feed.post' },
     });
     expect(skipped.status).toBe(200);
-    expect((await json(skipped)).validationStatus).toBe('unknown');
+    expect((await json(skipped)).validationStatus).toBeUndefined();
 
     const knownInvalid = await callRoute(CreateRecord, env, {
       repo: env.PDS_DID,
@@ -225,12 +290,14 @@ describe('repo write validation', () => {
       collection: 'com.example.record',
       rkey: 'raw-valid',
       record: {
-        $type: 'com.example.record',
         link: { $link: validLink },
         bytes: { $bytes: 'YWJjZA' },
+        $unknown: 'ignored protocol extension',
       },
     });
     expect(valid.status).toBe(200);
+    const validBody = await json(valid);
+    expect(validBody.validationStatus).toBe('unknown');
 
     const invalidLink = await callRoute(CreateRecord, env, {
       repo: env.PDS_DID,
@@ -267,6 +334,63 @@ describe('repo write validation', () => {
     });
     expect(invalidFloat.status).toBe(400);
     expect((await json(invalidFloat)).error).toBe('InvalidRequest');
+
+    const legacyBlob = await callRoute(CreateRecord, env, {
+      repo: env.PDS_DID,
+      collection: 'com.example.record',
+      rkey: 'legacy-blob',
+      validate: false,
+      record: {
+        $type: 'com.example.record',
+        nested: { cid: validLink, mimeType: 'image/png' },
+      },
+    });
+    expect(legacyBlob.status).toBe(400);
+    expect((await json(legacyBlob)).error).toBe('InvalidRequest');
+  });
+
+  it('rejects non-JSON write request content types', async () => {
+    const env = await makeEnv();
+    const request = new Request('https://pds.example/xrpc/com.atproto.repo.createRecord', {
+      method: 'POST',
+      headers: {
+        'content-type': 'text/plain',
+        ...(await authHeader(env)),
+      },
+      body: JSON.stringify({
+        repo: env.PDS_DID,
+        collection: 'app.bsky.feed.post',
+        record: postRecord(),
+      }),
+    });
+
+    const res = await CreateRecord.POST(apiContext(env, request));
+    expect(res.status).toBe(400);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect((await json(res)).error).toBe('BadRequest');
+  });
+
+  it('checks route-level repo scopes before rate or account-state reads', async () => {
+    const env = await makeEnv({ PDS_RATE_LIMIT_PER_MIN: '0' });
+    const url = 'https://pds.example/xrpc/com.atproto.repo.applyWrites';
+    const headers = await issueOAuthAccess(env, 'atproto repo:app.bsky.feed.post?action=create', url);
+
+    const res = await callRoute(ApplyWrites, env, {
+      repo: env.PDS_DID,
+      writes: [{
+        $type: 'com.atproto.repo.applyWrites#delete',
+        collection: 'app.bsky.feed.post',
+        rkey: 'missing',
+      }],
+    }, String(env.PDS_DID), headers, url);
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect((await json(res)).error).toBe('InvalidToken');
+    const rateRows = await env.ALTERAN_DB.prepare('SELECT count(*) AS count FROM sqlite_master WHERE name = ?')
+      .bind('rate_limit')
+      .first<{ count: number }>();
+    expect(rateRows?.count).toBe(0);
   });
 
   it('enforces swapCommit and swapRecord preconditions', async () => {
@@ -313,6 +437,44 @@ describe('repo write validation', () => {
     expect((await json(nullMismatch)).error).toBe('InvalidSwap');
   });
 
+  it('omits commit and sequenced side effects for identical putRecord writes', async () => {
+    const env = await makeEnv();
+    await createPost(env, { rkey: '3m2biurz7cl27' });
+    const before = await env.ALTERAN_DB.prepare('SELECT cid FROM commit_log').all();
+
+    const noOp = await callRoute(PutRecord, env, {
+      repo: env.PDS_DID,
+      collection: 'app.bsky.feed.post',
+      rkey: '3m2biurz7cl27',
+      swapCommit: WRONG_CID,
+      swapRecord: WRONG_CID,
+      record: postRecord(),
+    });
+    expect(noOp.status).toBe(200);
+    const body = await json(noOp);
+    expect(body.commit).toBeUndefined();
+
+    const after = await env.ALTERAN_DB.prepare('SELECT cid FROM commit_log').all();
+    expect(after.results).toHaveLength(before.results.length);
+  });
+
+  it('requires both create and update repo scopes for putRecord without state reads', async () => {
+    const env = await makeEnv();
+    const url = 'https://pds.example/xrpc/com.atproto.repo.putRecord';
+    const headers = await issueOAuthAccess(env, 'atproto repo:app.bsky.feed.post?action=update', url);
+
+    const res = await callRoute(PutRecord, env, {
+      repo: env.PDS_DID,
+      collection: 'app.bsky.feed.post',
+      rkey: '3m2biurz7cl27',
+      record: postRecord(),
+    }, String(env.PDS_DID), headers, url);
+
+    expect(res.status).toBe(401);
+    expect((await json(res)).error).toBe('InvalidToken');
+    expect(await listRecords(env)).toHaveLength(0);
+  });
+
   it('validates blob refs and tracks valid blob usage', async () => {
     const env = await makeEnv();
     const blob = await rawBlob();
@@ -332,6 +494,7 @@ describe('repo write validation', () => {
       record,
     });
     expect(missing.status).toBe(400);
+    expect((await json(missing)).error).toBe('BlobNotFound');
 
     await putBlobRef(env, String(env.PDS_DID), blob.cid, `blobs/by-cid/${blob.cid}`, 'image/png', blob.size + 1);
     const mismatch = await callRoute(CreateRecord, env, {
@@ -341,6 +504,7 @@ describe('repo write validation', () => {
       record,
     });
     expect(mismatch.status).toBe(400);
+    expect((await json(mismatch)).error).toBe('InvalidSize');
 
     const env2 = await makeEnv();
     await putBlobRef(env2, String(env2.PDS_DID), blob.cid, `blobs/by-cid/${blob.cid}`, 'image/png', blob.size);
@@ -412,5 +576,32 @@ describe('repo write validation', () => {
     expect(await listRecords(env)).toHaveLength(2);
     const commits = await env.ALTERAN_DB.prepare('SELECT cid FROM commit_log').all();
     expect(commits.results).toHaveLength(1);
+  });
+
+  it('rejects oversized and missing-record applyWrites batches before mutation', async () => {
+    const env = await makeEnv();
+    const tooMany = await callRoute(ApplyWrites, env, {
+      repo: env.PDS_DID,
+      writes: Array.from({ length: 201 }, () => ({
+        $type: 'com.atproto.repo.applyWrites#create',
+        collection: 'com.example.record',
+        value: { $type: 'com.example.record', value: 'x' },
+      })),
+    });
+    expect(tooMany.status).toBe(400);
+    expect((await json(tooMany)).error).toBe('InvalidRequest');
+    expect(await listRecords(env)).toHaveLength(0);
+
+    const missingDelete = await callRoute(ApplyWrites, env, {
+      repo: env.PDS_DID,
+      writes: [{
+        $type: 'com.atproto.repo.applyWrites#delete',
+        collection: 'com.example.record',
+        rkey: 'missing',
+      }],
+    });
+    expect(missingDelete.status).toBe(400);
+    expect((await json(missingDelete)).error).toBe('InvalidRequest');
+    expect(await listRecords(env)).toHaveLength(0);
   });
 });

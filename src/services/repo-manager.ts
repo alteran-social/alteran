@@ -6,17 +6,22 @@ import { repo_root } from '../db/schema';
 import { eq, sql } from 'drizzle-orm';
 import type { RepoOp } from '../lib/firehose/frames';
 import {
-  putRecord as dalPutRecord,
-  deleteRecord as dalDeleteRecord,
-  setRecordBlobUsage,
+  putRecordStatements,
+  deleteRecordStatements,
+  setRecordBlobUsageStatements,
 } from '../db/dal';
 import { bumpRoot } from '../db/repo';
 import { generateTid } from '../lib/commit';
 import { resolveSecret } from '../lib/secrets';
 import { storeRecord, storeMstBlocks } from './repo/blockstore-ops';
+import { cidForCbor } from '../lib/mst/util';
 import { extractOps as extractOpsImpl } from './repo/operations';
 import { ServerMisconfigured } from '../lib/errors';
-import type { PreparedWrite } from '../lib/repo-write-validation';
+import {
+  RepoWriteError,
+  type PreparedWrite,
+  type ValidationStatus,
+} from '../lib/repo-write-validation';
 
 interface RecordMutation {
   mst: MST;
@@ -36,6 +41,19 @@ interface CommitResult {
   blocks: string;
 }
 
+interface NoopRecordResult {
+  uri: string;
+  cid: string;
+  ops: RepoOp[];
+  commitCid?: undefined;
+  rev?: undefined;
+  commitData?: undefined;
+  sig?: undefined;
+  blocks?: undefined;
+}
+
+type RecordWriteResult = CommitResult | NoopRecordResult;
+
 export interface BatchCommitResult {
   commit: {
     cid: string;
@@ -51,7 +69,7 @@ export interface BatchCommitResult {
     $type: string;
     uri?: string;
     cid?: string;
-    validationStatus?: 'valid' | 'unknown';
+    validationStatus?: ValidationStatus;
   }>;
 }
 
@@ -69,42 +87,36 @@ export class RepoManager {
   }
 
   async getRoot(): Promise<MST | null> {
-    try {
-      const db = drizzle(this.env.ALTERAN_DB);
-      const did = await this.getDid();
+    const db = drizzle(this.env.ALTERAN_DB);
+    const did = await this.getDid();
 
-      const rows = await db
-        .select()
-        .from(repo_root)
-        .where(eq(repo_root.did, did))
-        .limit(1);
+    const rows = await db
+      .select()
+      .from(repo_root)
+      .where(eq(repo_root.did, did))
+      .limit(1);
 
-      const row = rows[0];
-      if (!row) return null;
+    const row = rows[0];
+    if (!row) return null;
 
-      const commit = await this.env.ALTERAN_DB.prepare(
-        `SELECT data FROM commit_log WHERE cid = ? LIMIT 1`,
-      )
-        .bind(row.commitCid)
-        .first();
+    const commit = await this.env.ALTERAN_DB.prepare(
+      `SELECT data FROM commit_log WHERE cid = ? LIMIT 1`,
+    )
+      .bind(row.commitCid)
+      .first();
 
-      if (!commit) {
-        console.error(`[RepoManager] No commit found for CID: ${row.commitCid}`);
-        return null;
-      }
-
-      const parsed = JSON.parse(String(commit.data));
-      const mstRoot = CID.parse(String(parsed.data));
-
-      console.log(
-        `[RepoManager] Loading MST root: ${mstRoot.toString()} from commit: ${row.commitCid}`,
-      );
-
-      return MST.load(this.blockstore, mstRoot);
-    } catch (error) {
-      console.error('[RepoManager] Error in getRoot:', error);
-      return null;
+    if (!commit) {
+      throw new Error(`repo root points at missing commit ${row.commitCid}`);
     }
+
+    const parsed = JSON.parse(String(commit.data));
+    const mstRoot = CID.parse(String(parsed.data));
+
+    console.log(
+      `[RepoManager] Loading MST root: ${mstRoot.toString()} from commit: ${row.commitCid}`,
+    );
+
+    return MST.load(this.blockstore, mstRoot);
   }
 
   async getOrCreateRoot(): Promise<MST> {
@@ -141,6 +153,8 @@ export class RepoManager {
     collection: string,
     record: unknown,
     rkey?: string,
+    blobKeys: string[] = [],
+    expectedCommitCid?: string | null,
   ): Promise<CommitResult> {
     const key = rkey ?? generateTid();
     const { mst, recordCid, prevMstRoot, newMstBlocks } = await this.addRecord(
@@ -151,19 +165,25 @@ export class RepoManager {
 
     const did = await this.getDid();
     const uri = `at://${did}/${collection}/${key}`;
-    await dalPutRecord(this.env, {
-      uri,
-      did,
-      cid: recordCid.toString(),
-      json: JSON.stringify(record),
-    });
 
     const currentRoot = await mst.getPointer();
     const { commitCid, rev, ops, commitData, sig, blocks } = await bumpRoot(
       this.env,
       prevMstRoot ?? undefined,
       currentRoot,
-      { newMstBlocks: Array.from(newMstBlocks) },
+      {
+        newMstBlocks: Array.from(newMstBlocks),
+        expectedCommitCid,
+        sideEffectStatements: (guard) => [
+          ...putRecordStatements(this.env, {
+            uri,
+            did,
+            cid: recordCid.toString(),
+            json: JSON.stringify(record),
+          }, guard),
+          ...setRecordBlobUsageStatements(this.env, uri, blobKeys, guard),
+        ],
+      },
     );
 
     return { uri, cid: recordCid.toString(), commitCid, rev, ops, commitData, sig, blocks };
@@ -183,30 +203,47 @@ export class RepoManager {
     return { mst: newMst, recordCid, prevMstRoot, newMstBlocks };
   }
 
-  async putRecord(collection: string, rkey: string, record: unknown): Promise<CommitResult> {
+  async putRecord(
+    collection: string,
+    rkey: string,
+    record: unknown,
+    blobKeys: string[] = [],
+    expectedCommitCid?: string | null,
+  ): Promise<RecordWriteResult> {
     const key = `${collection}/${rkey}`;
     const currentMst = await this.getOrCreateRoot();
     const prevMstRoot = await currentMst.getPointer();
     const existingCid = await currentMst.get(key);
-    const recordCid = await storeRecord(this.blockstore, record);
+    const recordCid = await cidForCbor(record);
+    const did = await this.getDid();
+    const uri = `at://${did}/${collection}/${rkey}`;
+    if (existingCid?.toString() === recordCid.toString()) {
+      return { uri, cid: recordCid.toString(), ops: [] };
+    }
+
+    await storeRecord(this.blockstore, record);
     const mst = existingCid
       ? await currentMst.update(key, recordCid)
       : await currentMst.add(key, recordCid);
     const newMstBlocks = await storeMstBlocks(this.blockstore, mst);
-    const did = await this.getDid();
-    const uri = `at://${did}/${collection}/${rkey}`;
-    await dalPutRecord(this.env, {
-      uri,
-      did,
-      cid: recordCid.toString(),
-      json: JSON.stringify(record),
-    });
     const currentRoot = await mst.getPointer();
     const { commitCid, rev, ops, commitData, sig, blocks } = await bumpRoot(
       this.env,
       prevMstRoot ?? undefined,
       currentRoot,
-      { newMstBlocks: Array.from(newMstBlocks) },
+      {
+        newMstBlocks: Array.from(newMstBlocks),
+        expectedCommitCid,
+        sideEffectStatements: (guard) => [
+          ...putRecordStatements(this.env, {
+            uri,
+            did,
+            cid: recordCid.toString(),
+            json: JSON.stringify(record),
+          }, guard),
+          ...setRecordBlobUsageStatements(this.env, uri, blobKeys, guard),
+        ],
+      },
     );
     return { uri, cid: recordCid.toString(), commitCid, rev, ops, commitData, sig, blocks };
   }
@@ -217,7 +254,10 @@ export class RepoManager {
     return currentMst.get(`${collection}/${rkey}`);
   }
 
-  async applyPreparedWrites(writes: PreparedWrite[]): Promise<BatchCommitResult> {
+  async applyPreparedWrites(
+    writes: PreparedWrite[],
+    expectedCommitCid?: string | null,
+  ): Promise<BatchCommitResult> {
     const did = await this.getDid();
     let mst = await this.getOrCreateRoot();
     const prevMstRoot = await mst.getPointer();
@@ -233,24 +273,41 @@ export class RepoManager {
       const uri = `at://${did}/${path}`;
       if (write.action === 'delete') {
         const prev = await mst.get(path);
-        if (prev) {
-          mst = await mst.delete(path);
-          ops.push({ action: 'delete', path, cid: null, prev });
-          sideEffects.push({ action: 'delete', uri });
-        }
+        if (!prev) throw new RepoWriteError('InvalidRequest', 'record does not exist');
+        mst = await mst.delete(path);
+        ops.push({ action: 'delete', path, cid: null, prev });
+        sideEffects.push({ action: 'delete', uri });
         results.push({ $type: 'com.atproto.repo.applyWrites#deleteResult' });
         continue;
       }
 
       const prev = await mst.get(path);
-      const recordCid = await storeRecord(this.blockstore, write.record);
-      if (prev) {
+      if (write.action === 'update') {
+        if (!prev) throw new RepoWriteError('InvalidRequest', 'record does not exist');
+        const recordCid = await storeRecord(this.blockstore, write.record);
         mst = await mst.update(path, recordCid);
         ops.push({ action: 'update', path, cid: recordCid, prev });
-      } else {
-        mst = await mst.add(path, recordCid);
-        ops.push({ action: 'create', path, cid: recordCid });
+        const cid = recordCid.toString();
+        sideEffects.push({
+          action: 'put',
+          uri,
+          cid,
+          record: write.record,
+          blobKeys: write.blobKeys,
+        });
+        results.push({
+          $type: 'com.atproto.repo.applyWrites#updateResult',
+          uri,
+          cid,
+          validationStatus: write.validationStatus,
+        });
+        continue;
       }
+
+      if (prev) throw new RepoWriteError('InvalidRequest', 'record already exists');
+      const recordCid = await storeRecord(this.blockstore, write.record);
+      mst = await mst.add(path, recordCid);
+      ops.push({ action: 'create', path, cid: recordCid });
       const cid = recordCid.toString();
       sideEffects.push({
         action: 'put',
@@ -260,17 +317,11 @@ export class RepoManager {
         blobKeys: write.blobKeys,
       });
       results.push({
-        $type: write.action === 'create'
-          ? 'com.atproto.repo.applyWrites#createResult'
-          : 'com.atproto.repo.applyWrites#updateResult',
+        $type: 'com.atproto.repo.applyWrites#createResult',
         uri,
         cid,
         validationStatus: write.validationStatus,
       });
-    }
-
-    if (ops.length === 0) {
-      return { commit: null, ops, results };
     }
 
     const currentRoot = await mst.getPointer();
@@ -282,23 +333,26 @@ export class RepoManager {
       {
         ops,
         newMstBlocks: Array.from(newMstBlocks),
+        expectedCommitCid,
+        sideEffectStatements: (guard) => sideEffects.flatMap((effect) => {
+          if (effect.action === 'delete') {
+            return [
+              ...deleteRecordStatements(this.env, effect.uri, guard),
+              ...setRecordBlobUsageStatements(this.env, effect.uri, [], guard),
+            ];
+          }
+          return [
+            ...putRecordStatements(this.env, {
+              uri: effect.uri,
+              did,
+              cid: effect.cid,
+              json: JSON.stringify(effect.record),
+            }, guard),
+            ...setRecordBlobUsageStatements(this.env, effect.uri, effect.blobKeys, guard),
+          ];
+        }),
       },
     );
-
-    for (const effect of sideEffects) {
-      if (effect.action === 'delete') {
-        await dalDeleteRecord(this.env, effect.uri);
-        await setRecordBlobUsage(this.env, effect.uri, []);
-      } else {
-        await dalPutRecord(this.env, {
-          uri: effect.uri,
-          did,
-          cid: effect.cid,
-          json: JSON.stringify(effect.record),
-        });
-        await setRecordBlobUsage(this.env, effect.uri, effect.blobKeys);
-      }
-    }
 
     return {
       commit: { cid: commitCid, rev },
@@ -315,18 +369,19 @@ export class RepoManager {
   async deleteRecord(
     collection: string,
     rkey: string,
-  ): Promise<{ mst: MST; prevMstRoot: CID | null; uri: string; newMstBlocks: BlockMap }> {
+  ): Promise<{ mst: MST; prevMstRoot: CID | null; uri: string; newMstBlocks: BlockMap; currentCid: CID }> {
     const key = `${collection}/${rkey}`;
     const currentMst = await this.getOrCreateRoot();
     const prevMstRoot = await currentMst.getPointer();
+    const currentCid = await currentMst.get(key);
+    if (!currentCid) throw new RepoWriteError('InvalidRequest', 'record does not exist');
     const newMst = await currentMst.delete(key);
     const newMstBlocks = await storeMstBlocks(this.blockstore, newMst);
 
     const did = await this.getDid();
     const uri = `at://${did}/${collection}/${rkey}`;
-    await dalDeleteRecord(this.env, uri);
 
-    return { mst: newMst, prevMstRoot, uri, newMstBlocks };
+    return { mst: newMst, prevMstRoot, uri, newMstBlocks, currentCid };
   }
 
   async getRecord(collection: string, rkey: string): Promise<unknown | null> {

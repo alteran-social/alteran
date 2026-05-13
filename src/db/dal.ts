@@ -1,22 +1,17 @@
+import type { D1PreparedStatement } from '@cloudflare/workers-types';
 import { getDb } from './client';
 import { record, type NewRecordRow, blob_ref, blob_usage, blob_quota } from './schema';
 import type { Env } from '../env';
 import { eq, inArray, and, sql } from 'drizzle-orm';
 import { type AccountState, toRow, fromRow } from '../lib/account-state';
 
+export type CommitGuard = {
+  did: string;
+  commitCid: string;
+};
+
 export async function putRecord(env: Env, row: NewRecordRow) {
-  const db = getDb(env);
-  const toInsert: NewRecordRow = {
-    ...row,
-    createdAt: row.createdAt ?? Date.now(),
-  };
-  await db.insert(record).values(toInsert).onConflictDoUpdate({
-    target: record.uri,
-    set: {
-      cid: sql.raw(`excluded.${record.cid.name}`),
-      json: sql.raw(`excluded.${record.json.name}`)
-    }
-  });
+  await env.ALTERAN_DB.batch(putRecordStatements(env, row));
 }
 
 export async function getRecord(env: Env, uri: string) {
@@ -26,8 +21,7 @@ export async function getRecord(env: Env, uri: string) {
 }
 
 export async function deleteRecord(env: Env, uri: string) {
-  const db = getDb(env);
-  await db.delete(record).where(eq(record.uri, uri)).run();
+  await env.ALTERAN_DB.batch(deleteRecordStatements(env, uri));
 }
 
 export async function listRecords(env: Env) {
@@ -58,13 +52,120 @@ export async function putBlobRef(env: Env, did: string, cid: string, key: string
 }
 
 export async function setRecordBlobUsage(env: Env, uri: string, keys: string[]) {
-  const db = getDb(env);
-  // remove existing usage for this record
-  await db.delete(blob_usage).where(eq(blob_usage.recordUri, uri)).run();
-  // insert new usage
-  for (const key of new Set(keys)) {
-    await db.insert(blob_usage).values({ recordUri: uri, key }).run();
+  await env.ALTERAN_DB.batch(setRecordBlobUsageStatements(env, uri, keys));
+}
+
+export function putRecordStatements(
+  env: Env,
+  row: NewRecordRow,
+  guard?: CommitGuard,
+): D1PreparedStatement[] {
+  const toInsert: NewRecordRow = {
+    ...row,
+    createdAt: row.createdAt ?? Date.now(),
+  };
+  if (guard) {
+    return [
+      env.ALTERAN_DB.prepare(
+        `INSERT OR IGNORE INTO record (uri, did, cid, json, created_at)
+         SELECT ?, ?, ?, ?, ?
+         WHERE EXISTS (
+           SELECT 1 FROM repo_root WHERE did = ? AND commit_cid = ?
+         )`,
+      ).bind(
+        toInsert.uri,
+        toInsert.did,
+        toInsert.cid,
+        toInsert.json,
+        toInsert.createdAt ?? 0,
+        guard.did,
+        guard.commitCid,
+      ),
+      env.ALTERAN_DB.prepare(
+        `UPDATE record
+         SET cid = ?, json = ?
+         WHERE uri = ?
+           AND EXISTS (
+             SELECT 1 FROM repo_root WHERE did = ? AND commit_cid = ?
+           )`,
+      ).bind(toInsert.cid, toInsert.json, toInsert.uri, guard.did, guard.commitCid),
+    ];
   }
+  return [
+    env.ALTERAN_DB.prepare(
+      `INSERT INTO record (uri, did, cid, json, created_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(uri) DO UPDATE SET
+         cid = excluded.cid,
+         json = excluded.json`,
+    ).bind(
+      toInsert.uri,
+      toInsert.did,
+      toInsert.cid,
+      toInsert.json,
+      toInsert.createdAt ?? 0,
+    ),
+  ];
+}
+
+export function deleteRecordStatements(
+  env: Env,
+  uri: string,
+  guard?: CommitGuard,
+): D1PreparedStatement[] {
+  if (guard) {
+    return [
+      env.ALTERAN_DB.prepare(
+        `DELETE FROM record
+         WHERE uri = ?
+           AND EXISTS (
+             SELECT 1 FROM repo_root WHERE did = ? AND commit_cid = ?
+           )`,
+      ).bind(uri, guard.did, guard.commitCid),
+    ];
+  }
+  return [
+    env.ALTERAN_DB.prepare('DELETE FROM record WHERE uri = ?').bind(uri),
+  ];
+}
+
+export function setRecordBlobUsageStatements(
+  env: Env,
+  uri: string,
+  keys: string[],
+  guard?: CommitGuard,
+): D1PreparedStatement[] {
+  const statements: D1PreparedStatement[] = [
+    guard
+      ? env.ALTERAN_DB.prepare(
+        `DELETE FROM blob_usage
+         WHERE record_uri = ?
+           AND EXISTS (
+             SELECT 1 FROM repo_root WHERE did = ? AND commit_cid = ?
+           )`,
+      ).bind(uri, guard.did, guard.commitCid)
+      : env.ALTERAN_DB.prepare('DELETE FROM blob_usage WHERE record_uri = ?').bind(uri),
+  ];
+  for (const key of new Set(keys)) {
+    if (guard) {
+      statements.push(
+        env.ALTERAN_DB.prepare(
+          `INSERT OR IGNORE INTO blob_usage (record_uri, key)
+           SELECT ?, ?
+           WHERE EXISTS (
+             SELECT 1 FROM repo_root WHERE did = ? AND commit_cid = ?
+           )`,
+        ).bind(uri, key, guard.did, guard.commitCid),
+      );
+    } else {
+      statements.push(
+        env.ALTERAN_DB.prepare(
+          'INSERT INTO blob_usage (record_uri, key) VALUES (?, ?)',
+        ).bind(uri, key),
+      );
+    }
+  }
+  return statements;
 }
 
 export async function listOrphanBlobKeys(env: Env): Promise<string[]> {

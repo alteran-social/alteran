@@ -20,11 +20,20 @@ export async function readJson(request: Request): Promise<unknown> {
 }
 
 export async function readJsonBounded(env: Env, request: Request): Promise<unknown> {
+  requireJsonContentType(request);
   const raw = env.PDS_MAX_JSON_BYTES ?? '65536';
   const max = Number(raw) > 0 ? Number(raw) : 65536;
   const text = await request.text();
   if (text.length > max) throw new PayloadTooLarge();
   return JSON.parse(text || '{}');
+}
+
+export function requireJsonContentType(request: Request): void {
+  const contentType = request.headers.get('content-type') ?? '';
+  const mediaType = contentType.split(';', 1)[0]?.trim().toLowerCase();
+  if (mediaType !== 'application/json') {
+    throw new TypeError('Content-Type must be application/json');
+  }
 }
 
 export function bearerToken(request: Request): string | null {

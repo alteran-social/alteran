@@ -1,12 +1,16 @@
 import type { APIContext } from 'astro';
-import { readJson } from '../../lib/util';
+import { errorCode } from '../../lib/errors';
+import { readJsonBounded } from '../../lib/util';
 import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError, insufficientScopeResponse } from '../../lib/oauth/resource';
 import { canWriteRepo } from '../../lib/auth-scope';
 import { isAccountActive } from '../../db/dal';
 import { checkRate } from '../../lib/ratelimit';
 import { notifySequencer } from '../../lib/sequencer';
 import {
+  applyWritesAuthorizations,
+  assertRepoWriteInput,
   handleRepoWriteError,
+  jsonError,
   prepareApplyWrites,
 } from '../../lib/repo-write-validation';
 
@@ -29,29 +33,40 @@ export async function POST({ locals, request }: APIContext) {
     throw error;
   }
 
-  // Check if account is active
-  const did = env.PDS_DID as string;
-  const active = await isAccountActive(env, did);
-  if (!active) {
-    return new Response(
-      JSON.stringify({
-        error: 'AccountDeactivated',
-        message: 'Account is deactivated. Activate it before making changes.'
-      }),
-      { status: 403, headers: { 'Content-Type': 'application/json' } }
-    );
+  let body: any;
+  try {
+    body = await readJsonBounded(env, request);
+  } catch (e) {
+    if (errorCode(e) === 'PayloadTooLarge') {
+      return jsonError('PayloadTooLarge', undefined, 413);
+    }
+    return jsonError('BadRequest');
   }
 
-  const rateLimitResponse = await checkRate(env, request, 'writes');
-  if (rateLimitResponse) return rateLimitResponse;
-
   try {
-    const body = await readJson(request);
-    const prepared = await prepareApplyWrites(env, auth, body);
-    for (const write of prepared.writes) {
+    const input = assertRepoWriteInput('com.atproto.repo.applyWrites', body);
+    for (const write of applyWritesAuthorizations(input)) {
       if (!canWriteRepo(auth.access, write.collection, write.action)) return insufficientScopeResponse();
     }
-    const applied = await prepared.repo.applyPreparedWrites(prepared.writes);
+
+    const rateLimitResponse = await checkRate(env, request, 'writes');
+    if (rateLimitResponse) return rateLimitResponse;
+
+    // Check if account is active
+    const did = env.PDS_DID as string;
+    const active = await isAccountActive(env, did);
+    if (!active) {
+      return new Response(
+        JSON.stringify({
+          error: 'AccountDeactivated',
+          message: 'Account is deactivated. Activate it before making changes.'
+        }),
+        { status: 403, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const prepared = await prepareApplyWrites(env, auth, input);
+    const applied = await prepared.repo.applyPreparedWrites(prepared.writes, prepared.currentCommitCid);
 
     // Notify sequencer about the commit for firehose
     if (applied.commit && applied.commitCid && applied.rev && applied.commitData && applied.sig && applied.blocks) {

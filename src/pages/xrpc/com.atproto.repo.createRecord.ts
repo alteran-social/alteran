@@ -5,9 +5,11 @@ import { canWriteRepo } from '../../lib/auth-scope';
 import { checkRate } from '../../lib/ratelimit';
 import { readJsonBounded } from '../../lib/util';
 import { notifySequencer } from '../../lib/sequencer';
-import { setRecordBlobUsage } from '../../db/dal';
 import {
+  assertRepoWriteInput,
+  createRecordAuthorizations,
   handleRepoWriteError,
+  jsonError,
   prepareCreateRecord,
 } from '../../lib/repo-write-validation';
 
@@ -26,26 +28,34 @@ export async function POST({ locals, request }: APIContext) {
     throw error;
   }
 
-  const rateLimitResponse = await checkRate(env, request, 'writes');
-  if (rateLimitResponse) return rateLimitResponse;
-
   let body: any;
   try {
     body = await readJsonBounded(env, request);
   } catch (e) {
     if (errorCode(e) === 'PayloadTooLarge') {
-      return new Response(JSON.stringify({ error: 'PayloadTooLarge' }), { status: 413 });
+      return jsonError('PayloadTooLarge', undefined, 413);
     }
-    return new Response(JSON.stringify({ error: 'BadRequest' }), { status: 400 });
+    return jsonError('BadRequest');
   }
 
   try {
-    const prepared = await prepareCreateRecord(env, auth, body);
-    const { write, repo } = prepared;
-    if (!canWriteRepo(auth.access, write.collection, 'create')) return insufficientScopeResponse();
+    const input = assertRepoWriteInput('com.atproto.repo.createRecord', body);
+    for (const write of createRecordAuthorizations(input)) {
+      if (!canWriteRepo(auth.access, write.collection, write.action)) return insufficientScopeResponse();
+    }
 
-    const result = await repo.createRecord(write.collection, write.record, write.rkey);
-    await setRecordBlobUsage(env, result.uri, write.blobKeys);
+    const rateLimitResponse = await checkRate(env, request, 'writes');
+    if (rateLimitResponse) return rateLimitResponse;
+
+    const prepared = await prepareCreateRecord(env, auth, input);
+    const { write, repo } = prepared;
+    const result = await repo.createRecord(
+      write.collection,
+      write.record,
+      write.rkey,
+      write.blobKeys,
+      prepared.currentCommitCid,
+    );
     await notifySequencer(env, {
       did: prepared.did,
       commitCid: result.commitCid,

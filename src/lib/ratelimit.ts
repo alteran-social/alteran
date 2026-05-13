@@ -30,5 +30,8 @@ export async function checkRate(env: Env, request: Request, bucket: 'writes' | '
 }
 
 function rateLimited() {
-  return new Response(JSON.stringify({ error: 'RateLimited' }), { status: 429 });
+  return new Response(JSON.stringify({ error: 'RateLimited' }), {
+    status: 429,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }

@@ -174,6 +174,7 @@ export async function encodeBlocksForCommit(
   mstRoot: CID,
   ops: Array<{ path: string; cid: CID | null }>,
   newMstBlocks?: Array<[CID, Uint8Array]>,
+  commitBlock?: Uint8Array,
 ): Promise<Uint8Array> {
   const blockstore = new D1Blockstore(env);
   const blocks: { cid: CID; bytes: Uint8Array }[] = [];
@@ -185,6 +186,11 @@ export async function encodeBlocksForCommit(
     if (seen.has(cidStr)) return;
     seen.add(cidStr);
     let bytes = await blockstore.get(cid);
+    if (!bytes) {
+      if (cidStr === commitCid.toString() && commitBlock) {
+        bytes = commitBlock;
+      }
+    }
     if (!bytes) {
       // Attempt to reconstruct commit block from commit_log if this is the commit cid
       if (cidStr === commitCid.toString()) {

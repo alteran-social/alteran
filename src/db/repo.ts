@@ -1,13 +1,22 @@
 import type { Env } from '../env';
+import type { D1PreparedStatement } from '@cloudflare/workers-types';
 import { drizzle } from 'drizzle-orm/d1';
-import { eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { repo_root, commit_log } from './schema';
+import type { CommitGuard } from './dal';
 import { RepoManager } from '../services/repo-manager';
 import { createCommit, signCommit, commitCid, generateTid, serializeCommit } from '../lib/commit';
 import { CID } from 'multiformats/cid';
 import { resolveSecret } from '../lib/secrets';
 import { encodeBlocksForCommit } from '../services/car';
 import { ServerMisconfigured } from '../lib/errors';
+
+export class RepoCommitConflictError extends Error {
+  constructor(message = 'repo head changed') {
+    super(message);
+    this.name = 'RepoCommitConflictError';
+  }
+}
 
 export async function getRoot(env: Env) {
   const db = drizzle(env.ALTERAN_DB);
@@ -21,6 +30,8 @@ export async function getRoot(env: Env) {
 export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID, opts?: {
   ops?: import('../lib/firehose/frames').RepoOp[];
   newMstBlocks?: Array<[CID, Uint8Array]>;
+  sideEffectStatements?: (guard: CommitGuard) => D1PreparedStatement[];
+  expectedCommitCid?: string | null;
 }): Promise<{
   commitCid: string;
   rev: string;
@@ -37,8 +48,13 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
   // without REPO_SIGNING_KEY; prod always requires the configured key.
   const signingKey = await getSigningKey(env);
 
-  const row = await db.select().from(repo_root).where(eq(repo_root.did, did)).get();
-  const prevCommitCid = row?.commitCid ? CID.parse(row.commitCid) : null;
+  const expectedCommitCid = opts && 'expectedCommitCid' in opts ? opts.expectedCommitCid : undefined;
+  const row = expectedCommitCid === undefined
+    ? await db.select().from(repo_root).where(eq(repo_root.did, did)).get()
+    : undefined;
+  const prevCommitCid = expectedCommitCid === undefined
+    ? (row?.commitCid ? CID.parse(row.commitCid) : null)
+    : (expectedCommitCid ? CID.parse(expectedCommitCid) : null);
 
   // Prefer caller-provided pointer to avoid an extra MST load on the
   // batched-write path that already knows the new root.
@@ -61,24 +77,6 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
   const cid = await commitCid(signedCommit);
   const cidString = cid.toString();
 
-  // sql.raw('excluded.X') references the just-inserted VALUES so the upsert
-  // updates with the new value rather than a stale parameter.
-  await db
-    .insert(repo_root)
-    .values({
-      did,
-      commitCid: cidString,
-      rev, // Store TID as text
-    })
-    .onConflictDoUpdate({
-      target: repo_root.did,
-      set: {
-        commitCid: sql.raw('excluded.commit_cid'),
-        rev: sql.raw('excluded.rev'),
-      },
-    })
-    .run();
-
   // Serialize commit for storage
   const commitBytes = serializeCommit(signedCommit);
   const commitData = JSON.stringify({
@@ -93,17 +91,79 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
   for (const b of signedCommit.sig) s += String.fromCharCode(b);
   const sigBase64 = btoa(s);
 
-  // Append to commit log
-  await appendCommit(env, cidString, rev, commitData, sigBase64);
-
   // Encode blocks as CAR for firehose
-  const blocksBytes = await encodeBlocksForCommit(env, cid, mstRootCid, ops, opts?.newMstBlocks);
+  const blocksBytes = await encodeBlocksForCommit(
+    env,
+    cid,
+    mstRootCid,
+    ops,
+    opts?.newMstBlocks,
+    commitBytes,
+  );
   // Encode to base64 (workers-safe)
   let blocksBase64 = '';
   for (const b of blocksBytes) blocksBase64 += String.fromCharCode(b);
   blocksBase64 = btoa(blocksBase64);
 
+  const ts = Date.now();
+  const guard = { did, commitCid: cidString };
+  const rootStatement = rootMutationStatement(env, did, cidString, rev, expectedCommitCid);
+  const statements = [
+    rootStatement,
+    ...(opts?.sideEffectStatements?.(guard) ?? []),
+    env.ALTERAN_DB.prepare(
+      `INSERT INTO commit_log (cid, rev, data, sig, ts)
+       SELECT ?, ?, ?, ?, ?
+       WHERE EXISTS (
+         SELECT 1 FROM repo_root WHERE did = ? AND commit_cid = ?
+       )`,
+    ).bind(cidString, rev, commitData, sigBase64, ts, did, cidString),
+  ];
+
+  const results = await env.ALTERAN_DB.batch(statements);
+  if (expectedCommitCid !== undefined && changedRows(results[0]) !== 1) {
+    throw new RepoCommitConflictError();
+  }
+
   return { commitCid: cidString, rev, ops, mstRoot: mstRootCid, commitData, sig: sigBase64, blocks: blocksBase64 };
+}
+
+function rootMutationStatement(
+  env: Env,
+  did: string,
+  commitCid: string,
+  rev: string,
+  expectedCommitCid: string | null | undefined,
+): D1PreparedStatement {
+  if (expectedCommitCid === null) {
+    return env.ALTERAN_DB.prepare(
+      `INSERT INTO repo_root (did, commit_cid, rev)
+       SELECT ?, ?, ?
+       WHERE NOT EXISTS (
+         SELECT 1 FROM repo_root WHERE did = ?
+       )`,
+    ).bind(did, commitCid, rev, did);
+  }
+  if (typeof expectedCommitCid === 'string') {
+    return env.ALTERAN_DB.prepare(
+      `UPDATE repo_root
+       SET commit_cid = ?, rev = ?
+       WHERE did = ? AND commit_cid = ?`,
+    ).bind(commitCid, rev, did, expectedCommitCid);
+  }
+  return env.ALTERAN_DB.prepare(
+    `INSERT INTO repo_root (did, commit_cid, rev)
+     VALUES (?, ?, ?)
+     ON CONFLICT(did) DO UPDATE SET
+       commit_cid = excluded.commit_cid,
+       rev = excluded.rev`,
+  ).bind(did, commitCid, rev);
+}
+
+function changedRows(result: unknown): number {
+  const meta = (result as { meta?: Record<string, unknown> } | undefined)?.meta;
+  const changes = meta?.changes ?? meta?.rows_written ?? meta?.rowsWritten;
+  return typeof changes === 'number' ? changes : 0;
 }
 
 export async function appendCommit(env: Env, cid: string, rev: string, data: string, sig: string) {
