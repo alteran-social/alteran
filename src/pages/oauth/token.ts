@@ -96,6 +96,7 @@ export async function POST({ locals, request }: APIContext) {
         dpopJkt: rec.dpopJkt,
         oauthSessionId: sessionId,
         accessJti,
+        oauthClientAuthMethod: rec.clientAuthMethod,
       });
 
       await createOAuthSession(env, {
@@ -183,13 +184,17 @@ export async function POST({ locals, request }: APIContext) {
       await consumeDpopVerificationJti(env, ver);
 
       const accessJti = crypto.randomUUID().replace(/-/g, '');
+      const isPublicClient = session.clientAuthMethod !== 'private_key_jwt';
       const { accessJwt, refreshJwt, accessPayload, refreshPayload, refreshExpiry } = await issueSessionTokens(env, session.did, {
         scope: session.scope,
         clientId: session.clientId,
         dpopJkt: session.dpopJkt,
         oauthSessionId: session.id,
         accessJti,
+        oauthClientAuthMethod: session.clientAuthMethod,
+        refreshExpiresAt: isPublicClient ? session.expiresAt : undefined,
       });
+      const sessionExpiresAt = isPublicClient ? session.expiresAt : refreshExpiry;
       await storeRefreshToken(env, {
         id: refreshPayload.jti,
         did: session.did,
@@ -210,7 +215,7 @@ export async function POST({ locals, request }: APIContext) {
           currentRefreshTokenId: refreshPayload.jti,
           previousRefreshTokenId: stored.id,
           accessJti: String(accessPayload.jti),
-          expiresAt: refreshExpiry,
+          expiresAt: sessionExpiresAt,
           now: nowSec,
         });
       } catch {

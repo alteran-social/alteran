@@ -5,11 +5,13 @@ import { getOrCreateSecret } from '../db/account';
 import { InvalidToken, ServerMisconfigured } from './errors';
 import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
 import { AuthScope, isBearerAccessScope, isOAuthScope } from './auth-scope';
+import { getConfig } from './config';
 
 const SESSION_SECRET_KEY = 'session_jwt_secret';
 const GRACE_PERIOD_SECONDS = 2 * 60 * 60;
-const ACCESS_TTL_SECONDS = 120 * 60; // 120 minutes
-const REFRESH_TTL_SECONDS = 90 * 24 * 60 * 60; // 90 days
+const OAUTH_ACCESS_TTL_MAX_SECONDS = 15 * 60;
+const OAUTH_PUBLIC_REFRESH_TTL_MAX_SECONDS = 14 * 24 * 60 * 60;
+const OAUTH_CONFIDENTIAL_REFRESH_TTL_MAX_SECONDS = 180 * 24 * 60 * 60;
 const LEGACY_REFRESH_SCOPE = 'refresh';
 
 async function loadSecret(env: Env): Promise<string> {
@@ -41,11 +43,14 @@ export type IssueSessionTokenOptions = {
   clientId?: string;
   dpopJkt?: string;
   oauthSessionId?: string;
+  oauthClientAuthMethod?: 'none' | 'private_key_jwt' | string | null;
+  refreshExpiresAt?: number;
 };
 
 export async function issueSessionTokens(env: Env, did: string, opts: IssueSessionTokenOptions = {}) {
   const jwtKey = await getJwtKey(env);
   const serviceDid = await getServiceDid(env);
+  const config = getConfig(env);
   const now = Math.floor(Date.now() / 1000);
   const accessScope = opts.dpopJkt ? (opts.scope ?? 'atproto') : (opts.scope ?? AuthScope.Access);
   if (opts.dpopJkt) {
@@ -56,7 +61,14 @@ export async function issueSessionTokens(env: Env, did: string, opts: IssueSessi
     throw new InvalidToken('Invalid access token scope');
   }
 
-  const accessExp = now + ACCESS_TTL_SECONDS;
+  const accessTtl = opts.dpopJkt
+    ? Math.min(config.oauthAccessTtlSec, OAUTH_ACCESS_TTL_MAX_SECONDS)
+    : config.accessTtlSec;
+  const refreshTtl = opts.dpopJkt
+    ? oauthRefreshTtlSeconds(config, opts.oauthClientAuthMethod)
+    : config.refreshTtlSec;
+
+  const accessExp = now + accessTtl;
   const accessPayload: TokenPayload = {
     scope: accessScope,
     aud: serviceDid,
@@ -73,7 +85,9 @@ export async function issueSessionTokens(env: Env, did: string, opts: IssueSessi
   const accessJwt = await signJwt(jwtKey, 'at+jwt', accessPayload);
 
   const jti = opts.jti ?? generateTokenId();
-  const refreshExp = now + REFRESH_TTL_SECONDS;
+  const refreshExp = typeof opts.refreshExpiresAt === 'number'
+    ? Math.min(now + refreshTtl, opts.refreshExpiresAt)
+    : now + refreshTtl;
   const refreshPayload: RefreshTokenPayload = {
     scope: AuthScope.Refresh,
     aud: serviceDid,
@@ -96,6 +110,23 @@ export async function issueSessionTokens(env: Env, did: string, opts: IssueSessi
     refreshPayload,
     refreshExpiry: refreshPayload.exp,
   } as const;
+}
+
+function oauthRefreshTtlSeconds(
+  config: ReturnType<typeof getConfig>,
+  clientAuthMethod: IssueSessionTokenOptions['oauthClientAuthMethod'],
+): number {
+  if (clientAuthMethod === 'private_key_jwt') {
+    return Math.min(
+      config.oauthConfidentialRefreshTtlSec,
+      OAUTH_CONFIDENTIAL_REFRESH_TTL_MAX_SECONDS,
+    );
+  }
+
+  return Math.min(
+    config.oauthPublicRefreshTtlSec,
+    OAUTH_PUBLIC_REFRESH_TTL_MAX_SECONDS,
+  );
 }
 
 export async function verifyRefreshToken(env: Env, token: string, opts: { ignoreExpiration?: boolean } = {}) {

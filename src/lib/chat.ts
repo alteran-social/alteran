@@ -1,7 +1,5 @@
 import type { Env } from '../env';
 
-let tablesEnsured = false;
-
 export interface ListConvosFilters {
   readState?: 'unread' | null;
   status?: 'request' | 'accepted' | null;
@@ -30,42 +28,7 @@ export type ConvoLogEntry =
     };
 
 export async function ensureChatTables(env: Env) {
-  if (tablesEnsured) return;
-
-  // Create chat_convo table
-  await env.ALTERAN_DB.prepare(
-    'CREATE TABLE IF NOT EXISTS chat_convo (' +
-    'id TEXT PRIMARY KEY, ' +
-    'rev TEXT NOT NULL, ' +
-    'status TEXT NOT NULL DEFAULT \'accepted\', ' +
-    'muted INTEGER NOT NULL DEFAULT 0, ' +
-    'unread_count INTEGER NOT NULL DEFAULT 0, ' +
-    'last_message_json TEXT, ' +
-    'last_reaction_json TEXT, ' +
-    'updated_at INTEGER NOT NULL, ' +
-    'created_at INTEGER NOT NULL' +
-    ')'
-  ).run();
-
-  // Create chat_convo_member table
-  await env.ALTERAN_DB.prepare(
-    'CREATE TABLE IF NOT EXISTS chat_convo_member (' +
-    'convo_id TEXT NOT NULL, ' +
-    'did TEXT NOT NULL, ' +
-    'handle TEXT NOT NULL, ' +
-    'display_name TEXT, ' +
-    'avatar TEXT, ' +
-    'position INTEGER NOT NULL DEFAULT 0, ' +
-    'PRIMARY KEY (convo_id, did)' +
-    ')'
-  ).run();
-
-  // Create index
-  await env.ALTERAN_DB.prepare(
-    'CREATE INDEX IF NOT EXISTS chat_convo_member_did_idx ON chat_convo_member (did)'
-  ).run();
-
-  tablesEnsured = true;
+  void env;
 }
 
 export async function listChatConvos(
