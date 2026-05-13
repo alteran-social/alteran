@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { makeEnv } from './helpers/env';
 import { makeDpopKey, mockClientMetadata, signAuthzDpop, signDpopProof, signResourceDpop } from './helpers/oauth';
 import { createOAuthSession, getOAuthSession, getRefreshToken, storeRefreshToken } from '../src/db/account';
-import { issueSessionTokens } from '../src/lib/session-tokens';
+import { issueSessionTokens, verifyRefreshToken } from '../src/lib/session-tokens';
 import { saveCode } from '../src/lib/oauth/store';
 import { sha256b64url } from '../src/lib/oauth/dpop';
 import { POST as tokenPost } from '../src/pages/oauth/token';
@@ -22,6 +22,7 @@ async function issueOauthRefresh(env: any, key: Awaited<ReturnType<typeof makeDp
     dpopJkt: key.jkt,
     oauthSessionId: sessionId,
     accessJti,
+    oauthClientAuthMethod: 'none',
   });
   await createOAuthSession(env, {
     id: sessionId,
@@ -147,6 +148,7 @@ describe('OAuth refresh and revocation state', () => {
       const env = await makeEnv();
       const key = await makeDpopKey();
       const issued = await issueOauthRefresh(env, key);
+      const originalSession = await getOAuthSession(env, issued.sessionId);
       const url = 'https://pds.example/oauth/token';
       const proof = await signDpopProof({ key, method: 'POST', url });
 
@@ -160,6 +162,11 @@ describe('OAuth refresh and revocation state', () => {
       const body = await res.json() as any;
       expect(body.token_type).toBe('DPoP');
       expect(typeof body.refresh_token).toBe('string');
+      const refreshed = await verifyRefreshToken(env, body.refresh_token);
+      const storedRefresh = await getRefreshToken(env, refreshed.decoded.jti);
+      const sessionAfterRefresh = await getOAuthSession(env, issued.sessionId);
+      expect(sessionAfterRefresh?.expiresAt).toBe(originalSession?.expiresAt);
+      expect(storedRefresh?.expiresAt).toBe(originalSession?.expiresAt);
     } finally {
       restore();
     }

@@ -95,7 +95,6 @@ export async function authenticateRequest(request: Request, env: Env): Promise<A
     if (error instanceof AuthTokenExpiredError) {
       throw error;
     }
-    console.error('JWT verification error:', error);
     return null;
   }
   if (!ver || !ver.valid) return null;

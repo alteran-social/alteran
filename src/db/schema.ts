@@ -134,6 +134,45 @@ export const blob_quota = sqliteTable('blob_quota', {
   updated_at: integer('updated_at').notNull(),
 });
 
+export const actor_preferences = sqliteTable('actor_preferences', {
+  did: text('did').primaryKey().notNull(),
+  json: text('json').notNull(),
+  updatedAt: integer('updated_at', { mode: 'number' }).notNull(),
+});
+
+export const rate_limit = sqliteTable('rate_limit', {
+  ip: text('ip').notNull(),
+  bucket: text('bucket').notNull(),
+  window: integer('window', { mode: 'number' }).notNull(),
+  count: integer('count', { mode: 'number' }).notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.ip, table.bucket, table.window] }),
+}));
+
+export const chat_convo = sqliteTable('chat_convo', {
+  id: text('id').primaryKey().notNull(),
+  rev: text('rev').notNull(),
+  status: text('status').notNull().default('accepted'),
+  muted: integer('muted', { mode: 'number' }).notNull().default(0),
+  unreadCount: integer('unread_count', { mode: 'number' }).notNull().default(0),
+  lastMessageJson: text('last_message_json'),
+  lastReactionJson: text('last_reaction_json'),
+  updatedAt: integer('updated_at', { mode: 'number' }).notNull(),
+  createdAt: integer('created_at', { mode: 'number' }).notNull(),
+});
+
+export const chat_convo_member = sqliteTable('chat_convo_member', {
+  convoId: text('convo_id').notNull(),
+  did: text('did').notNull(),
+  handle: text('handle').notNull(),
+  displayName: text('display_name'),
+  avatar: text('avatar'),
+  position: integer('position', { mode: 'number' }).notNull().default(0),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.convoId, table.did] }),
+  didIdx: index('chat_convo_member_did_idx').on(table.did),
+}));
+
 // Account state for migration support (single-user PDS). The active flag
 // stays for legacy reads, but the full FSM is recovered from
 // (active, status, suspended_until) via fromRow in src/lib/account-state.ts.

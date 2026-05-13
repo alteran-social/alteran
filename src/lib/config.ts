@@ -17,6 +17,11 @@ const OPTIONAL_VARS = {
   PDS_MAX_BLOB_SIZE: '5242880', // 5MB
   PDS_MAX_JSON_BYTES: '65536', // 64KB
   PDS_RATE_LIMIT_PER_MIN: '60',
+  PDS_ACCESS_TTL_SEC: '7200',
+  PDS_REFRESH_TTL_SEC: '7776000',
+  PDS_OAUTH_ACCESS_TTL_SEC: '900',
+  PDS_OAUTH_PUBLIC_REFRESH_TTL_SEC: '1209600',
+  PDS_OAUTH_CONFIDENTIAL_REFRESH_TTL_SEC: '15552000',
   PDS_CORS_ORIGIN: '*',
   PDS_SEQ_WINDOW: '512',
   ENVIRONMENT: 'development',
@@ -106,6 +111,19 @@ export function validateConfig(env: Env): ConfigValidationResult {
   const rateLimit = parseInt(optional.PDS_RATE_LIMIT_PER_MIN);
   if (isNaN(rateLimit) || rateLimit <= 0) {
     warnings.push(`PDS_RATE_LIMIT_PER_MIN must be a positive number (got: ${optional.PDS_RATE_LIMIT_PER_MIN})`);
+  }
+
+  for (const key of [
+    'PDS_ACCESS_TTL_SEC',
+    'PDS_REFRESH_TTL_SEC',
+    'PDS_OAUTH_ACCESS_TTL_SEC',
+    'PDS_OAUTH_PUBLIC_REFRESH_TTL_SEC',
+    'PDS_OAUTH_CONFIDENTIAL_REFRESH_TTL_SEC',
+  ] as const) {
+    const value = parseInt(optional[key]);
+    if (isNaN(value) || value <= 0) {
+      warnings.push(`${key} must be a positive number (got: ${optional[key]})`);
+    }
   }
 
   // Check for signing key
@@ -218,8 +236,11 @@ export function getConfig(env: Env) {
     // Optional
     repoSigningKey: env.REPO_SIGNING_KEY,
     hostname: env.PDS_HOSTNAME,
-    accessTtlSec: env.PDS_ACCESS_TTL_SEC ? parseInt(env.PDS_ACCESS_TTL_SEC) : 3600,
-    refreshTtlSec: env.PDS_REFRESH_TTL_SEC ? parseInt(env.PDS_REFRESH_TTL_SEC) : 2592000,
+    accessTtlSec: parseInt(result.config.optional.PDS_ACCESS_TTL_SEC),
+    refreshTtlSec: parseInt(result.config.optional.PDS_REFRESH_TTL_SEC),
+    oauthAccessTtlSec: parseInt(result.config.optional.PDS_OAUTH_ACCESS_TTL_SEC),
+    oauthPublicRefreshTtlSec: parseInt(result.config.optional.PDS_OAUTH_PUBLIC_REFRESH_TTL_SEC),
+    oauthConfidentialRefreshTtlSec: parseInt(result.config.optional.PDS_OAUTH_CONFIDENTIAL_REFRESH_TTL_SEC),
     serviceSigningKeyHex: undefined,
   };
 }

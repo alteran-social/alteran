@@ -2,20 +2,9 @@ import type { Env } from '../env';
 import { resolveSecret } from './secrets';
 import { ServerMisconfigured } from './errors';
 
-let tableEnsured = false;
-
-async function ensureTable(env: Env) {
-  if (tableEnsured) return;
-  await env.ALTERAN_DB.exec(
-    'CREATE TABLE IF NOT EXISTS actor_preferences (did TEXT PRIMARY KEY, json TEXT NOT NULL, updated_at INTEGER NOT NULL)'
-  );
-  tableEnsured = true;
-}
-
 // No defaults — return empty when nothing stored to avoid local fallbacks
 
 export async function getActorPreferences(env: Env): Promise<{ did: string; preferences: any[] }> {
-  await ensureTable(env);
   const did = await resolveSecret(env.PDS_DID);
   if (!did) throw new ServerMisconfigured('PDS_DID is not configured');
   const row = await env.ALTERAN_DB.prepare('SELECT json FROM actor_preferences WHERE did = ?')
@@ -36,7 +25,6 @@ export async function getActorPreferences(env: Env): Promise<{ did: string; pref
 }
 
 export async function setActorPreferences(env: Env, preferences: any[]): Promise<void> {
-  await ensureTable(env);
   const did = await resolveSecret(env.PDS_DID);
   if (!did) throw new ServerMisconfigured('PDS_DID is not configured');
   const now = Date.now();

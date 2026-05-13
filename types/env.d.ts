@@ -37,6 +37,9 @@ declare global {
     SESSION_JWT_SECRET?: string | SecretsStoreSecret;
     PDS_ACCESS_TTL_SEC?: string;
     PDS_REFRESH_TTL_SEC?: string;
+    PDS_OAUTH_ACCESS_TTL_SEC?: string;
+    PDS_OAUTH_PUBLIC_REFRESH_TTL_SEC?: string;
+    PDS_OAUTH_CONFIDENTIAL_REFRESH_TTL_SEC?: string;
     // secp256k1 signing private key (hex or base64 32 bytes) used for commits and service-auth
     REPO_SIGNING_KEY?: string | SecretsStoreSecret;
     PDS_PLC_ROTATION_KEY?: string | SecretsStoreSecret;

@@ -8,7 +8,6 @@ export async function checkRate(env: Env, request: Request, bucket: 'writes' | '
     const windowMs = 60_000;
     const win = Math.floor(now / windowMs);
     const ip = request.headers.get('cf-connecting-ip') ?? request.headers.get('x-forwarded-for') ?? '127.0.0.1';
-    await env.ALTERAN_DB.exec("CREATE TABLE IF NOT EXISTS rate_limit (ip TEXT NOT NULL, bucket TEXT NOT NULL, window INTEGER NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (ip,bucket,window))");
     const row: any = await env.ALTERAN_DB.prepare('SELECT count FROM rate_limit WHERE ip=? AND bucket=? AND window=?').bind(ip, bucket, win).first();
     const count = row?.count ? Number(row.count) : 0;
     if (count >= limit) return rateLimited();
