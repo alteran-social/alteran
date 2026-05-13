@@ -6,6 +6,7 @@ import { bearerToken } from './util';
 import { getAccountState } from '../db/dal';
 import {
   bearerAccessContext,
+  canAccessFullAccount,
   isBearerAccessScope,
   oauthAccessContext,
   withAccountStatus,
@@ -28,7 +29,7 @@ function authScheme(request: Request): string | null {
 export async function isAuthorized(request: Request, env: Env): Promise<boolean> {
   try {
     const auth = await authenticateRequest(request, env);
-    if (auth) return true;
+    if (auth) return canAccessFullAccount(auth.access);
   } catch (error) {
     if (error instanceof AuthTokenExpiredError) {
       throw error;

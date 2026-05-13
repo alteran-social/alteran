@@ -3,13 +3,16 @@ import { errorCode, errorMessage } from '../errors';
 import { verifyAccessToken } from '../session-tokens';
 import { decodeProtectedHeader, importJWK, compactVerify, type JWK as JoseJWK } from 'jose';
 import { cleanupExpiredOAuthReplaySecrets, createSecretOnce, getOAuthSession, getSecret, setSecret } from '../../db/account';
+import { getAccountState } from '../../db/dal';
 import { jwkThumbprint } from './dpop';
 import {
   bearerAccessContext,
   isBearerAccessScope,
   isOAuthPermissionScope,
   oauthAccessContext,
+  withAccountStatus,
   type AuthAccessContext,
+  type AuthAccountStatus,
 } from '../auth-scope';
 
 const NONCE_PDS_KEY = 'oauth_dpop_nonce_pds';
@@ -102,7 +105,11 @@ export async function verifyResourceRequest(env: Env, request: Request): Promise
       token,
       scope: typeof payload.scope === 'string' ? payload.scope : undefined,
       authType: 'bearer',
-      access: bearerAccessContext(payload.scope),
+      access: await withResolvedResourceAccountStatus(
+        env,
+        payload.sub as string,
+        bearerAccessContext(payload.scope),
+      ),
     };
   }
 
@@ -157,7 +164,11 @@ async function verifyDpopAccess(env: Env, request: Request, accessToken: string)
     token: accessToken,
     scope: typeof tokenPayload.scope === 'string' ? tokenPayload.scope : undefined,
     authType: 'oauth-dpop' as const,
-    access: oauthAccessContext(String(tokenPayload.scope)),
+    access: await withResolvedResourceAccountStatus(
+      env,
+      tokenPayload.sub as string,
+      oauthAccessContext(String(tokenPayload.scope)),
+    ),
   };
 }
 
@@ -262,7 +273,11 @@ export async function verifyResourceRequestHybrid(
       token,
       scope: typeof payloadJwt.scope === 'string' ? payloadJwt.scope : undefined,
       authType: 'bearer',
-      access: bearerAccessContext(payloadJwt.scope),
+      access: await withResolvedResourceAccountStatus(
+        env,
+        payloadJwt.sub as string,
+        bearerAccessContext(payloadJwt.scope),
+      ),
     };
   }
 
@@ -278,6 +293,16 @@ function jsonError(error: string, message: string, status: number): Response {
 
 export function insufficientScopeResponse(): Response {
   return jsonError('InvalidToken', 'token does not grant access to this resource', 401);
+}
+
+async function withResolvedResourceAccountStatus(
+  env: Env,
+  did: string,
+  access: AuthAccessContext,
+): Promise<AuthAccessContext> {
+  const state = await getAccountState(env, did);
+  const accountStatus: AuthAccountStatus = state?.tag ?? 'active';
+  return withAccountStatus(access, accountStatus);
 }
 
 export async function handleResourceAuthError(env: Env, error: unknown): Promise<Response | null> {

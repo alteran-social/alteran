@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { makeEnv } from './helpers/env';
 import { makeDpopKey, signDpopProof, signResourceDpop } from './helpers/oauth';
 import { createOAuthSession, getSecret, storeRefreshToken } from '../src/db/account';
+import { setAccountState } from '../src/db/dal';
 import { issueSessionTokens } from '../src/lib/session-tokens';
 import { verifyJwt } from '../src/lib/jwt';
 import { dpopResourceUnauthorized, ResourceAuthError, verifyResourceRequestHybrid } from '../src/lib/oauth/resource';
@@ -103,7 +104,7 @@ describe('OAuth resource DPoP binding', () => {
     const authorizedProof = await signResourceDpop(env, key, 'GET', sessionUrl, access);
     expect(await isAuthorized(new Request(sessionUrl, {
       headers: { authorization: `DPoP ${access}`, dpop: authorizedProof },
-    }), env)).toBe(true);
+    }), env)).toBe(false);
 
     const authProof = await signResourceDpop(env, key, 'GET', sessionUrl, access);
     const authContext = await authenticateRequest(new Request(sessionUrl, {
@@ -146,6 +147,34 @@ describe('OAuth resource DPoP binding', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it('resolves account state in resource auth contexts', async () => {
+    const env = await makeEnv();
+    await setAccountState(env, 'did:example:test', { tag: 'takendown' });
+
+    const { accessJwt } = await issueSessionTokens(env, 'did:example:test');
+    const bearerUrl = 'https://pds.example/xrpc/com.atproto.repo.createRecord';
+    const bearer = await verifyResourceRequestHybrid(env, new Request(bearerUrl, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${accessJwt}` },
+    }));
+    expect(bearer?.access).toMatchObject({
+      accountStatus: 'takendown',
+      isTakendown: true,
+    });
+
+    const key = await makeDpopKey();
+    const oauthAccess = await issueOAuthAccess(env, key);
+    const proof = await signResourceDpop(env, key, 'POST', bearerUrl, oauthAccess);
+    const oauth = await verifyResourceRequestHybrid(env, new Request(bearerUrl, {
+      method: 'POST',
+      headers: { authorization: `DPoP ${oauthAccess}`, dpop: proof },
+    }));
+    expect(oauth?.access).toMatchObject({
+      accountStatus: 'takendown',
+      isTakendown: true,
+    });
   });
 
   it('returns DPoP nonce challenges from shared authenticated routes', async () => {
