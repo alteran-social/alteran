@@ -123,30 +123,47 @@ export function deserializeCommit(bytes: Uint8Array): SignedCommit {
   return dagCbor.decode(bytes) as SignedCommit;
 }
 
-/**
- * Generate a TID (Timestamp Identifier) for use as revision
- * TIDs are lexicographically sortable timestamps
- */
-export function generateTid(): string {
-  const now = Date.now();
-  const timestamp = now * 1000; // microseconds
+const SORTABLE_BASE32_CHARS = '234567abcdefghijklmnopqrstuvwxyz';
+let lastTidTimestamp = 0;
+let tidClockId: number | undefined;
 
-  // Convert to base32 (simplified version)
-  const chars = '234567abcdefghijklmnopqrstuvwxyz';
-  let tid = '';
-  let remaining = timestamp;
+function sortableBase32Encode(value: number): string {
+  let encoded = '';
+  let remaining = value;
 
-  for (let i = 0; i < 13; i++) {
-    tid = chars[remaining % 32] + tid;
+  while (remaining > 0) {
+    encoded = SORTABLE_BASE32_CHARS[remaining % 32] + encoded;
     remaining = Math.floor(remaining / 32);
   }
 
-  return tid;
+  return encoded;
+}
+
+function getTidClockId(): number {
+  tidClockId ??= Math.floor(Math.random() * 32);
+  return tidClockId;
+}
+
+/**
+ * Generate an ATProto Timestamp Identifier for use as a record key or revision.
+ *
+ * The timestamp portion is microsecond-precision and monotonically increases
+ * even when JavaScript only exposes millisecond time or the system clock moves
+ * backwards.
+ */
+export function generateTid(): string {
+  const nowMicros = Date.now() * 1000;
+  const timestamp = Math.max(nowMicros, lastTidTimestamp + 1);
+  lastTidTimestamp = timestamp;
+
+  const timestampPart = sortableBase32Encode(timestamp);
+  const clockPart = sortableBase32Encode(getTidClockId()).padStart(2, '2');
+  return `${timestampPart}${clockPart}`;
 }
 
 /**
  * Validate TID format
  */
 export function isValidTid(tid: string): boolean {
-  return /^[234567abcdefghijklmnopqrstuvwxyz]{13}$/.test(tid);
+  return /^[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}$/.test(tid);
 }

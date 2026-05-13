@@ -9,6 +9,18 @@ import {
 } from '../src/lib/commit';
 import { CID } from 'multiformats/cid';
 import { Secp256k1Keypair } from '@atproto/crypto';
+import { RepoManager } from '../src/services/repo-manager';
+import { makeEnv } from './helpers/env';
+
+async function withFixedDateNow<T>(value: number, fn: () => Promise<T> | T): Promise<T> {
+  const originalNow = Date.now;
+  Date.now = () => value;
+  try {
+    return await fn();
+  } finally {
+    Date.now = originalNow;
+  }
+}
 
 describe('Commit Structure & Signing', () => {
   test('should create a commit', () => {
@@ -29,6 +41,69 @@ describe('Commit Structure & Signing', () => {
     const tid = generateTid();
     expect(isValidTid(tid)).toBe(true);
     expect(tid.length).toBe(13);
+  });
+
+  test('should reject non-ATProto TID syntax', () => {
+    expect(isValidTid('3jzfcijpj2z2a')).toBe(true);
+    expect(isValidTid('zzzzzzzzzzzzz')).toBe(false);
+    expect(isValidTid('3jzfcijpj2z2')).toBe(false);
+  });
+
+  test('should generate unique ordered TIDs within the same millisecond', async () => {
+    await withFixedDateNow(Date.now(), () => {
+      const tids = Array.from({ length: 32 }, () => generateTid());
+      expect(new Set(tids).size).toBe(tids.length);
+      expect(tids).toEqual([...tids].sort());
+      for (const tid of tids) expect(isValidTid(tid)).toBe(true);
+    });
+  });
+
+  test('should keep generated TIDs monotonic when the clock moves backwards', () => {
+    const originalNow = Date.now;
+    const now = Date.now();
+    const times = [now, now - 60_000];
+    Date.now = () => times.shift() ?? now - 60_000;
+    try {
+      const first = generateTid();
+      const second = generateTid();
+      expect(second > first).toBe(true);
+      expect(isValidTid(first)).toBe(true);
+      expect(isValidTid(second)).toBe(true);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  test('repo creates in the same millisecond receive distinct ordered rkeys and revs', async () => {
+    const env = await makeEnv();
+    const repo = new RepoManager(env);
+
+    await withFixedDateNow(Date.now(), async () => {
+      const first = await repo.createRecord('app.bsky.feed.post', {
+        $type: 'app.bsky.feed.post',
+        text: 'first',
+        createdAt: '2026-05-13T00:00:00.000Z',
+      });
+      const second = await repo.createRecord('app.bsky.feed.post', {
+        $type: 'app.bsky.feed.post',
+        text: 'second',
+        createdAt: '2026-05-13T00:00:00.001Z',
+      });
+
+      const firstRkey = first.uri.split('/').at(-1);
+      const secondRkey = second.uri.split('/').at(-1);
+
+      expect(firstRkey).toBeDefined();
+      expect(secondRkey).toBeDefined();
+      expect(firstRkey).not.toBe(secondRkey);
+      expect(secondRkey! > firstRkey!).toBe(true);
+      expect(first.rev).not.toBe(second.rev);
+      expect(second.rev > first.rev).toBe(true);
+      expect(isValidTid(firstRkey!)).toBe(true);
+      expect(isValidTid(secondRkey!)).toBe(true);
+      expect(isValidTid(first.rev)).toBe(true);
+      expect(isValidTid(second.rev)).toBe(true);
+    });
   });
 
   test('should sign and verify commit', async () => {

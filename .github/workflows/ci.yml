@@ -28,8 +28,8 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Build
         run: bun run build
-      - name: OAuth tests
-        run: bun run test:oauth
+      - name: Tests
+        run: bun run test
       - name: TypeScript check (bunx)
         run: bunx -y typescript@5.6.3 -v && bunx -y typescript@5.6.3 -p tsconfig.json --noEmit
 
