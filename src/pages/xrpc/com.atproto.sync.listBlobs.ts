@@ -1,7 +1,5 @@
 import type { APIContext } from 'astro';
-import { drizzle } from 'drizzle-orm/d1';
-import { blob_ref } from '../../db/schema';
-import { eq, gt, and } from 'drizzle-orm';
+import { isAccountActive } from '../../db/dal';
 
 export const prerender = false;
 
@@ -13,30 +11,46 @@ export async function GET({ locals, url }: APIContext) {
   const { env } = locals.runtime;
 
   const did = url.searchParams.get('did') || (env.PDS_DID as string);
-  const since = url.searchParams.get('since') || '';
+  const cursor = url.searchParams.get('cursor') || url.searchParams.get('since') || '';
   const limit = parseInt(url.searchParams.get('limit') || '500', 10);
 
   try {
-    const db = drizzle(env.ALTERAN_DB);
+    const active = await isAccountActive(env, did);
+    if (!active) {
+      return new Response(
+        JSON.stringify({ error: 'RepoDeactivated', message: 'Account is not active' }),
+        { status: 403, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
 
-    const blobs = since
-      ? await db
-          .select()
-          .from(blob_ref)
-          .where(and(eq(blob_ref.did, did), gt(blob_ref.cid, since)))
-          .limit(limit)
-          .all()
-      : await db
-          .select()
-          .from(blob_ref)
-          .where(eq(blob_ref.did, did))
-          .limit(limit)
-          .all();
+    const blobs = cursor
+      ? await env.ALTERAN_DB.prepare(
+          `SELECT DISTINCT b.cid
+           FROM blob b
+           INNER JOIN blob_usage u ON u.did = b.did AND u.key = b.key
+           WHERE b.did = ? AND b.cid > ?
+           ORDER BY b.cid
+           LIMIT ?`,
+        )
+          .bind(did, cursor, limit)
+          .all<{ cid: string }>()
+      : await env.ALTERAN_DB.prepare(
+          `SELECT DISTINCT b.cid
+           FROM blob b
+           INNER JOIN blob_usage u ON u.did = b.did AND u.key = b.key
+           WHERE b.did = ?
+           ORDER BY b.cid
+           LIMIT ?`,
+        )
+          .bind(did, limit)
+          .all<{ cid: string }>();
+
+    const rows = blobs.results ?? [];
 
     return new Response(
       JSON.stringify({
-        cids: blobs.map(b => b.cid),
-        cursor: blobs.length > 0 ? blobs[blobs.length - 1].cid : undefined,
+        cids: rows.map(b => b.cid),
+        cursor: rows.length > 0 ? rows[rows.length - 1].cid : undefined,
       }),
       {
         status: 200,

@@ -10,6 +10,11 @@ export type CommitGuard = {
   commitCid: string;
 };
 
+export type BlobKeyRef = {
+  did: string;
+  key: string;
+};
+
 export async function putRecord(env: Env, row: NewRecordRow) {
   await env.ALTERAN_DB.batch(putRecordStatements(env, row));
 }
@@ -37,22 +42,126 @@ export async function getRecordsByCids(env: Env, cids: string[]) {
 
 export async function putBlobRef(env: Env, did: string, cid: string, key: string, mime: string, size: number) {
   const db = getDb(env);
+  const uploadedAt = Date.now();
   await db
     .insert(blob_ref)
-    .values({ did, cid, key, mime, size })
+    .values({ did, cid, key, mime, size, uploadedAt })
     .onConflictDoUpdate({
-      target: blob_ref.cid,
+      target: [blob_ref.did, blob_ref.cid],
       set: {
-        did: sql.raw(`excluded.${blob_ref.did.name}`),
         key: sql.raw(`excluded.${blob_ref.key.name}`),
         mime: sql.raw(`excluded.${blob_ref.mime.name}`),
-        size: sql.raw(`excluded.${blob_ref.size.name}`)
+        size: sql.raw(`excluded.${blob_ref.size.name}`),
+        uploadedAt: sql.raw(`excluded.${blob_ref.uploadedAt.name}`),
       }
     });
 }
 
-export async function setRecordBlobUsage(env: Env, uri: string, keys: string[]) {
-  await env.ALTERAN_DB.batch(setRecordBlobUsageStatements(env, uri, keys));
+export async function setRecordBlobUsage(env: Env, did: string, uri: string, keys: string[]) {
+  await env.ALTERAN_DB.batch(setRecordBlobUsageStatements(env, did, uri, keys));
+}
+
+export async function getRecordBlobKeys(env: Env, did: string, uri: string): Promise<string[]> {
+  const result = await env.ALTERAN_DB.prepare(
+    'SELECT key FROM blob_usage WHERE did = ? AND record_uri = ?',
+  )
+    .bind(did, uri)
+    .all<{ key: string }>();
+
+  return result.results?.map((row) => row.key) ?? [];
+}
+
+export async function blobKeyHasUsage(env: Env, did: string, key: string): Promise<boolean> {
+  const row = await env.ALTERAN_DB.prepare(
+    'SELECT 1 FROM blob_usage WHERE did = ? AND key = ? LIMIT 1',
+  )
+    .bind(did, key)
+    .first();
+
+  return row !== null;
+}
+
+export async function deleteUnreferencedBlobKeys(
+  env: Env,
+  refs: readonly BlobKeyRef[],
+): Promise<number> {
+  let deleted = 0;
+  for (const { did, key } of uniqueBlobKeyRefs(refs)) {
+    const blob = await env.ALTERAN_DB.prepare(
+      'SELECT did, size FROM blob WHERE did = ? AND key = ? LIMIT 1',
+    )
+      .bind(did, key)
+      .first<{ did: string; size: number }>();
+    if (!blob) continue;
+
+    // Dereferenced blobs become non-public immediately because blob_usage was
+    // removed in the repo commit. Physical deletion is delayed so a concurrent
+    // upload of the same content-addressed object is not destroyed underneath a
+    // valid follow-up record creation.
+    if (!(await isBlobEligibleForPhysicalDeletion(env, did, key))) {
+      continue;
+    }
+
+    const deletion = await env.ALTERAN_DB.prepare(
+      `DELETE FROM blob
+       WHERE did = ?
+         AND key = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM blob_usage WHERE did = ? AND key = ?
+         )`,
+    )
+      .bind(did, key, did, key)
+      .run();
+    if (changedRows(deletion) !== 1) {
+      continue;
+    }
+
+    const stillStored = await env.ALTERAN_DB.prepare(
+      'SELECT 1 FROM blob WHERE key = ? LIMIT 1',
+    ).bind(key).first();
+    if (!stillStored) {
+      try {
+        await env.ALTERAN_BLOBS.delete(key);
+      } catch {
+        // Metadata is the visibility gate. Failed object deletes should not
+        // resurrect dereferenced blobs.
+      }
+    }
+
+    await updateBlobQuota(env, blob.did, -Number(blob.size), -1);
+    deleted++;
+  }
+
+  return deleted;
+}
+
+function uniqueBlobKeyRefs(refs: readonly BlobKeyRef[]): BlobKeyRef[] {
+  const seen = new Set<string>();
+  const unique: BlobKeyRef[] = [];
+  for (const ref of refs) {
+    const id = `${ref.did}\0${ref.key}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    unique.push(ref);
+  }
+  return unique;
+}
+
+async function isBlobEligibleForPhysicalDeletion(env: Env, did: string, key: string): Promise<boolean> {
+  const graceMs = 60 * 60 * 1000;
+  const cutoff = Date.now() - graceMs;
+  const row = await env.ALTERAN_DB.prepare(
+    'SELECT uploaded_at FROM blob WHERE did = ? AND key = ? LIMIT 1',
+  )
+    .bind(did, key)
+    .first<{ uploaded_at: number }>();
+  return row !== null && Number(row.uploaded_at) <= cutoff;
+}
+
+function changedRows(result: unknown): number {
+  const meta = (result as { meta?: Record<string, unknown> } | undefined)?.meta;
+  const changes = meta?.changes ?? meta?.rows_written ?? meta?.rowsWritten;
+  return typeof changes === 'number' ? changes : 0;
 }
 
 export function putRecordStatements(
@@ -131,6 +240,7 @@ export function deleteRecordStatements(
 
 export function setRecordBlobUsageStatements(
   env: Env,
+  did: string,
   uri: string,
   keys: string[],
   guard?: CommitGuard,
@@ -139,29 +249,30 @@ export function setRecordBlobUsageStatements(
     guard
       ? env.ALTERAN_DB.prepare(
         `DELETE FROM blob_usage
-         WHERE record_uri = ?
+         WHERE did = ?
+           AND record_uri = ?
            AND EXISTS (
              SELECT 1 FROM repo_root WHERE did = ? AND commit_cid = ?
            )`,
-      ).bind(uri, guard.did, guard.commitCid)
-      : env.ALTERAN_DB.prepare('DELETE FROM blob_usage WHERE record_uri = ?').bind(uri),
+      ).bind(did, uri, guard.did, guard.commitCid)
+      : env.ALTERAN_DB.prepare('DELETE FROM blob_usage WHERE did = ? AND record_uri = ?').bind(did, uri),
   ];
   for (const key of new Set(keys)) {
     if (guard) {
       statements.push(
         env.ALTERAN_DB.prepare(
-          `INSERT OR IGNORE INTO blob_usage (record_uri, key)
-           SELECT ?, ?
+          `INSERT OR IGNORE INTO blob_usage (did, record_uri, key)
+           SELECT ?, ?, ?
            WHERE EXISTS (
              SELECT 1 FROM repo_root WHERE did = ? AND commit_cid = ?
            )`,
-        ).bind(uri, key, guard.did, guard.commitCid),
+        ).bind(did, uri, key, guard.did, guard.commitCid),
       );
     } else {
       statements.push(
         env.ALTERAN_DB.prepare(
-          'INSERT INTO blob_usage (record_uri, key) VALUES (?, ?)',
-        ).bind(uri, key),
+          'INSERT INTO blob_usage (did, record_uri, key) VALUES (?, ?, ?)',
+        ).bind(did, uri, key),
       );
     }
   }
@@ -169,11 +280,17 @@ export function setRecordBlobUsageStatements(
 }
 
 export async function listOrphanBlobKeys(env: Env): Promise<string[]> {
+  return (await listOrphanBlobRefs(env)).map((ref) => ref.key);
+}
+
+export async function listOrphanBlobRefs(env: Env): Promise<BlobKeyRef[]> {
   const db = getDb(env);
-  // select keys in blob that are not referenced in blob_usage
+  // select blob rows that are not referenced in blob_usage for the same DID
   const all = await db.select().from(blob_ref).all();
-  const used = new Set((await db.select().from(blob_usage).all()).map((u) => u.key));
-  return all.map((b) => b.key).filter((k) => !used.has(k));
+  const used = new Set((await db.select().from(blob_usage).all()).map((u) => `${u.did}\0${u.key}`));
+  return all
+    .filter((blob) => !used.has(`${blob.did}\0${blob.key}`))
+    .map((blob) => ({ did: blob.did, key: blob.key }));
 }
 
 export async function deleteBlobByKey(env: Env, key: string) {
@@ -191,8 +308,8 @@ export async function updateBlobQuota(env: Env, did: string, bytesAdded: number,
   const db = getDb(env);
   const current = await getBlobQuota(env, did);
 
-  const newTotalBytes = current.total_bytes + bytesAdded;
-  const newBlobCount = current.blob_count + countAdded;
+  const newTotalBytes = Math.max(0, current.total_bytes + bytesAdded);
+  const newBlobCount = Math.max(0, current.blob_count + countAdded);
   const now = Date.now();
 
   await db

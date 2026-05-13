@@ -18,10 +18,38 @@ export class RepoCommitConflictError extends Error {
   }
 }
 
+export class RepoBlobNotFoundError extends Error {
+  constructor(message = 'blob not found') {
+    super(message);
+    this.name = 'RepoBlobNotFoundError';
+  }
+}
+
 export async function getRoot(env: Env) {
   const db = drizzle(env.ALTERAN_DB);
   const did = (await resolveSecret(env.PDS_DID)) ?? 'did:example:single-user';
   return db.select().from(repo_root).where(eq(repo_root.did, did)).get();
+}
+
+export async function assertRepoHead(
+  env: Env,
+  did: string,
+  expectedCommitCid: string | null | undefined,
+): Promise<void> {
+  if (expectedCommitCid === undefined) return;
+  if (expectedCommitCid === null) {
+    const row = await env.ALTERAN_DB.prepare(
+      'SELECT 1 FROM repo_root WHERE did = ? LIMIT 1',
+    ).bind(did).first();
+    if (row) throw new RepoCommitConflictError();
+    return;
+  }
+  const result = await env.ALTERAN_DB.prepare(
+    `UPDATE repo_root
+     SET commit_cid = commit_cid
+     WHERE did = ? AND commit_cid = ?`,
+  ).bind(did, expectedCommitCid).run();
+  if (changedRows(result) !== 1) throw new RepoCommitConflictError();
 }
 
 /**
@@ -32,6 +60,7 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
   newMstBlocks?: Array<[CID, Uint8Array]>;
   sideEffectStatements?: (guard: CommitGuard) => D1PreparedStatement[];
   expectedCommitCid?: string | null;
+  requiredBlobKeys?: string[];
 }): Promise<{
   commitCid: string;
   rev: string;
@@ -107,7 +136,8 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
 
   const ts = Date.now();
   const guard = { did, commitCid: cidString };
-  const rootStatement = rootMutationStatement(env, did, cidString, rev, expectedCommitCid);
+  const requiredBlobKeys = Array.from(new Set(opts?.requiredBlobKeys ?? []));
+  const rootStatement = rootMutationStatement(env, did, cidString, rev, expectedCommitCid, requiredBlobKeys);
   const statements = [
     rootStatement,
     ...(opts?.sideEffectStatements?.(guard) ?? []),
@@ -121,7 +151,10 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
   ];
 
   const results = await env.ALTERAN_DB.batch(statements);
-  if (expectedCommitCid !== undefined && changedRows(results[0]) !== 1) {
+  if ((expectedCommitCid !== undefined || requiredBlobKeys.length > 0) && changedRows(results[0]) !== 1) {
+    if (requiredBlobKeys.length > 0 && await hasMissingBlobKey(env, requiredBlobKeys)) {
+      throw new RepoBlobNotFoundError();
+    }
     throw new RepoCommitConflictError();
   }
 
@@ -134,22 +167,41 @@ function rootMutationStatement(
   commitCid: string,
   rev: string,
   expectedCommitCid: string | null | undefined,
+  requiredBlobKeys: string[] = [],
 ): D1PreparedStatement {
+  const blobPrecondition = blobPreconditionSql(requiredBlobKeys, did);
   if (expectedCommitCid === null) {
     return env.ALTERAN_DB.prepare(
       `INSERT INTO repo_root (did, commit_cid, rev)
        SELECT ?, ?, ?
        WHERE NOT EXISTS (
          SELECT 1 FROM repo_root WHERE did = ?
-       )`,
-    ).bind(did, commitCid, rev, did);
+       )${blobPrecondition.clause}`,
+    ).bind(did, commitCid, rev, did, ...blobPrecondition.binds);
   }
   if (typeof expectedCommitCid === 'string') {
     return env.ALTERAN_DB.prepare(
       `UPDATE repo_root
        SET commit_cid = ?, rev = ?
-       WHERE did = ? AND commit_cid = ?`,
-    ).bind(commitCid, rev, did, expectedCommitCid);
+       WHERE did = ? AND commit_cid = ?${blobPrecondition.clause}`,
+    ).bind(commitCid, rev, did, expectedCommitCid, ...blobPrecondition.binds);
+  }
+  if (requiredBlobKeys.length > 0) {
+    return env.ALTERAN_DB.prepare(
+      `INSERT INTO repo_root (did, commit_cid, rev)
+       SELECT ?, ?, ?
+       WHERE ${blobPrecondition.sql}
+       ON CONFLICT(did) DO UPDATE SET
+         commit_cid = excluded.commit_cid,
+         rev = excluded.rev
+       WHERE ${blobPrecondition.sql}`,
+    ).bind(
+      did,
+      commitCid,
+      rev,
+      ...blobPrecondition.binds,
+      ...blobPrecondition.binds,
+    );
   }
   return env.ALTERAN_DB.prepare(
     `INSERT INTO repo_root (did, commit_cid, rev)
@@ -158,6 +210,33 @@ function rootMutationStatement(
        commit_cid = excluded.commit_cid,
        rev = excluded.rev`,
   ).bind(did, commitCid, rev);
+}
+
+function blobPreconditionSql(requiredBlobKeys: string[], did?: string): { sql: string; clause: string; binds: Array<string | number> } {
+  if (requiredBlobKeys.length === 0) {
+    return { sql: '1 = 1', clause: '', binds: [] };
+  }
+  if (!did) {
+    throw new Error('did is required for blob preconditions');
+  }
+  const placeholders = requiredBlobKeys.map(() => '?').join(', ');
+  const sql = `(SELECT COUNT(DISTINCT key) FROM blob WHERE did = ? AND key IN (${placeholders})) = ?`;
+  return {
+    sql,
+    clause: ` AND ${sql}`,
+    binds: [did, ...requiredBlobKeys, requiredBlobKeys.length],
+  };
+}
+
+async function hasMissingBlobKey(env: Env, requiredBlobKeys: string[]): Promise<boolean> {
+  const did = (await resolveSecret(env.PDS_DID)) ?? 'did:example:single-user';
+  const precondition = blobPreconditionSql(requiredBlobKeys, did);
+  const row = await env.ALTERAN_DB.prepare(
+    `SELECT ${precondition.sql} AS ok`,
+  )
+    .bind(...precondition.binds)
+    .first<{ ok: number }>();
+  return row?.ok !== 1;
 }
 
 function changedRows(result: unknown): number {

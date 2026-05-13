@@ -9,8 +9,10 @@ import {
   putRecordStatements,
   deleteRecordStatements,
   setRecordBlobUsageStatements,
+  getRecordBlobKeys,
+  type BlobKeyRef,
 } from '../db/dal';
-import { bumpRoot } from '../db/repo';
+import { assertRepoHead, bumpRoot } from '../db/repo';
 import { generateTid } from '../lib/commit';
 import { resolveSecret } from '../lib/secrets';
 import { storeRecord, storeMstBlocks, cidForRecord } from './repo/blockstore-ops';
@@ -38,12 +40,14 @@ interface CommitResult {
   commitData: string;
   sig: string;
   blocks: string;
+  dereferencedBlobKeys: BlobKeyRef[];
 }
 
 interface NoopRecordResult {
   uri: string;
   cid: string;
   ops: RepoOp[];
+  dereferencedBlobKeys?: undefined;
   commitCid?: undefined;
   rev?: undefined;
   commitData?: undefined;
@@ -70,6 +74,7 @@ export interface BatchCommitResult {
     cid?: string;
     validationStatus?: ValidationStatus;
   }>;
+  dereferencedBlobKeys: BlobKeyRef[];
 }
 
 export class RepoManager {
@@ -152,7 +157,7 @@ export class RepoManager {
     collection: string,
     record: unknown,
     rkey?: string,
-    blobKeys: string[] = [],
+    blobKeys?: string[],
     expectedCommitCid?: string | null,
   ): Promise<CommitResult> {
     const key = rkey ?? generateTid();
@@ -163,9 +168,11 @@ export class RepoManager {
     );
 
     const did = await this.getDid();
+    const effectiveBlobKeys = blobKeys ?? await resolveRecordBlobKeys(this.env, did, record);
     const uri = `at://${did}/${collection}/${key}`;
 
     const currentRoot = await mst.getPointer();
+    await assertBlobKeysAvailable(this.env, did, effectiveBlobKeys);
     const { commitCid, rev, ops, commitData, sig, blocks } = await bumpRoot(
       this.env,
       prevMstRoot ?? undefined,
@@ -173,6 +180,7 @@ export class RepoManager {
       {
         newMstBlocks: Array.from(newMstBlocks),
         expectedCommitCid,
+        requiredBlobKeys: effectiveBlobKeys,
         sideEffectStatements: (guard) => [
           ...putRecordStatements(this.env, {
             uri,
@@ -180,12 +188,22 @@ export class RepoManager {
             cid: recordCid.toString(),
             json: JSON.stringify(record),
           }, guard),
-          ...setRecordBlobUsageStatements(this.env, uri, blobKeys, guard),
+          ...setRecordBlobUsageStatements(this.env, did, uri, effectiveBlobKeys, guard),
         ],
       },
     );
 
-    return { uri, cid: recordCid.toString(), commitCid, rev, ops, commitData, sig, blocks };
+    return {
+      uri,
+      cid: recordCid.toString(),
+      commitCid,
+      rev,
+      ops,
+      commitData,
+      sig,
+      blocks,
+      dereferencedBlobKeys: [],
+    };
   }
 
   async updateRecord(
@@ -206,7 +224,7 @@ export class RepoManager {
     collection: string,
     rkey: string,
     record: unknown,
-    blobKeys: string[] = [],
+    blobKeys?: string[],
     expectedCommitCid?: string | null,
   ): Promise<RecordWriteResult> {
     const key = `${collection}/${rkey}`;
@@ -215,17 +233,21 @@ export class RepoManager {
     const existingCid = await currentMst.get(key);
     const recordCid = await cidForRecord(record);
     const did = await this.getDid();
+    const effectiveBlobKeys = blobKeys ?? await resolveRecordBlobKeys(this.env, did, record);
     const uri = `at://${did}/${collection}/${rkey}`;
     if (existingCid?.toString() === recordCid.toString()) {
+      await assertRepoHead(this.env, did, expectedCommitCid);
       return { uri, cid: recordCid.toString(), ops: [] };
     }
 
+    const previousBlobKeys = await getRecordBlobKeys(this.env, did, uri);
     await storeRecord(this.blockstore, record);
     const mst = existingCid
       ? await currentMst.update(key, recordCid)
       : await currentMst.add(key, recordCid);
     const newMstBlocks = await storeMstBlocks(this.blockstore, mst);
     const currentRoot = await mst.getPointer();
+    await assertBlobKeysAvailable(this.env, did, effectiveBlobKeys);
     const { commitCid, rev, ops, commitData, sig, blocks } = await bumpRoot(
       this.env,
       prevMstRoot ?? undefined,
@@ -233,6 +255,7 @@ export class RepoManager {
       {
         newMstBlocks: Array.from(newMstBlocks),
         expectedCommitCid,
+        requiredBlobKeys: effectiveBlobKeys,
         sideEffectStatements: (guard) => [
           ...putRecordStatements(this.env, {
             uri,
@@ -240,11 +263,23 @@ export class RepoManager {
             cid: recordCid.toString(),
             json: JSON.stringify(record),
           }, guard),
-          ...setRecordBlobUsageStatements(this.env, uri, blobKeys, guard),
+          ...setRecordBlobUsageStatements(this.env, did, uri, effectiveBlobKeys, guard),
         ],
       },
     );
-    return { uri, cid: recordCid.toString(), commitCid, rev, ops, commitData, sig, blocks };
+    return {
+      uri,
+      cid: recordCid.toString(),
+      commitCid,
+      rev,
+      ops,
+      commitData,
+      sig,
+      blocks,
+      dereferencedBlobKeys: previousBlobKeys
+        .filter((key) => !effectiveBlobKeys.includes(key))
+        .map((key) => ({ did, key })),
+    };
   }
 
   async getRecordCid(collection: string, rkey: string): Promise<CID | null> {
@@ -323,8 +358,34 @@ export class RepoManager {
       });
     }
 
+    const previousBlobKeysByUri = new Map<string, string[]>();
+    const finalBlobKeysByUri = new Map<string, string[]>();
+    for (const effect of sideEffects) {
+      if (!previousBlobKeysByUri.has(effect.uri)) {
+        previousBlobKeysByUri.set(
+          effect.uri,
+          await getRecordBlobKeys(this.env, did, effect.uri),
+        );
+      }
+      finalBlobKeysByUri.set(
+        effect.uri,
+        effect.action === 'put' ? effect.blobKeys : [],
+      );
+    }
+    const dereferencedBlobKeys = Array.from(previousBlobKeysByUri).flatMap(
+      ([uri, previousKeys]) => {
+        const finalKeys = finalBlobKeysByUri.get(uri) ?? [];
+        return previousKeys.filter((key) => !finalKeys.includes(key));
+      },
+    );
+
     const currentRoot = await mst.getPointer();
     const newMstBlocks = await storeMstBlocks(this.blockstore, mst);
+    await assertBlobKeysAvailable(
+      this.env,
+      did,
+      sideEffects.flatMap((effect) => effect.action === 'put' ? effect.blobKeys : []),
+    );
     const { commitCid, rev, commitData, sig, blocks } = await bumpRoot(
       this.env,
       prevMstRoot ?? undefined,
@@ -333,21 +394,24 @@ export class RepoManager {
         ops,
         newMstBlocks: Array.from(newMstBlocks),
         expectedCommitCid,
+        requiredBlobKeys: sideEffects.flatMap((effect) =>
+          effect.action === 'put' ? effect.blobKeys : [],
+        ),
         sideEffectStatements: (guard) => sideEffects.flatMap((effect) => {
           if (effect.action === 'delete') {
             return [
               ...deleteRecordStatements(this.env, effect.uri, guard),
-              ...setRecordBlobUsageStatements(this.env, effect.uri, [], guard),
+              ...setRecordBlobUsageStatements(this.env, did, effect.uri, [], guard),
             ];
           }
           return [
             ...putRecordStatements(this.env, {
               uri: effect.uri,
               did,
-              cid: effect.cid,
-              json: JSON.stringify(effect.record),
-            }, guard),
-            ...setRecordBlobUsageStatements(this.env, effect.uri, effect.blobKeys, guard),
+            cid: effect.cid,
+            json: JSON.stringify(effect.record),
+          }, guard),
+            ...setRecordBlobUsageStatements(this.env, did, effect.uri, effect.blobKeys, guard),
           ];
         }),
       },
@@ -362,6 +426,7 @@ export class RepoManager {
       sig,
       blocks,
       results,
+      dereferencedBlobKeys: dereferencedBlobKeys.map((key) => ({ did, key })),
     };
   }
 
@@ -486,4 +551,74 @@ export class RepoManager {
   extractOps(prevRoot: CID | null, newRoot: CID): Promise<RepoOp[]> {
     return extractOpsImpl(this.blockstore, prevRoot, newRoot);
   }
+}
+
+async function assertBlobKeysAvailable(env: Env, did: string, keys: string[]): Promise<void> {
+  for (const key of new Set(keys)) {
+    const row = await env.ALTERAN_DB.prepare(
+      'SELECT cid FROM blob WHERE did = ? AND key = ? LIMIT 1',
+    )
+      .bind(did, key)
+      .first<{ cid: string }>();
+    if (!row) {
+      throw new RepoWriteError('BlobNotFound', 'blob not found');
+    }
+    const object = typeof (env.ALTERAN_BLOBS as any).head === 'function'
+      ? await (env.ALTERAN_BLOBS as any).head(key)
+      : await env.ALTERAN_BLOBS.get(key);
+    if (!object) {
+      throw new RepoWriteError('BlobNotFound', `blob not found: ${row.cid}`);
+    }
+  }
+}
+
+async function resolveRecordBlobKeys(env: Env, did: string, record: unknown): Promise<string[]> {
+  const refs: Array<{ cid: string; mimeType: string; size: number }> = [];
+  collectBlobRefs(record, refs);
+  const keys = new Set<string>();
+  for (const ref of refs) {
+    const row = await env.ALTERAN_DB.prepare(
+      'SELECT key, mime, size FROM blob WHERE did = ? AND cid = ? LIMIT 1',
+    )
+      .bind(did, ref.cid)
+      .first<{ key: string; mime: string; size: number }>();
+    if (!row) {
+      throw new RepoWriteError('BlobNotFound', `blob not found: ${ref.cid}`);
+    }
+    if (row.mime !== ref.mimeType) {
+      throw new RepoWriteError('InvalidMimeType', `blob mime type mismatch: ${ref.cid}`);
+    }
+    if (Number(row.size) !== ref.size) {
+      throw new RepoWriteError('InvalidSize', `blob size mismatch: ${ref.cid}`);
+    }
+    const object = typeof (env.ALTERAN_BLOBS as any).head === 'function'
+      ? await (env.ALTERAN_BLOBS as any).head(row.key)
+      : await env.ALTERAN_BLOBS.get(row.key);
+    if (!object) {
+      throw new RepoWriteError('BlobNotFound', `blob not found: ${ref.cid}`);
+    }
+    keys.add(row.key);
+  }
+  return Array.from(keys);
+}
+
+function collectBlobRefs(value: unknown, refs: Array<{ cid: string; mimeType: string; size: number }>): void {
+  if (!value || typeof value !== 'object') return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectBlobRefs(item, refs);
+    return;
+  }
+  const obj = value as Record<string, unknown>;
+  if (obj.$type === 'blob') {
+    const ref = obj.ref;
+    const cid = ref && typeof ref === 'object'
+      ? (ref as Record<string, unknown>).$link
+      : obj.cid;
+    if (typeof cid === 'string' && typeof obj.mimeType === 'string' && typeof obj.size === 'number') {
+      CID.parse(cid);
+      refs.push({ cid, mimeType: obj.mimeType, size: obj.size });
+    }
+    return;
+  }
+  for (const child of Object.values(obj)) collectBlobRefs(child, refs);
 }

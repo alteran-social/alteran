@@ -75,10 +75,35 @@ export function invalidSwap(message = 'Invalid swap'): Response {
 
 export function handleRepoWriteError(error: unknown): Response {
   if (error instanceof RepoWriteError) return error.toResponse();
-  if (error instanceof Error && error.name === 'RepoCommitConflictError') {
+  if (isRepoBlobNotFound(error)) {
+    return jsonError('BlobNotFound', 'blob not found', 400);
+  }
+  if (isRepoCommitConflict(error)) {
     return jsonError('InvalidSwap', 'repo head changed', 400);
   }
   throw error;
+}
+
+export function hasSwapCommit(input: Record<string, unknown>): boolean {
+  return Object.prototype.hasOwnProperty.call(input, 'swapCommit');
+}
+
+export async function retryNoSwapCommit<T>(
+  input: Record<string, unknown>,
+  write: () => Promise<T>,
+): Promise<T> {
+  const canRetry = !hasSwapCommit(input);
+  const maxAttempts = canRetry ? 3 : 1;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await write();
+    } catch (error) {
+      lastError = error;
+      if (!canRetry || !isRepoCommitConflict(error)) break;
+    }
+  }
+  throw lastError;
 }
 
 export async function buildRepoWriteContext(
@@ -163,11 +188,8 @@ export async function preparePutRecord(
     validate: body.validate,
   });
   const candidateCid = await cidForRecord(write.record);
-  let expectedCommitCid: string | null | undefined;
-  if (currentCid?.toString() !== candidateCid.toString()) {
-    expectedCommitCid = expectedCommitCidForRequest(body, ctx.currentCommitCid);
-    checkSwapRecord(body.swapRecord, currentCid, true);
-  }
+  const expectedCommitCid = expectedCommitCidForRequest(body, ctx.currentCommitCid);
+  checkSwapRecord(body.swapRecord, currentCid, true);
 
   return {
     ...ctx,
@@ -189,11 +211,8 @@ export async function prepareDeleteRecord(
   validatePath(collection, rkey);
 
   const currentCid = await ctx.repo.getRecordCid(collection, rkey);
-  let expectedCommitCid: string | null | undefined;
-  if (currentCid) {
-    expectedCommitCid = expectedCommitCidForRequest(body, ctx.currentCommitCid);
-    checkSwapRecord(body.swapRecord, currentCid, false);
-  }
+  const expectedCommitCid = expectedCommitCidForRequest(body, ctx.currentCommitCid);
+  checkSwapRecord(body.swapRecord, currentCid, false);
 
   return {
     ...ctx,
@@ -287,6 +306,12 @@ export function putRecordAuthorizations(
   input: Record<string, any>,
 ): RequestedWriteAuthorization[] {
   const collection = requireString(input.collection, 'collection');
+  if (input.swapRecord === null) {
+    return [{ collection, action: 'create' }];
+  }
+  if (typeof input.swapRecord === 'string') {
+    return [{ collection, action: 'update' }];
+  }
   return [
     { collection, action: 'create' },
     { collection, action: 'update' },
@@ -526,8 +551,8 @@ function validateBlobObject(obj: Record<string, unknown>, path: string): {
   if (typeof obj.mimeType !== 'string' || obj.mimeType.length === 0) {
     throw new RepoWriteError('InvalidRequest', `${path}.mimeType must be non-empty`);
   }
-  if (typeof obj.size !== 'number' || !Number.isInteger(obj.size) || obj.size <= 0) {
-    throw new RepoWriteError('InvalidRequest', `${path}.size must be a positive integer`);
+  if (typeof obj.size !== 'number' || !Number.isInteger(obj.size) || obj.size < 0) {
+    throw new RepoWriteError('InvalidRequest', `${path}.size must be a non-negative integer`);
   }
   return { cid, mimeType: obj.mimeType, size: obj.size };
 }
@@ -593,6 +618,12 @@ async function validateBlobRefs(
     if (Number(row.size) !== blob.size) {
       throw new RepoWriteError('InvalidSize', `blob size mismatch: ${blob.cid}`);
     }
+    const object = typeof (env.ALTERAN_BLOBS as any).head === 'function'
+      ? await (env.ALTERAN_BLOBS as any).head(row.key)
+      : await env.ALTERAN_BLOBS.get(row.key);
+    if (!object) {
+      throw new RepoWriteError('BlobNotFound', `blob not found: ${blob.cid}`);
+    }
     keys.add(row.key);
   }
   return Array.from(keys);
@@ -623,9 +654,16 @@ function expectedCommitCidForRequest(
   body: Record<string, unknown>,
   currentCommitCid: string | null,
 ): string | null | undefined {
-  if (!Object.prototype.hasOwnProperty.call(body, 'swapCommit')) return undefined;
-  checkSwapCommit(body.swapCommit, currentCommitCid);
+  if (hasSwapCommit(body)) checkSwapCommit(body.swapCommit, currentCommitCid);
   return currentCommitCid;
+}
+
+function isRepoCommitConflict(error: unknown): boolean {
+  return error instanceof Error && error.name === 'RepoCommitConflictError';
+}
+
+function isRepoBlobNotFound(error: unknown): boolean {
+  return error instanceof Error && error.name === 'RepoBlobNotFoundError';
 }
 
 function checkSwapRecord(value: unknown, currentCid: CID | null, nullable: boolean): void {

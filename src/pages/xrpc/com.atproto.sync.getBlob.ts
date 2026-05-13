@@ -1,11 +1,8 @@
 import type { APIContext } from 'astro';
 import { getDb } from '../../db/client';
 import { blob_ref } from '../../db/schema';
-import { eq } from 'drizzle-orm';
-import { CID } from 'multiformats/cid';
-import { sha256 } from 'multiformats/hashes/sha2';
-import { putBlobRef } from '../../db/dal';
-import { isAccountActive } from '../../db/dal';
+import { and, eq } from 'drizzle-orm';
+import { blobKeyHasUsage, isAccountActive } from '../../db/dal';
 
 export const prerender = false;
 
@@ -46,41 +43,13 @@ export async function GET({ locals, url }: APIContext) {
 
     const db = getDb(env);
 
-    // Look up blob metadata by CID
-    let blobMeta = await db
+    const blobMeta = await db
       .select()
       .from(blob_ref)
-      .where(eq(blob_ref.cid, cid))
+      .where(and(eq(blob_ref.did, did), eq(blob_ref.cid, cid)))
       .get();
 
-    let key: string | null = blobMeta?.key ?? null;
-    let mime: string = blobMeta?.mime ?? 'application/octet-stream';
-    let size: number | null = blobMeta?.size ?? null;
-
-    // Fallback for older uploads: derive R2 key from CID (raw/sha256) if DB row missing
-    if (!key) {
-      try {
-        const link = CID.parse(cid);
-        // blob CIDs are raw (0x55) with sha256 multihash
-        if (link.multihash.code !== sha256.code) {
-          return new Response(
-            JSON.stringify({ error: 'InvalidRequest', message: 'Unsupported multihash' }),
-            { status: 400, headers: { 'Content-Type': 'application/json' } }
-          );
-        }
-        // Recreate legacy R2 key scheme used by store.put()
-        const digest = link.multihash.digest; // Uint8Array
-        // base64url encode
-        let s = '';
-        for (const b of digest) s += String.fromCharCode(b);
-        const b64url = btoa(s).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
-        key = `blobs/by-cid/${b64url}`;
-      } catch {
-        key = null;
-      }
-    }
-
-    if (!key) {
+    if (!blobMeta || !(await blobKeyHasUsage(env, did, blobMeta.key))) {
       return new Response(
         JSON.stringify({ error: 'InvalidRequest', message: 'Blob not found' }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
@@ -89,7 +58,7 @@ export async function GET({ locals, url }: APIContext) {
 
     // Fetch blob from R2
     const r2 = env.ALTERAN_BLOBS;
-    const object = await r2.get(key);
+    const object = await r2.get(blobMeta.key);
 
     if (!object) {
       return new Response(
@@ -98,23 +67,12 @@ export async function GET({ locals, url }: APIContext) {
       );
     }
 
-    if (!blobMeta) {
-      try {
-        size = object.size ?? size ?? 0;
-        await putBlobRef(env, did, cid, key, mime, Number(size ?? 0));
-      } catch (backfillError) {
-        // Backfill is opportunistic; serving the blob is the priority.
-        console.warn('getBlob backfill failed:', backfillError);
-      }
-    }
-
-    // workers-types' ReadableStream lacks the DOM-types readMany member; the
-    // shapes are wire-compatible at runtime, so widen through unknown.
-    return new Response(object.body as unknown as ReadableStream<Uint8Array>, {
+    const body = await object.arrayBuffer();
+    return new Response(body, {
       status: 200,
       headers: {
-        'Content-Type': mime,
-        ...(size != null ? { 'Content-Length': String(size) } : {}),
+        'Content-Type': blobMeta.mime,
+        'Content-Length': String(blobMeta.size),
         'Cache-Control': 'public, max-age=31536000, immutable',
         'x-content-type-options': 'nosniff',
         'content-security-policy': "default-src 'none'; sandbox",
