@@ -1,6 +1,7 @@
 import type { APIContext } from 'astro';
 import { errorMessage } from '../../lib/errors';
-import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError } from '../../lib/oauth/resource';
+import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError, insufficientScopeResponse } from '../../lib/oauth/resource';
+import { canUploadBlob } from '../../lib/auth-scope';
 import { verifyServiceAuth, isServiceAuthToken } from '../../lib/service-auth';
 import { checkRate } from '../../lib/ratelimit';
 import { isAllowedMime, sniffMime, baseMime } from '../../lib/util';
@@ -37,6 +38,9 @@ export async function POST({ locals, request }: APIContext) {
     try {
       const auth = await verifyResourceRequestHybrid(env, request);
       if (!auth) return dpopResourceUnauthorized(env);
+      if (!canUploadBlob(auth.access, baseMime(request.headers.get('content-type')))) {
+        return insufficientScopeResponse();
+      }
     } catch (error) {
       const handled = await handleResourceAuthError(env, error);
       if (handled) return handled;

@@ -2,7 +2,8 @@ import type { APIContext } from 'astro';
 import { RepoManager } from '../../services/repo-manager';
 import { readJson } from '../../lib/util';
 import { bumpRoot } from '../../db/repo';
-import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError } from '../../lib/oauth/resource';
+import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError, insufficientScopeResponse } from '../../lib/oauth/resource';
+import { canWriteRepo, type RepoWriteAction } from '../../lib/auth-scope';
 import { isAccountActive } from '../../db/dal';
 import { checkRate } from '../../lib/ratelimit';
 import { notifySequencer } from '../../lib/sequencer';
@@ -18,9 +19,11 @@ export const prerender = false;
  */
 export async function POST({ locals, request }: APIContext) {
   const { env } = locals.runtime;
+  let auth: NonNullable<Awaited<ReturnType<typeof verifyResourceRequestHybrid>>>;
   try {
-    const auth = await verifyResourceRequestHybrid(env, request);
-    if (!auth) return dpopResourceUnauthorized(env);
+    const verified = await verifyResourceRequestHybrid(env, request);
+    if (!verified) return dpopResourceUnauthorized(env);
+    auth = verified;
   } catch (error) {
     const handled = await handleResourceAuthError(env, error);
     if (handled) return handled;
@@ -58,6 +61,18 @@ export async function POST({ locals, request }: APIContext) {
         { status: 400, headers: { 'Content-Type': 'application/json' } }
       );
     }
+    type WriteOperation = {
+      $type?: string;
+      collection?: string;
+      rkey?: string;
+      value?: Record<string, unknown>;
+    };
+    for (const rawWrite of writes) {
+      const write = rawWrite as WriteOperation;
+      const action = repoActionForWriteType(write?.$type);
+      if (!action) continue;
+      if (!canWriteRepo(auth.access, write.collection, action)) return insufficientScopeResponse();
+    }
 
     const repoManager = new RepoManager(env);
     const pdsDid = typeof env.PDS_DID === 'string' ? env.PDS_DID : '';
@@ -69,12 +84,6 @@ export async function POST({ locals, request }: APIContext) {
     let firstPrevMst: import('multiformats/cid').CID | null = null;
     let lastMst: import('../../lib/mst').MST | null = null;
 
-    type WriteOperation = {
-      $type?: string;
-      collection?: string;
-      rkey?: string;
-      value?: Record<string, unknown>;
-    };
     // Apply all writes atomically
     for (const rawWrite of writes) {
       const write = rawWrite as WriteOperation;
@@ -179,5 +188,18 @@ export async function POST({ locals, request }: APIContext) {
       JSON.stringify({ error: 'InternalServerError', message: String(error) }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
+  }
+}
+
+function repoActionForWriteType(type: unknown): RepoWriteAction | null {
+  switch (type) {
+    case 'com.atproto.repo.applyWrites#create':
+      return 'create';
+    case 'com.atproto.repo.applyWrites#update':
+      return 'update';
+    case 'com.atproto.repo.applyWrites#delete':
+      return 'delete';
+    default:
+      return null;
   }
 }

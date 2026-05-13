@@ -1,6 +1,7 @@
 import type { APIContext } from 'astro';
 import { errorMessage } from '../../lib/errors';
-import { authErrorResponse, isAuthorized, unauthorized } from '../../lib/auth';
+import { authErrorResponse, authenticateRequest, unauthorized } from '../../lib/auth';
+import { canUseAppPasswordLevelAccess } from '../../lib/auth-scope';
 import { getDb } from '../../db/client';
 import { record, blob_ref } from '../../db/schema';
 import { eq } from 'drizzle-orm';
@@ -18,7 +19,8 @@ export async function GET({ locals, request, url }: APIContext) {
   const { env } = locals.runtime;
 
   try {
-    if (!(await isAuthorized(request, env))) return unauthorized();
+    const auth = await authenticateRequest(request, env);
+    if (!auth || !canUseAppPasswordLevelAccess(auth.access)) return unauthorized();
   } catch (error) {
     const handled = await authErrorResponse(env, error);
     if (handled) return handled;

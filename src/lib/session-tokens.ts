@@ -4,11 +4,13 @@ import { getRuntimeString } from './secrets';
 import { getOrCreateSecret } from '../db/account';
 import { InvalidToken, ServerMisconfigured } from './errors';
 import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
+import { AuthScope, isBearerAccessScope, isOAuthScope } from './auth-scope';
 
 const SESSION_SECRET_KEY = 'session_jwt_secret';
 const GRACE_PERIOD_SECONDS = 2 * 60 * 60;
 const ACCESS_TTL_SECONDS = 120 * 60; // 120 minutes
 const REFRESH_TTL_SECONDS = 90 * 24 * 60 * 60; // 90 days
+const LEGACY_REFRESH_SCOPE = 'refresh';
 
 async function loadSecret(env: Env): Promise<string> {
   const fromEnv = await getRuntimeString(env, 'SESSION_JWT_SECRET' as keyof Env, '');
@@ -45,10 +47,18 @@ export async function issueSessionTokens(env: Env, did: string, opts: IssueSessi
   const jwtKey = await getJwtKey(env);
   const serviceDid = await getServiceDid(env);
   const now = Math.floor(Date.now() / 1000);
+  const accessScope = opts.dpopJkt ? (opts.scope ?? 'atproto') : (opts.scope ?? AuthScope.Access);
+  if (opts.dpopJkt) {
+    if (!isOAuthScope(accessScope)) {
+      throw new InvalidToken('Invalid OAuth access token scope');
+    }
+  } else if (!isBearerAccessScope(accessScope)) {
+    throw new InvalidToken('Invalid access token scope');
+  }
 
   const accessExp = now + ACCESS_TTL_SECONDS;
   const accessPayload: TokenPayload = {
-    scope: opts.dpopJkt ? (opts.scope ?? 'atproto') : 'access',
+    scope: accessScope,
     aud: serviceDid,
     sub: did,
     iat: now,
@@ -65,7 +75,7 @@ export async function issueSessionTokens(env: Env, did: string, opts: IssueSessi
   const jti = opts.jti ?? generateTokenId();
   const refreshExp = now + REFRESH_TTL_SECONDS;
   const refreshPayload: RefreshTokenPayload = {
-    scope: 'refresh',
+    scope: AuthScope.Refresh,
     aud: serviceDid,
     sub: did,
     iat: now,
@@ -95,7 +105,9 @@ export async function verifyRefreshToken(env: Env, token: string, opts: { ignore
   if (header.typ !== 'refresh+jwt') {
     throw new InvalidToken('Invalid token type');
   }
-  if (payload.scope !== 'refresh') {
+  // New refresh tokens use the ATProto scope string. Accept the previous local
+  // literal only so already-issued refresh credentials can rotate forward.
+  if (payload.scope !== AuthScope.Refresh && payload.scope !== LEGACY_REFRESH_SCOPE) {
     throw new InvalidToken('Invalid refresh token scope');
   }
   return {
@@ -116,8 +128,13 @@ export async function verifyAccessToken(env: Env, token: string) {
   if (header.typ !== 'at+jwt') {
     throw new InvalidToken('Invalid token type');
   }
-  if (payload.scope === 'refresh') {
-    throw new InvalidToken('Unexpected scope for access token');
+  const isOAuthToken = typeof (payload.cnf as { jkt?: unknown } | undefined)?.jkt === 'string';
+  if (isOAuthToken) {
+    if (!isOAuthScope(payload.scope)) {
+      throw new InvalidToken('Invalid OAuth access token scope');
+    }
+  } else if (!isBearerAccessScope(payload.scope)) {
+    throw new InvalidToken('Invalid access token scope');
   }
   return payload;
 }

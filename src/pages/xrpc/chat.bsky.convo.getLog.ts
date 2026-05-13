@@ -1,5 +1,6 @@
 import type { APIContext } from 'astro';
-import { authErrorResponse, isAuthorized, unauthorized } from '../../lib/auth';
+import { authErrorResponse, authenticateRequest, unauthorized } from '../../lib/auth';
+import { canAccessChat } from '../../lib/auth-scope';
 import { getPrimaryActor } from '../../lib/actor';
 import { listChatConvoLogs } from '../../lib/chat';
 
@@ -8,7 +9,8 @@ export const prerender = false;
 export async function GET({ locals, request }: APIContext) {
   const { env } = locals.runtime;
   try {
-    if (!(await isAuthorized(request, env))) return unauthorized();
+    const auth = await authenticateRequest(request, env);
+    if (!auth || !canAccessChat(auth.access)) return unauthorized();
   } catch (error) {
     const handled = await authErrorResponse(env, error);
     if (handled) return handled;
