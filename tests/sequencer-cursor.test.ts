@@ -5,7 +5,6 @@ import { InvalidRequest } from '../src/lib/errors';
 describe('parseCursorParam', () => {
   it('defaults missing param to 0', () => {
     expect(parseCursorParam(null)).toBe(0);
-    expect(parseCursorParam('')).toBe(0);
   });
 
   it('parses a non-negative integer', () => {
@@ -15,6 +14,7 @@ describe('parseCursorParam', () => {
 
   it('rejects non-numeric values', () => {
     expect(() => parseCursorParam('abc')).toThrow(InvalidRequest);
+    expect(() => parseCursorParam('')).toThrow(InvalidRequest);
   });
 
   it('rejects negatives', () => {

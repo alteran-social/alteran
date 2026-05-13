@@ -2,6 +2,7 @@ import { seed } from '../db/seed';
 import { validateConfigOrThrow } from '../lib/config';
 import { resolveEnvSecrets } from '../lib/secrets';
 import { notifyRelaysIfNeeded } from '../lib/relay';
+import { isWebSocketUpgrade } from './sequencer/upgrade';
 import type { Env } from '../env';
 import type { SSRManifest } from 'astro';
 import type {
@@ -114,8 +115,13 @@ export function createPdsFetchHandler(options?: CreatePdsFetchHandlerOptions): P
       }
     }
     if (url.pathname === '/xrpc/com.atproto.sync.subscribeRepos') {
-      const upgrade = request.headers.get('upgrade');
-      if (upgrade !== 'websocket') {
+      if (request.method !== 'GET') {
+        return new Response('Method Not Allowed', {
+          status: 405,
+          headers: { Allow: 'GET' },
+        }) as unknown as WorkersResponse;
+      }
+      if (!isWebSocketUpgrade(request as unknown as Request)) {
         try {
           console.log(JSON.stringify({
             level: 'warn',

@@ -5,6 +5,7 @@ export interface Client {
   webSocket: WebSocket;
   id: string;
   cursor: number;
+  replay: boolean;
 }
 
 export interface CommitEvent {

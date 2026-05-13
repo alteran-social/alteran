@@ -309,11 +309,10 @@ Sync (CAR v1)
   - Blocks are DAG-CBOR encoded; CIDs are CIDv1 (dag-cbor + sha2-256)
 
 Firehose (WebSocket)
-- `GET /xrpc/com.atproto.sync.subscribeRepos` upgrades to WebSocket.
+- `GET /xrpc/com.atproto.sync.subscribeRepos` upgrades to WebSocket through the packaged Worker returned by `createPdsFetchHandler()`. It is handled before Astro route dispatch, so hosts that compose routes manually must use the Worker fetch handler for firehose support.
 - On writes, the worker POSTs a small commit frame to the `Sequencer` Durable Object, which broadcasts to all subscribers.
-- Frames (subject to change):
-  - `{"type":"hello","now":<ms>}` once on connect
-  - `{"type":"commit","did":"...","commitCid":"...","rev":<n>,"ts":<ms>}` on each write
+- Cursor behavior follows the event-stream rules: no cursor starts from the current position, `cursor=0` replays from the oldest retained event, too-old positive cursors receive `#info` `OutdatedCursor` before replay, and future cursors receive a `FutureCursor` error frame before close.
+- Frames are binary event-stream frames: DAG-CBOR header followed by DAG-CBOR payload.
 
 Blob storage
 - Keys are content-addressed: `blobs/by-cid/<sha256-b64url>`; upload response `$link` equals this key.
