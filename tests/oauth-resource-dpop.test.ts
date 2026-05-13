@@ -10,11 +10,15 @@ import { GET as getSession } from '../src/pages/xrpc/com.atproto.server.getSessi
 import { GET as getPreferences } from '../src/pages/xrpc/app.bsky.actor.getPreferences';
 import { GET as catchallGet } from '../src/pages/xrpc/[...nsid]';
 
-async function issueOAuthAccess(env: any, key: Awaited<ReturnType<typeof makeDpopKey>>) {
+async function issueOAuthAccess(
+  env: any,
+  key: Awaited<ReturnType<typeof makeDpopKey>>,
+  scope = 'atproto transition:generic',
+) {
   const sessionId = crypto.randomUUID().replace(/-/g, '');
   const accessJti = crypto.randomUUID().replace(/-/g, '');
   const { accessJwt, refreshPayload, refreshExpiry, accessPayload } = await issueSessionTokens(env, 'did:example:test', {
-    scope: 'atproto',
+    scope,
     clientId: 'https://client.example/metadata',
     dpopJkt: key.jkt,
     oauthSessionId: sessionId,
@@ -27,7 +31,7 @@ async function issueOAuthAccess(env: any, key: Awaited<ReturnType<typeof makeDpo
     clientAuthMethod: 'none',
     clientAuthKeyId: null,
     dpopJkt: key.jkt,
-    scope: 'atproto',
+    scope,
     currentRefreshTokenId: refreshPayload.jti,
     accessJti: String(accessPayload.jti),
     expiresAt: refreshExpiry,
@@ -41,7 +45,7 @@ async function issueOAuthAccess(env: any, key: Awaited<ReturnType<typeof makeDpo
     clientId: 'https://client.example/metadata',
     clientAuthMethod: 'none',
     dpopJkt: key.jkt,
-    oauthScope: 'atproto',
+    oauthScope: scope,
     accessJti: String(accessPayload.jti),
   });
   return accessJwt;
@@ -60,7 +64,20 @@ describe('OAuth resource DPoP binding', () => {
     }));
     expect(result?.did).toBe('did:example:test');
     expect(result?.authType).toBe('oauth-dpop');
-    expect(result?.scope).toBe('atproto');
+    expect(result?.scope).toBe('atproto transition:generic');
+  });
+
+  it('rejects login-only OAuth tokens on PDS resource routes', async () => {
+    const env = await makeEnv();
+    const key = await makeDpopKey();
+    const access = await issueOAuthAccess(env, key, 'atproto');
+    const url = 'https://pds.example/xrpc/com.atproto.repo.createRecord';
+    const proof = await signResourceDpop(env, key, 'POST', url, access);
+
+    await expect(verifyResourceRequestHybrid(env, new Request(url, {
+      method: 'POST',
+      headers: { authorization: `DPoP ${access}`, dpop: proof },
+    }))).rejects.toMatchObject({ code: 'invalid_token' });
   });
 
   it('accepts case-insensitive DPoP authorization schemes', async () => {
@@ -93,7 +110,7 @@ describe('OAuth resource DPoP binding', () => {
       headers: { authorization: `DPoP ${access}`, dpop: authProof },
     }), env);
     expect(authContext?.claims.sub).toBe('did:example:test');
-    expect(authContext?.claims.scope).toBe('atproto');
+    expect(authContext?.claims.scope).toBe('atproto transition:generic');
 
     const sessionProof = await signResourceDpop(env, key, 'GET', sessionUrl, access);
     const sessionRequest = new Request(sessionUrl, {

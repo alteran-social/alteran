@@ -7,6 +7,7 @@ import { jwkThumbprint } from './dpop';
 import {
   bearerAccessContext,
   isBearerAccessScope,
+  isOAuthPermissionScope,
   oauthAccessContext,
   type AuthAccessContext,
 } from '../auth-scope';
@@ -139,6 +140,9 @@ async function verifyDpopAccess(env: Env, request: Request, accessToken: string)
   await importJWK(header.jwk as JoseJWK, 'ES256');
 
   const tokenPayload = await verifyAccessTokenOrThrow(env, accessToken, { allowOAuth: true });
+  if (!isOAuthPermissionScope(tokenPayload.scope)) {
+    throw new ResourceAuthError('invalid_token', { message: 'OAuth token has no PDS resource permissions' });
+  }
   const tokenJkt = (tokenPayload.cnf as any)?.jkt;
   if (typeof tokenJkt !== 'string') {
     throw new ResourceAuthError('invalid_token', { message: 'DPoP access token missing cnf.jkt' });
@@ -270,6 +274,10 @@ function jsonError(error: string, message: string, status: number): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+export function insufficientScopeResponse(): Response {
+  return jsonError('InvalidToken', 'token does not grant access to this resource', 401);
 }
 
 export async function handleResourceAuthError(env: Env, error: unknown): Promise<Response | null> {

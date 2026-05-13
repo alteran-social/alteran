@@ -1,5 +1,6 @@
 import type { Env } from '../../env';
 import { authErrorResponse, authenticateRequest, unauthorized, type AuthContext } from '../auth';
+import { canMakeRpcCall, canUseAppPasswordLevelAccess } from '../auth-scope';
 import { InvalidProxyHeader } from '../errors';
 import {
   PRIVILEGED_METHODS,
@@ -106,27 +107,20 @@ export async function proxyAppView({
     });
   }
   const scope = resolveAuthScope(auth.claims.scope);
-  if (!auth.access.isOAuth && !scope) {
+  if (!auth.access.isOAuth && (!scope || !canUseAppPasswordLevelAccess(auth.access))) {
     return new Response(JSON.stringify({ error: 'InvalidToken', message: 'bad token scope' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-  const hasPrivilegedAccess = auth.access.isOAuth
-    ? false
-    : !!scope && PRIVILEGED_SCOPES.has(scope);
-  if (!hasPrivilegedAccess && PRIVILEGED_METHODS.has(lxm)) {
-    return new Response(JSON.stringify({ error: 'InvalidToken' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' },
     });
   }
 
   let target: ProxyTarget = { did: defaultService.did, url: defaultService.url };
+  let audience = `${defaultService.did}#${defaultService.id}`;
   const proxyHeader = request.headers.get('atproto-proxy');
   if (proxyHeader) {
     try {
       target = await resolveProxyTargetWithRegistry(env, proxyHeader, registry);
+      audience = proxyHeader.trim();
     } catch (error) {
       console.error('AppView proxy header error:', error);
       const isHeaderError = error instanceof InvalidProxyHeader;
@@ -138,6 +132,21 @@ export async function proxyAppView({
         },
       );
     }
+  }
+  const hasPrivilegedAccess = auth.access.isOAuth
+    ? canMakeRpcCall(auth.access, lxm, audience)
+    : !!scope && PRIVILEGED_SCOPES.has(scope);
+  if (!hasPrivilegedAccess && PRIVILEGED_METHODS.has(lxm)) {
+    return new Response(JSON.stringify({ error: 'InvalidToken' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+  if (auth.access.isOAuth && !canMakeRpcCall(auth.access, lxm, audience)) {
+    return new Response(JSON.stringify({ error: 'InvalidToken', message: 'bad token scope' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   const originalUrl = new URL(request.url);

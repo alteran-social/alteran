@@ -4,7 +4,7 @@ import { getRuntimeString } from './secrets';
 import { getOrCreateSecret } from '../db/account';
 import { InvalidToken, ServerMisconfigured } from './errors';
 import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
-import { AuthScope, isBearerAccessScope, isOAuthPermissionScope } from './auth-scope';
+import { AuthScope, isBearerAccessScope, isOAuthScope } from './auth-scope';
 
 const SESSION_SECRET_KEY = 'session_jwt_secret';
 const GRACE_PERIOD_SECONDS = 2 * 60 * 60;
@@ -49,7 +49,7 @@ export async function issueSessionTokens(env: Env, did: string, opts: IssueSessi
   const now = Math.floor(Date.now() / 1000);
   const accessScope = opts.dpopJkt ? (opts.scope ?? 'atproto') : (opts.scope ?? AuthScope.Access);
   if (opts.dpopJkt) {
-    if (!isOAuthPermissionScope(accessScope)) {
+    if (!isOAuthScope(accessScope)) {
       throw new InvalidToken('Invalid OAuth access token scope');
     }
   } else if (!isBearerAccessScope(accessScope)) {
@@ -130,7 +130,7 @@ export async function verifyAccessToken(env: Env, token: string) {
   }
   const isOAuthToken = typeof (payload.cnf as { jkt?: unknown } | undefined)?.jkt === 'string';
   if (isOAuthToken) {
-    if (!isOAuthPermissionScope(payload.scope)) {
+    if (!isOAuthScope(payload.scope)) {
       throw new InvalidToken('Invalid OAuth access token scope');
     }
   } else if (!isBearerAccessScope(payload.scope)) {

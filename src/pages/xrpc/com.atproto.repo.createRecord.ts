@@ -1,6 +1,7 @@
 import type { APIContext } from 'astro';
 import { errorCode, errorMessage } from '../../lib/errors';
-import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError } from '../../lib/oauth/resource';
+import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError, insufficientScopeResponse } from '../../lib/oauth/resource';
+import { canWriteRepo } from '../../lib/auth-scope';
 import { checkRate } from '../../lib/ratelimit';
 import { readJsonBounded } from '../../lib/util';
 import { RepoManager } from '../../services/repo-manager';
@@ -10,9 +11,11 @@ export const prerender = false;
 
 export async function POST({ locals, request }: APIContext) {
   const { env } = locals.runtime;
+  let auth: NonNullable<Awaited<ReturnType<typeof verifyResourceRequestHybrid>>>;
   try {
-    const auth = await verifyResourceRequestHybrid(env, request);
-    if (!auth) return dpopResourceUnauthorized(env);
+    const verified = await verifyResourceRequestHybrid(env, request);
+    if (!verified) return dpopResourceUnauthorized(env);
+    auth = verified;
   } catch (error) {
     const handled = await handleResourceAuthError(env, error);
     if (handled) return handled;
@@ -34,6 +37,7 @@ export async function POST({ locals, request }: APIContext) {
   const { collection, rkey } = body ?? {};
   let { record } = body ?? {};
   if (!collection || !record) return new Response(JSON.stringify({ error: 'BadRequest' }), { status: 400 });
+  if (!canWriteRepo(auth.access, collection, 'create')) return insufficientScopeResponse();
 
   // Minimal schema alignment for app.bsky.feed.post: ensure required fields
   if (collection === 'app.bsky.feed.post' && record && typeof record === 'object') {

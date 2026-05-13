@@ -1,15 +1,17 @@
 import type { APIContext } from 'astro';
-import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError } from '../../lib/oauth/resource';
+import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError, insufficientScopeResponse } from '../../lib/oauth/resource';
 import { createServiceAuthToken } from '../../lib/appview';
+import { canMakeRpcCall } from '../../lib/auth-scope';
 
 export const prerender = false;
 
 export async function GET({ locals, request }: APIContext) {
   const { env } = locals.runtime;
-  let auth: { did: string; token: string } | null = null;
+  let auth: NonNullable<Awaited<ReturnType<typeof verifyResourceRequestHybrid>>>;
   try {
-    auth = await verifyResourceRequestHybrid(env, request);
-    if (!auth) return dpopResourceUnauthorized(env);
+    const verified = await verifyResourceRequestHybrid(env, request);
+    if (!verified) return dpopResourceUnauthorized(env);
+    auth = verified;
   } catch (error) {
     const handled = await handleResourceAuthError(env, error);
     if (handled) return handled;
@@ -30,6 +32,7 @@ export async function GET({ locals, request }: APIContext) {
   }
 
   const lexiconMethod = lexParam && lexParam.trim() !== '' ? lexParam.trim() : null;
+  if (!canMakeRpcCall(auth.access, lexiconMethod, audience)) return insufficientScopeResponse();
 
   let expiresIn = 60;
   const now = Math.floor(Date.now() / 1000);

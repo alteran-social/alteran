@@ -5,13 +5,18 @@ import { makeDpopKey, signResourceDpop } from './helpers/oauth';
 import { createOAuthSession, getSecret, storeRefreshToken } from '../src/db/account';
 import { setAccountState } from '../src/db/dal';
 import { authenticateRequest } from '../src/lib/auth';
-import { AuthScope, bearerAccessContext, oauthAccessContext } from '../src/lib/auth-scope';
+import { AuthScope, bearerAccessContext, isOAuthPermissionScope, isOAuthScope, oauthAccessContext } from '../src/lib/auth-scope';
 import { proxyAppView } from '../src/lib/appview';
 import { verifyResourceRequestHybrid } from '../src/lib/oauth/resource';
 import { issueSessionTokens, verifyAccessToken } from '../src/lib/session-tokens';
+import { POST as requestPlcOperationSignature } from '../src/pages/xrpc/com.atproto.identity.requestPlcOperationSignature';
 
 const did = 'did:example:test';
 const clientId = 'https://client.example/metadata';
+
+function apiContext(env: any, request: Request) {
+  return { locals: { runtime: { env } }, request } as any;
+}
 
 async function signAccessWithScope(env: any, scope: string): Promise<string> {
   await issueSessionTokens(env, did);
@@ -76,6 +81,15 @@ async function issueOauthAccess(env: any, key: Awaited<ReturnType<typeof makeDpo
 }
 
 describe('ATProto auth scopes', () => {
+  it('distinguishes OAuth login scope from PDS resource permissions', async () => {
+    expect(isOAuthScope('atproto')).toBe(true);
+    expect(isOAuthPermissionScope('atproto')).toBe(false);
+    expect(isOAuthPermissionScope('atproto transition:chat.bsky')).toBe(false);
+    expect(isOAuthPermissionScope('atproto transition:generic')).toBe(true);
+    expect(isOAuthPermissionScope('atproto repo:app.bsky.feed.post?action=create')).toBe(true);
+    expect(isOAuthScope('atproto mystery.scope')).toBe(false);
+  });
+
   it('issues full-access and refresh tokens with ATProto scope names', async () => {
     const env = await makeEnv();
     const { accessJwt, accessPayload, refreshPayload } = await issueSessionTokens(env, did);
@@ -271,5 +285,33 @@ describe('ATProto auth scopes', () => {
       },
     });
     expect(appPass.status).toBe(400);
+  });
+
+  it('requires full bearer access for PLC operation signing endpoints', async () => {
+    const env = await makeEnv();
+    const { accessJwt: full } = await issueSessionTokens(env, did);
+    const fullResponse = await requestPlcOperationSignature(apiContext(env, new Request(
+      'https://pds.example/xrpc/com.atproto.identity.requestPlcOperationSignature',
+      { method: 'POST', headers: { authorization: `Bearer ${full}` } },
+    )));
+    expect(fullResponse.status).toBe(200);
+
+    const { accessJwt: appPass } = await issueSessionTokens(env, did, {
+      scope: AuthScope.AppPass,
+    });
+    const appPassResponse = await requestPlcOperationSignature(apiContext(env, new Request(
+      'https://pds.example/xrpc/com.atproto.identity.requestPlcOperationSignature',
+      { method: 'POST', headers: { authorization: `Bearer ${appPass}` } },
+    )));
+    expect(appPassResponse.status).toBe(401);
+
+    const { accessJwt: signupQueued } = await issueSessionTokens(env, did, {
+      scope: AuthScope.SignupQueued,
+    });
+    const signupQueuedResponse = await requestPlcOperationSignature(apiContext(env, new Request(
+      'https://pds.example/xrpc/com.atproto.identity.requestPlcOperationSignature',
+      { method: 'POST', headers: { authorization: `Bearer ${signupQueued}` } },
+    )));
+    expect(signupQueuedResponse.status).toBe(401);
   });
 });

@@ -1,6 +1,7 @@
 import type { APIContext } from 'astro';
 import { errorMessage } from '../../lib/errors';
-import { authErrorResponse, isAuthorized, unauthorized } from '../../lib/auth';
+import { authErrorResponse, authenticateRequest, unauthorized } from '../../lib/auth';
+import { canAccessFullAccount } from '../../lib/auth-scope';
 import { getAccountState } from '../../db/dal';
 import { toWireStatus } from '../../lib/account-state';
 import { getDb } from '../../db/client';
@@ -23,7 +24,8 @@ export async function GET({ locals, request }: APIContext) {
   const { env } = locals.runtime;
 
   try {
-    if (!(await isAuthorized(request, env))) return unauthorized();
+    const auth = await authenticateRequest(request, env);
+    if (!auth || !canAccessFullAccount(auth.access)) return unauthorized();
   } catch (error) {
     const handled = await authErrorResponse(env, error);
     if (handled) return handled;
