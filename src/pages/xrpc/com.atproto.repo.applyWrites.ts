@@ -66,7 +66,7 @@ export async function POST({ locals, request }: APIContext) {
     }
 
     const prepared = await prepareApplyWrites(env, auth, input);
-    const applied = await prepared.repo.applyPreparedWrites(prepared.writes, prepared.currentCommitCid);
+    const applied = await prepared.repo.applyPreparedWrites(prepared.writes, prepared.expectedCommitCid);
 
     // Notify sequencer about the commit for firehose
     if (applied.commit && applied.commitCid && applied.rev && applied.commitData && applied.sig && applied.blocks) {

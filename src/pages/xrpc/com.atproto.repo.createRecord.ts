@@ -5,6 +5,7 @@ import { canWriteRepo } from '../../lib/auth-scope';
 import { checkRate } from '../../lib/ratelimit';
 import { readJsonBounded } from '../../lib/util';
 import { notifySequencer } from '../../lib/sequencer';
+import { isAccountActive } from '../../db/dal';
 import {
   assertRepoWriteInput,
   createRecordAuthorizations,
@@ -47,6 +48,10 @@ export async function POST({ locals, request }: APIContext) {
     const rateLimitResponse = await checkRate(env, request, 'writes');
     if (rateLimitResponse) return rateLimitResponse;
 
+    if (!(await isAccountActive(env, auth.did))) {
+      return jsonError('AccountDeactivated', 'Account is deactivated. Activate it before making changes.', 403);
+    }
+
     const prepared = await prepareCreateRecord(env, auth, input);
     const { write, repo } = prepared;
     const result = await repo.createRecord(
@@ -54,7 +59,7 @@ export async function POST({ locals, request }: APIContext) {
       write.record,
       write.rkey,
       write.blobKeys,
-      prepared.currentCommitCid,
+      prepared.expectedCommitCid,
     );
     await notifySequencer(env, {
       did: prepared.did,

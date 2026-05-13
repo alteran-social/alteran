@@ -4,8 +4,8 @@ import { CID } from 'multiformats/cid';
 import type { Env } from '../env';
 import { resolveSecret } from './secrets';
 import { generateTid } from './commit';
-import { cidForCbor } from './mst/util';
 import { RepoManager } from '../services/repo-manager';
+import { cidForRecord } from '../services/repo/blockstore-ops';
 
 export type ValidationStatus = 'valid' | 'unknown' | undefined;
 export type RepoWriteAction = 'create' | 'update' | 'delete';
@@ -32,6 +32,10 @@ export type RepoWriteContext = {
   handle: string | undefined;
   currentCommitCid: string | null;
   repo: RepoManager;
+};
+
+export type RepoWriteContextWithSwap = RepoWriteContext & {
+  expectedCommitCid: string | null | undefined;
 };
 
 type AuthLike = { did: string };
@@ -111,10 +115,10 @@ export async function prepareCreateRecord(
   env: Env,
   auth: AuthLike,
   input: unknown,
-): Promise<RepoWriteContext & { write: PreparedRecordWrite }> {
+): Promise<RepoWriteContextWithSwap & { write: PreparedRecordWrite }> {
   const body = assertRepoWriteInput('com.atproto.repo.createRecord', input);
   const ctx = await buildRepoWriteContext(env, auth, body.repo);
-  checkSwapCommit(body.swapCommit, ctx.currentCommitCid);
+  const expectedCommitCid = expectedCommitCidForRequest(body, ctx.currentCommitCid);
 
   const collection = requireString(body.collection, 'collection');
   const rkey = typeof body.rkey === 'string' ? body.rkey : generateTid();
@@ -127,6 +131,7 @@ export async function prepareCreateRecord(
 
   return {
     ...ctx,
+    expectedCommitCid,
     write: await prepareRecordWrite(env, ctx.did, {
       action: 'create',
       collection,
@@ -141,7 +146,7 @@ export async function preparePutRecord(
   env: Env,
   auth: AuthLike,
   input: unknown,
-): Promise<RepoWriteContext & { write: PreparedRecordWrite }> {
+): Promise<RepoWriteContextWithSwap & { write: PreparedRecordWrite }> {
   const body = assertRepoWriteInput('com.atproto.repo.putRecord', input);
   const ctx = await buildRepoWriteContext(env, auth, body.repo);
 
@@ -157,14 +162,16 @@ export async function preparePutRecord(
     record: body.record,
     validate: body.validate,
   });
-  const candidateCid = await cidForCbor(write.record);
+  const candidateCid = await cidForRecord(write.record);
+  let expectedCommitCid: string | null | undefined;
   if (currentCid?.toString() !== candidateCid.toString()) {
-    checkSwapCommit(body.swapCommit, ctx.currentCommitCid);
+    expectedCommitCid = expectedCommitCidForRequest(body, ctx.currentCommitCid);
     checkSwapRecord(body.swapRecord, currentCid, true);
   }
 
   return {
     ...ctx,
+    expectedCommitCid,
     write,
   };
 }
@@ -173,20 +180,24 @@ export async function prepareDeleteRecord(
   env: Env,
   auth: AuthLike,
   input: unknown,
-): Promise<RepoWriteContext & { write: PreparedDeleteWrite; currentCid: CID | null }> {
+): Promise<RepoWriteContextWithSwap & { write: PreparedDeleteWrite; currentCid: CID | null }> {
   const body = assertRepoWriteInput('com.atproto.repo.deleteRecord', input);
   const ctx = await buildRepoWriteContext(env, auth, body.repo);
-  checkSwapCommit(body.swapCommit, ctx.currentCommitCid);
 
   const collection = requireString(body.collection, 'collection');
   const rkey = requireString(body.rkey, 'rkey');
   validatePath(collection, rkey);
 
   const currentCid = await ctx.repo.getRecordCid(collection, rkey);
-  checkSwapRecord(body.swapRecord, currentCid, false);
+  let expectedCommitCid: string | null | undefined;
+  if (currentCid) {
+    expectedCommitCid = expectedCommitCidForRequest(body, ctx.currentCommitCid);
+    checkSwapRecord(body.swapRecord, currentCid, false);
+  }
 
   return {
     ...ctx,
+    expectedCommitCid,
     currentCid,
     write: { action: 'delete', collection, rkey },
   };
@@ -196,10 +207,10 @@ export async function prepareApplyWrites(
   env: Env,
   auth: AuthLike,
   input: unknown,
-): Promise<RepoWriteContext & { writes: PreparedWrite[] }> {
+): Promise<RepoWriteContextWithSwap & { writes: PreparedWrite[] }> {
   const body = assertRepoWriteInput('com.atproto.repo.applyWrites', input);
   const ctx = await buildRepoWriteContext(env, auth, body.repo);
-  checkSwapCommit(body.swapCommit, ctx.currentCommitCid);
+  const expectedCommitCid = expectedCommitCidForRequest(body, ctx.currentCommitCid);
 
   const rawWrites = Array.isArray(body.writes) ? body.writes : [];
   if (rawWrites.length > 200) {
@@ -259,7 +270,7 @@ export async function prepareApplyWrites(
     throw new RepoWriteError('InvalidRequest', 'unsupported write type');
   }
 
-  return { ...ctx, writes: prepared };
+  return { ...ctx, expectedCommitCid, writes: prepared };
 }
 
 export function repoPath(collection: string, rkey: string): string {
@@ -360,6 +371,8 @@ function validateLexiconRecord(
   record: Record<string, unknown>,
   validate: unknown,
 ): ValidationStatus {
+  if (validate === false) return undefined;
+
   const def = lexicons.getDef(collection);
   const knownRecord = def?.type === 'record' ? def : null;
 
@@ -370,11 +383,7 @@ function validateLexiconRecord(
     return 'unknown';
   }
 
-  if (validate !== false) {
-    enforceRecordKeyPolicy(knownRecord.key, rkey);
-  }
-
-  if (validate === false) return undefined;
+  enforceRecordKeyPolicy(knownRecord.key, rkey);
 
   let result;
   try {
@@ -410,7 +419,7 @@ function validateRawRecord(collection: string, value: unknown): Record<string, u
   }
   const record = { ...value } as Record<string, unknown>;
   if (record.$type === undefined) {
-    record.$type = collection;
+    throw new RepoWriteError('InvalidRequest', 'record $type is required');
   } else if (record.$type !== collection) {
     throw new RepoWriteError('InvalidRequest', 'record $type must match collection');
   }
@@ -517,8 +526,8 @@ function validateBlobObject(obj: Record<string, unknown>, path: string): {
   if (typeof obj.mimeType !== 'string' || obj.mimeType.length === 0) {
     throw new RepoWriteError('InvalidRequest', `${path}.mimeType must be non-empty`);
   }
-  if (typeof obj.size !== 'number' || !Number.isInteger(obj.size) || obj.size < 0) {
-    throw new RepoWriteError('InvalidRequest', `${path}.size must be a non-negative integer`);
+  if (typeof obj.size !== 'number' || !Number.isInteger(obj.size) || obj.size <= 0) {
+    throw new RepoWriteError('InvalidRequest', `${path}.size must be a positive integer`);
   }
   return { cid, mimeType: obj.mimeType, size: obj.size };
 }
@@ -608,6 +617,15 @@ function checkSwapCommit(value: unknown, currentCommitCid: string | null): void 
   if (value === undefined) return;
   if (typeof value !== 'string') throw new RepoWriteError('InvalidRequest', 'swapCommit must be a CID');
   if (value !== currentCommitCid) throw new RepoWriteError('InvalidSwap', 'swapCommit mismatch');
+}
+
+function expectedCommitCidForRequest(
+  body: Record<string, unknown>,
+  currentCommitCid: string | null,
+): string | null | undefined {
+  if (!Object.prototype.hasOwnProperty.call(body, 'swapCommit')) return undefined;
+  checkSwapCommit(body.swapCommit, currentCommitCid);
+  return currentCommitCid;
 }
 
 function checkSwapRecord(value: unknown, currentCid: CID | null, nullable: boolean): void {

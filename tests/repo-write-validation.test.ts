@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'bun:test';
 import { CID } from 'multiformats/cid';
 import { sha256 } from 'multiformats/hashes/sha2';
+import * as dagCbor from '@ipld/dag-cbor';
 import { makeEnv } from './helpers/env';
 import { issueSessionTokens } from '../src/lib/session-tokens';
 import { makeDpopKey, signResourceDpop } from './helpers/oauth';
 import { createOAuthSession, storeRefreshToken } from '../src/db/account';
-import { putBlobRef, listRecords } from '../src/db/dal';
+import { putBlobRef, listRecords, setAccountActive } from '../src/db/dal';
 import * as CreateRecord from '../src/pages/xrpc/com.atproto.repo.createRecord';
 import * as PutRecord from '../src/pages/xrpc/com.atproto.repo.putRecord';
 import * as DeleteRecord from '../src/pages/xrpc/com.atproto.repo.deleteRecord';
@@ -111,6 +112,15 @@ async function callRoute(
 async function json(res: Response) {
   const text = await res.text();
   return text ? JSON.parse(text) : null;
+}
+
+async function readRecordBlock(env: Awaited<ReturnType<typeof makeEnv>>, cid: string) {
+  const row = await env.ALTERAN_DB.prepare(
+    'SELECT bytes FROM blockstore WHERE cid = ? LIMIT 1',
+  ).bind(cid).first<{ bytes: string }>();
+  expect(row?.bytes).toBeTruthy();
+  const bytes = Uint8Array.from(atob(row!.bytes), (char) => char.charCodeAt(0));
+  return dagCbor.decode(bytes) as Record<string, any>;
 }
 
 async function createPost(env: Awaited<ReturnType<typeof makeEnv>>, body: Record<string, unknown> = {}) {
@@ -226,6 +236,16 @@ describe('repo write validation', () => {
     expect(skipped.status).toBe(200);
     expect((await json(skipped)).validationStatus).toBeUndefined();
 
+    const unknownSkipped = await callRoute(CreateRecord, env, {
+      repo: env.PDS_DID,
+      collection: 'com.example.skipped',
+      rkey: 'example',
+      validate: false,
+      record: { $type: 'com.example.skipped', value: 'no schema' },
+    });
+    expect(unknownSkipped.status).toBe(200);
+    expect((await json(unknownSkipped)).validationStatus).toBeUndefined();
+
     const knownInvalid = await callRoute(CreateRecord, env, {
       repo: env.PDS_DID,
       collection: 'app.bsky.feed.post',
@@ -257,6 +277,13 @@ describe('repo write validation', () => {
   it('rejects type and rkey validation failures without patching records', async () => {
     const env = await makeEnv();
 
+    const missingType = await callRoute(CreateRecord, env, {
+      repo: env.PDS_DID,
+      collection: 'app.bsky.feed.post',
+      record: { text: 'missing type', createdAt: FIXED_DATE },
+    });
+    expect(missingType.status).toBe(400);
+
     const typeMismatch = await callRoute(CreateRecord, env, {
       repo: env.PDS_DID,
       collection: 'app.bsky.feed.post',
@@ -284,20 +311,28 @@ describe('repo write validation', () => {
   it('validates raw data-model protocol wrapper objects', async () => {
     const env = await makeEnv();
     const validLink = await cidWithCodec(0x71);
+    const blob = await rawBlob();
+    await putBlobRef(env, String(env.PDS_DID), blob.cid, `blobs/by-cid/${blob.cid}`, 'image/png', blob.size);
 
     const valid = await callRoute(CreateRecord, env, {
       repo: env.PDS_DID,
       collection: 'com.example.record',
       rkey: 'raw-valid',
       record: {
+        $type: 'com.example.record',
         link: { $link: validLink },
         bytes: { $bytes: 'YWJjZA' },
+        blob: blob.object,
         $unknown: 'ignored protocol extension',
       },
     });
     expect(valid.status).toBe(200);
     const validBody = await json(valid);
     expect(validBody.validationStatus).toBe('unknown');
+    const stored = await readRecordBlock(env, validBody.cid);
+    expect(stored.link.toString()).toBe(validLink);
+    expect(stored.bytes).toBeInstanceOf(Uint8Array);
+    expect(stored.blob.ref.toString()).toBe(blob.cid);
 
     const invalidLink = await callRoute(CreateRecord, env, {
       repo: env.PDS_DID,
@@ -437,6 +472,37 @@ describe('repo write validation', () => {
     expect((await json(nullMismatch)).error).toBe('InvalidSwap');
   });
 
+  it('blocks deactivated accounts on single-record write routes', async () => {
+    const env = await makeEnv();
+    await createPost(env, { rkey: '3m2biurz7cl27' });
+    await setAccountActive(env, String(env.PDS_DID), false);
+
+    const create = await callRoute(CreateRecord, env, {
+      repo: env.PDS_DID,
+      collection: 'app.bsky.feed.post',
+      record: postRecord('blocked create'),
+    });
+    expect(create.status).toBe(403);
+    expect((await json(create)).error).toBe('AccountDeactivated');
+
+    const put = await callRoute(PutRecord, env, {
+      repo: env.PDS_DID,
+      collection: 'app.bsky.feed.post',
+      rkey: '3m2biurz7cl27',
+      record: postRecord('blocked put'),
+    });
+    expect(put.status).toBe(403);
+    expect((await json(put)).error).toBe('AccountDeactivated');
+
+    const del = await callRoute(DeleteRecord, env, {
+      repo: env.PDS_DID,
+      collection: 'app.bsky.feed.post',
+      rkey: '3m2biurz7cl27',
+    });
+    expect(del.status).toBe(403);
+    expect((await json(del)).error).toBe('AccountDeactivated');
+  });
+
   it('omits commit and sequenced side effects for identical putRecord writes', async () => {
     const env = await makeEnv();
     await createPost(env, { rkey: '3m2biurz7cl27' });
@@ -520,6 +586,21 @@ describe('repo write validation', () => {
       'SELECT key FROM blob_usage WHERE record_uri = ?',
     ).bind(body.uri).all<{ key: string }>();
     expect(usage.results.map((row) => row.key)).toEqual([`blobs/by-cid/${blob.cid}`]);
+
+    const emptyBlob = await rawBlob(new Uint8Array());
+    const zeroSize = await callRoute(CreateRecord, env2, {
+      repo: env2.PDS_DID,
+      collection: 'app.bsky.feed.post',
+      rkey: '3jzfcijpj2z2d',
+      record: postRecord('empty blob', {
+        embed: {
+          $type: 'app.bsky.embed.images',
+          images: [{ image: emptyBlob.object, alt: '' }],
+        },
+      }),
+    });
+    expect(zeroSize.status).toBe(400);
+    expect((await json(zeroSize)).error).toBe('InvalidRequest');
   });
 
   it('generates omitted rkeys before createRecord validation', async () => {

@@ -13,8 +13,7 @@ import {
 import { bumpRoot } from '../db/repo';
 import { generateTid } from '../lib/commit';
 import { resolveSecret } from '../lib/secrets';
-import { storeRecord, storeMstBlocks } from './repo/blockstore-ops';
-import { cidForCbor } from '../lib/mst/util';
+import { storeRecord, storeMstBlocks, cidForRecord } from './repo/blockstore-ops';
 import { extractOps as extractOpsImpl } from './repo/operations';
 import { ServerMisconfigured } from '../lib/errors';
 import {
@@ -214,7 +213,7 @@ export class RepoManager {
     const currentMst = await this.getOrCreateRoot();
     const prevMstRoot = await currentMst.getPointer();
     const existingCid = await currentMst.get(key);
-    const recordCid = await cidForCbor(record);
+    const recordCid = await cidForRecord(record);
     const did = await this.getDid();
     const uri = `at://${did}/${collection}/${rkey}`;
     if (existingCid?.toString() === recordCid.toString()) {

@@ -6,7 +6,7 @@ import { checkRate } from '../../lib/ratelimit';
 import { readJsonBounded } from '../../lib/util';
 import { bumpRoot } from '../../db/repo';
 import { notifySequencer } from '../../lib/sequencer';
-import { deleteRecordStatements, setRecordBlobUsageStatements } from '../../db/dal';
+import { deleteRecordStatements, isAccountActive, setRecordBlobUsageStatements } from '../../db/dal';
 import {
   assertRepoWriteInput,
   deleteRecordAuthorizations,
@@ -49,6 +49,10 @@ export async function POST({ locals, request }: APIContext) {
     const rateLimitResponse = await checkRate(env, request, 'writes');
     if (rateLimitResponse) return rateLimitResponse;
 
+    if (!(await isAccountActive(env, auth.did))) {
+      return jsonError('AccountDeactivated', 'Account is deactivated. Activate it before making changes.', 403);
+    }
+
     const prepared = await prepareDeleteRecord(env, auth, input);
     const { write, repo } = prepared;
     if (!prepared.currentCid) {
@@ -71,7 +75,7 @@ export async function POST({ locals, request }: APIContext) {
     const { commitCid, rev, commitData, sig, blocks } = await bumpRoot(env, prevMstRoot ?? undefined, currentRoot, {
       ops: opsForCommit,
       newMstBlocks: Array.from(newMstBlocks),
-      expectedCommitCid: prepared.currentCommitCid,
+      expectedCommitCid: prepared.expectedCommitCid,
       sideEffectStatements: (guard) => [
         ...deleteRecordStatements(env, uri, guard),
         ...setRecordBlobUsageStatements(env, uri, [], guard),
