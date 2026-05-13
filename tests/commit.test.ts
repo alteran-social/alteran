@@ -23,6 +23,21 @@ async function withFixedDateNow<T>(value: number, fn: () => Promise<T> | T): Pro
 }
 
 describe('Commit Structure & Signing', () => {
+  test('should emit fixed-width TIDs for small clocks and full clock id range', async () => {
+    const originalRandom = Math.random;
+    Math.random = () => 0.999999999;
+    try {
+      await withFixedDateNow(0, () => {
+        const tid = generateTid();
+        expect(tid).toBe('22222222223zz');
+        expect(isValidTid(tid)).toBe(true);
+        expect(tid.length).toBe(13);
+      });
+    } finally {
+      Math.random = originalRandom;
+    }
+  });
+
   test('should create a commit', () => {
     const did = 'did:plc:test123';
     const mstRoot = CID.parse('bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua');

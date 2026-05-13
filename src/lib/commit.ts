@@ -140,7 +140,7 @@ function sortableBase32Encode(value: number): string {
 }
 
 function getTidClockId(): number {
-  tidClockId ??= Math.floor(Math.random() * 32);
+  tidClockId ??= Math.floor(Math.random() * 1024);
   return tidClockId;
 }
 
@@ -156,7 +156,7 @@ export function generateTid(): string {
   const timestamp = Math.max(nowMicros, lastTidTimestamp + 1);
   lastTidTimestamp = timestamp;
 
-  const timestampPart = sortableBase32Encode(timestamp);
+  const timestampPart = sortableBase32Encode(timestamp).padStart(11, '2');
   const clockPart = sortableBase32Encode(getTidClockId()).padStart(2, '2');
   return `${timestampPart}${clockPart}`;
 }
