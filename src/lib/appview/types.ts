@@ -17,9 +17,4 @@ export type ProxyTarget = {
   readonly url: string;
 };
 
-export type AuthScope =
-  | 'com.atproto.access'
-  | 'com.atproto.appPass'
-  | 'com.atproto.appPassPrivileged'
-  | 'com.atproto.signupQueued'
-  | 'com.atproto.takendown';
+export type { AuthScope } from '../auth-scope';

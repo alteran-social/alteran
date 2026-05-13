@@ -30,7 +30,9 @@ export async function signJwt(
     throw new Error("Cannot sign JWT without subject");
   }
   const { accessJwt, refreshJwt } = await issueSessionTokens(env, claims.sub, {
-    jti: claims.jti,
+    jti: kind === "refresh" ? claims.jti : undefined,
+    accessJti: kind === "access" ? claims.jti : undefined,
+    scope: kind === "access" ? claims.scope : undefined,
   });
   return kind === "access" ? accessJwt : refreshJwt;
 }

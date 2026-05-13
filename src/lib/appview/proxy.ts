@@ -5,7 +5,6 @@ import {
   PRIVILEGED_METHODS,
   PRIVILEGED_SCOPES,
   PROTECTED_METHODS,
-  TAKENDOWN_SCOPE,
   resolveAuthScope,
 } from './auth-policy';
 import { resolveProxyTargetWithRegistry } from './did-resolver';
@@ -100,14 +99,23 @@ export async function proxyAppView({
     );
   }
 
-  const scope = resolveAuthScope(auth.claims.scope);
-  if (scope === TAKENDOWN_SCOPE) {
+  if (auth.access.isTakendown) {
     return new Response(JSON.stringify({ error: 'AccountTakendown' }), {
       status: 403,
       headers: { 'Content-Type': 'application/json' },
     });
   }
-  if (!PRIVILEGED_SCOPES.has(scope) && PRIVILEGED_METHODS.has(lxm)) {
+  const scope = resolveAuthScope(auth.claims.scope);
+  if (!auth.access.isOAuth && !scope) {
+    return new Response(JSON.stringify({ error: 'InvalidToken', message: 'bad token scope' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+  const hasPrivilegedAccess = auth.access.isOAuth
+    ? false
+    : !!scope && PRIVILEGED_SCOPES.has(scope);
+  if (!hasPrivilegedAccess && PRIVILEGED_METHODS.has(lxm)) {
     return new Response(JSON.stringify({ error: 'InvalidToken' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' },

@@ -4,6 +4,12 @@ import { verifyAccessToken } from '../session-tokens';
 import { decodeProtectedHeader, importJWK, compactVerify, type JWK as JoseJWK } from 'jose';
 import { cleanupExpiredOAuthReplaySecrets, createSecretOnce, getOAuthSession, getSecret, setSecret } from '../../db/account';
 import { jwkThumbprint } from './dpop';
+import {
+  bearerAccessContext,
+  isBearerAccessScope,
+  oauthAccessContext,
+  type AuthAccessContext,
+} from '../auth-scope';
 
 const NONCE_PDS_KEY = 'oauth_dpop_nonce_pds';
 
@@ -66,6 +72,7 @@ export type ResourceAuthContext = {
   token: string;
   scope?: string;
   authType: 'bearer' | 'oauth-dpop';
+  access: AuthAccessContext;
 };
 
 export async function verifyResourceRequest(env: Env, request: Request): Promise<ResourceAuthContext | null> {
@@ -86,11 +93,15 @@ export async function verifyResourceRequest(env: Env, request: Request): Promise
 
   if (scheme === 'bearer') {
     const payload = await verifyAccessTokenOrThrow(env, token, { allowOAuth: false });
+    if (!isBearerAccessScope(payload.scope)) {
+      throw new ResourceAuthError('invalid_token');
+    }
     return {
       did: payload.sub as string,
       token,
       scope: typeof payload.scope === 'string' ? payload.scope : undefined,
       authType: 'bearer',
+      access: bearerAccessContext(payload.scope),
     };
   }
 
@@ -142,6 +153,7 @@ async function verifyDpopAccess(env: Env, request: Request, accessToken: string)
     token: accessToken,
     scope: typeof tokenPayload.scope === 'string' ? tokenPayload.scope : undefined,
     authType: 'oauth-dpop' as const,
+    access: oauthAccessContext(String(tokenPayload.scope)),
   };
 }
 
@@ -238,11 +250,15 @@ export async function verifyResourceRequestHybrid(
 
   if (scheme === 'bearer') {
     const payloadJwt = await deps.verifyAccessToken(env, token, { allowOAuth: false });
+    if (!isBearerAccessScope(payloadJwt.scope)) {
+      throw new ResourceAuthError('invalid_token');
+    }
     return {
       did: payloadJwt.sub as string,
       token,
       scope: typeof payloadJwt.scope === 'string' ? payloadJwt.scope : undefined,
       authType: 'bearer',
+      access: bearerAccessContext(payloadJwt.scope),
     };
   }
 

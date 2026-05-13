@@ -1,11 +1,10 @@
-import type { AuthScope } from './types';
+import { AuthScope, isBearerAccessScope, type BearerAccessScope } from '../auth-scope';
 
-const DEFAULT_ACCESS_SCOPE: AuthScope = 'com.atproto.access';
-export const TAKENDOWN_SCOPE: AuthScope = 'com.atproto.takendown';
+export const TAKENDOWN_SCOPE: BearerAccessScope = AuthScope.Takendown;
 
-export const PRIVILEGED_SCOPES: ReadonlySet<AuthScope> = new Set([
-  'com.atproto.access',
-  'com.atproto.appPassPrivileged',
+export const PRIVILEGED_SCOPES: ReadonlySet<BearerAccessScope> = new Set([
+  AuthScope.Access,
+  AuthScope.AppPassPrivileged,
 ]);
 
 export const PRIVILEGED_METHODS: ReadonlySet<string> = new Set([
@@ -45,22 +44,6 @@ export const PROTECTED_METHODS: ReadonlySet<string> = new Set([
   'com.atproto.server.updateEmail',
 ]);
 
-export function resolveAuthScope(scope: unknown): AuthScope {
-  if (typeof scope !== 'string') {
-    return DEFAULT_ACCESS_SCOPE;
-  }
-
-  switch (scope) {
-    case 'access':
-      return 'com.atproto.access';
-    case 'com.atproto.access':
-    case 'com.atproto.appPass':
-    case 'com.atproto.appPassPrivileged':
-    case 'com.atproto.signupQueued':
-    case 'com.atproto.takendown':
-      return scope;
-    default:
-      console.warn('Unknown auth scope, treating as access scope', scope);
-      return DEFAULT_ACCESS_SCOPE;
-  }
+export function resolveAuthScope(scope: unknown): BearerAccessScope | null {
+  return isBearerAccessScope(scope) ? scope : null;
 }
