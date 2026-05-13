@@ -1,11 +1,15 @@
 import type { APIContext } from 'astro';
-import { errorCode, errorMessage } from '../../lib/errors';
+import { errorCode } from '../../lib/errors';
 import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError, insufficientScopeResponse } from '../../lib/oauth/resource';
 import { canWriteRepo } from '../../lib/auth-scope';
 import { checkRate } from '../../lib/ratelimit';
 import { readJsonBounded } from '../../lib/util';
-import { RepoManager } from '../../services/repo-manager';
 import { notifySequencer } from '../../lib/sequencer';
+import { setRecordBlobUsage } from '../../db/dal';
+import {
+  handleRepoWriteError,
+  preparePutRecord,
+} from '../../lib/repo-write-validation';
 
 export const prerender = false;
 
@@ -34,43 +38,36 @@ export async function POST({ locals, request }: APIContext) {
     }
     return new Response(JSON.stringify({ error: 'BadRequest' }), { status: 400 });
   }
-  const { collection, rkey } = body ?? {};
-  let { record } = body ?? {};
-  if (!collection || !rkey || !record) return new Response(JSON.stringify({ error: 'BadRequest' }), { status: 400 });
-  if (!canWriteRepo(auth.access, collection, 'update')) return insufficientScopeResponse();
 
-  if (collection === 'app.bsky.feed.post' && record && typeof record === 'object') {
-    if (typeof record.text !== 'string') {
-      record.text = '';
-    }
-    if (typeof record.createdAt !== 'string') {
-      record.createdAt = new Date().toISOString();
-    }
-  }
+  try {
+    const prepared = await preparePutRecord(env, auth, body);
+    const { write, repo } = prepared;
+    if (!canWriteRepo(auth.access, write.collection, 'update')) return insufficientScopeResponse();
 
-  const repo = new RepoManager(env);
-  const result = await repo.putRecord(collection, rkey, record);
-  await notifySequencer(env, {
-    did: env.PDS_DID as string,
-    commitCid: result.commitCid,
-    rev: result.rev,
-    data: result.commitData,
-    sig: result.sig,
-    ops: result.ops,
-    blocks: result.blocks
-  });
-
-  const out = {
-    uri: result.uri,
-    cid: result.cid,
-    commit: {
-      cid: result.commitCid,
+    const result = await repo.putRecord(write.collection, write.rkey, write.record);
+    await setRecordBlobUsage(env, result.uri, write.blobKeys);
+    await notifySequencer(env, {
+      did: prepared.did,
+      commitCid: result.commitCid,
       rev: result.rev,
-    },
-    validationStatus: 'unknown' as const,
-  };
+      data: result.commitData,
+      sig: result.sig,
+      ops: result.ops,
+      blocks: result.blocks
+    });
 
-  return new Response(JSON.stringify(out), {
-    headers: { 'Content-Type': 'application/json' },
-  });
+    return new Response(JSON.stringify({
+      uri: result.uri,
+      cid: result.cid,
+      commit: {
+        cid: result.commitCid,
+        rev: result.rev,
+      },
+      validationStatus: write.validationStatus,
+    }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch (error) {
+    return handleRepoWriteError(error);
+  }
 }

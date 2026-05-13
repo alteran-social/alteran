@@ -1,15 +1,14 @@
 import type { APIContext } from 'astro';
-import { RepoManager } from '../../services/repo-manager';
 import { readJson } from '../../lib/util';
-import { bumpRoot } from '../../db/repo';
 import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError, insufficientScopeResponse } from '../../lib/oauth/resource';
-import { canWriteRepo, type RepoWriteAction } from '../../lib/auth-scope';
+import { canWriteRepo } from '../../lib/auth-scope';
 import { isAccountActive } from '../../db/dal';
 import { checkRate } from '../../lib/ratelimit';
 import { notifySequencer } from '../../lib/sequencer';
-import { encodeBlocksForCommit } from '../../services/car';
-import { CID } from 'multiformats/cid';
-import { putRecord as dalPutRecord } from '../../db/dal';
+import {
+  handleRepoWriteError,
+  prepareApplyWrites,
+} from '../../lib/repo-write-validation';
 
 export const prerender = false;
 
@@ -47,134 +46,30 @@ export async function POST({ locals, request }: APIContext) {
   if (rateLimitResponse) return rateLimitResponse;
 
   try {
-    const body = (await readJson(request)) as {
-      repo?: string;
-      writes?: unknown[];
-      validate?: boolean;
-      swapCommit?: string;
-    };
-    const { repo, writes, validate = true, swapCommit } = body;
-
-    if (!writes || !Array.isArray(writes)) {
-      return new Response(
-        JSON.stringify({ error: 'InvalidRequest', message: 'writes must be an array' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+    const body = await readJson(request);
+    const prepared = await prepareApplyWrites(env, auth, body);
+    for (const write of prepared.writes) {
+      if (!canWriteRepo(auth.access, write.collection, write.action)) return insufficientScopeResponse();
     }
-    type WriteOperation = {
-      $type?: string;
-      collection?: string;
-      rkey?: string;
-      value?: Record<string, unknown>;
-    };
-    for (const rawWrite of writes) {
-      const write = rawWrite as WriteOperation;
-      const action = repoActionForWriteType(write?.$type);
-      if (!action) continue;
-      if (!canWriteRepo(auth.access, write.collection, action)) return insufficientScopeResponse();
-    }
-
-    const repoManager = new RepoManager(env);
-    const pdsDid = typeof env.PDS_DID === 'string' ? env.PDS_DID : '';
-    type WriteResult = { $type: string; uri?: string; cid?: string; validationStatus?: string };
-    const results: WriteResult[] = [];
-    // Accumulate ops and new MST blocks for this batch
-    const opsForCommit: { action: 'create'|'update'|'delete'; path: string; cid: import('multiformats/cid').CID | null }[] = [];
-    const newMstBlocksAll: Array<[import('multiformats/cid').CID, Uint8Array]> = [];
-    let firstPrevMst: import('multiformats/cid').CID | null = null;
-    let lastMst: import('../../lib/mst').MST | null = null;
-
-    // Apply all writes atomically
-    for (const rawWrite of writes) {
-      const write = rawWrite as WriteOperation;
-      const { $type, collection, rkey, value } = write;
-      if (typeof collection !== 'string' || typeof rkey !== 'string') {
-        return new Response(
-          JSON.stringify({
-            error: 'InvalidRequest',
-            message: 'collection and rkey are required strings on every write',
-          }),
-          { status: 400, headers: { 'Content-Type': 'application/json' } },
-        );
-      }
-
-      if ($type === 'com.atproto.repo.applyWrites#create') {
-        const { mst, recordCid, prevMstRoot, newMstBlocks } = await repoManager.addRecord(collection, rkey, value);
-        if (!firstPrevMst) firstPrevMst = prevMstRoot;
-        lastMst = mst;
-        opsForCommit.push({ action: 'create', path: `${collection}/${rkey}`, cid: recordCid });
-        for (const [cid, bytes] of newMstBlocks) newMstBlocksAll.push([cid, bytes]);
-        // Persist JSON for local reads
-        await dalPutRecord(env, {
-          uri: `at://${pdsDid}/${collection}/${rkey}`,
-          did: pdsDid,
-          cid: recordCid.toString(),
-          json: JSON.stringify(value),
-        });
-        results.push({
-          $type: 'com.atproto.repo.applyWrites#createResult',
-          uri: `at://${repo}/${collection}/${rkey}`,
-          cid: recordCid.toString(),
-          validationStatus: 'valid',
-        });
-      } else if ($type === 'com.atproto.repo.applyWrites#update') {
-        const { mst, recordCid, prevMstRoot, newMstBlocks } = await repoManager.updateRecord(collection, rkey, value);
-        if (!firstPrevMst) firstPrevMst = prevMstRoot;
-        lastMst = mst;
-        opsForCommit.push({ action: 'update', path: `${collection}/${rkey}`, cid: recordCid });
-        for (const [cid, bytes] of newMstBlocks) newMstBlocksAll.push([cid, bytes]);
-        await dalPutRecord(env, {
-          uri: `at://${pdsDid}/${collection}/${rkey}`,
-          did: pdsDid,
-          cid: recordCid.toString(),
-          json: JSON.stringify(value),
-        });
-        results.push({
-          $type: 'com.atproto.repo.applyWrites#updateResult',
-          uri: `at://${repo}/${collection}/${rkey}`,
-          cid: recordCid.toString(),
-          validationStatus: 'valid',
-        });
-      } else if ($type === 'com.atproto.repo.applyWrites#delete') {
-        const { mst, prevMstRoot, newMstBlocks } = await repoManager.deleteRecord(collection, rkey);
-        if (!firstPrevMst) firstPrevMst = prevMstRoot;
-        lastMst = mst;
-        opsForCommit.push({ action: 'delete', path: `${collection}/${rkey}`, cid: null });
-        for (const [cid, bytes] of newMstBlocks) newMstBlocksAll.push([cid, bytes]);
-        results.push({
-          $type: 'com.atproto.repo.applyWrites#deleteResult',
-        });
-      }
-    }
-
-    // Bump repo root to create new commit
-    const currentRoot = lastMst ? await lastMst.getPointer() : undefined;
-    const { commitCid, rev, commitData, sig, blocks } = await bumpRoot(env, firstPrevMst ?? undefined, currentRoot, {
-      ops: opsForCommit,
-      newMstBlocks: newMstBlocksAll,
-    });
+    const applied = await prepared.repo.applyPreparedWrites(prepared.writes);
 
     // Notify sequencer about the commit for firehose
-    try {
-      // Prefer commitData/sig/blocks returned by bumpRoot (authoritative)
+    if (applied.commit && applied.commitCid && applied.rev && applied.commitData && applied.sig && applied.blocks) {
       await notifySequencer(env, {
-        did: pdsDid,
-        commitCid,
-        rev,
-        data: commitData,
-        sig,
-        ops: opsForCommit,
-        ...(blocks ? { blocks } : {}),
+        did: prepared.did,
+        commitCid: applied.commitCid,
+        rev: applied.rev,
+        data: applied.commitData,
+        sig: applied.sig,
+        ops: applied.ops,
+        blocks: applied.blocks,
       });
-    } catch (error) {
-      console.error('Failed to notify sequencer:', error);
-      // Don't fail the request if sequencer notification fails
     }
 
     return new Response(
       JSON.stringify({
-        commit: { cid: commitCid, rev },
-        results,
+        ...(applied.commit ? { commit: applied.commit } : {}),
+        results: applied.results,
       }),
       {
         status: 200,
@@ -182,24 +77,15 @@ export async function POST({ locals, request }: APIContext) {
       }
     );
   } catch (error) {
-    console.error('applyWrites error:', error);
-    console.error('Error stack:', error instanceof Error ? error.stack : 'No stack');
-    return new Response(
-      JSON.stringify({ error: 'InternalServerError', message: String(error) }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
-  }
-}
-
-function repoActionForWriteType(type: unknown): RepoWriteAction | null {
-  switch (type) {
-    case 'com.atproto.repo.applyWrites#create':
-      return 'create';
-    case 'com.atproto.repo.applyWrites#update':
-      return 'update';
-    case 'com.atproto.repo.applyWrites#delete':
-      return 'delete';
-    default:
-      return null;
+    try {
+      return handleRepoWriteError(error);
+    } catch (unhandled) {
+      console.error('applyWrites error:', unhandled);
+      console.error('Error stack:', unhandled instanceof Error ? unhandled.stack : 'No stack');
+      return new Response(
+        JSON.stringify({ error: 'InternalServerError', message: String(unhandled) }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
   }
 }

@@ -5,13 +5,18 @@ import { drizzle } from 'drizzle-orm/d1';
 import { repo_root } from '../db/schema';
 import { eq, sql } from 'drizzle-orm';
 import type { RepoOp } from '../lib/firehose/frames';
-import { putRecord as dalPutRecord, deleteRecord as dalDeleteRecord } from '../db/dal';
+import {
+  putRecord as dalPutRecord,
+  deleteRecord as dalDeleteRecord,
+  setRecordBlobUsage,
+} from '../db/dal';
 import { bumpRoot } from '../db/repo';
 import { generateTid } from '../lib/commit';
 import { resolveSecret } from '../lib/secrets';
 import { storeRecord, storeMstBlocks } from './repo/blockstore-ops';
 import { extractOps as extractOpsImpl } from './repo/operations';
 import { ServerMisconfigured } from '../lib/errors';
+import type { PreparedWrite } from '../lib/repo-write-validation';
 
 interface RecordMutation {
   mst: MST;
@@ -29,6 +34,25 @@ interface CommitResult {
   commitData: string;
   sig: string;
   blocks: string;
+}
+
+export interface BatchCommitResult {
+  commit: {
+    cid: string;
+    rev: string;
+  } | null;
+  commitCid?: string;
+  rev?: string;
+  ops: RepoOp[];
+  commitData?: string;
+  sig?: string;
+  blocks?: string;
+  results: Array<{
+    $type: string;
+    uri?: string;
+    cid?: string;
+    validationStatus?: 'valid' | 'unknown';
+  }>;
 }
 
 export class RepoManager {
@@ -160,11 +184,15 @@ export class RepoManager {
   }
 
   async putRecord(collection: string, rkey: string, record: unknown): Promise<CommitResult> {
-    const { mst, recordCid, prevMstRoot, newMstBlocks } = await this.updateRecord(
-      collection,
-      rkey,
-      record,
-    );
+    const key = `${collection}/${rkey}`;
+    const currentMst = await this.getOrCreateRoot();
+    const prevMstRoot = await currentMst.getPointer();
+    const existingCid = await currentMst.get(key);
+    const recordCid = await storeRecord(this.blockstore, record);
+    const mst = existingCid
+      ? await currentMst.update(key, recordCid)
+      : await currentMst.add(key, recordCid);
+    const newMstBlocks = await storeMstBlocks(this.blockstore, mst);
     const did = await this.getDid();
     const uri = `at://${did}/${collection}/${rkey}`;
     await dalPutRecord(this.env, {
@@ -181,6 +209,107 @@ export class RepoManager {
       { newMstBlocks: Array.from(newMstBlocks) },
     );
     return { uri, cid: recordCid.toString(), commitCid, rev, ops, commitData, sig, blocks };
+  }
+
+  async getRecordCid(collection: string, rkey: string): Promise<CID | null> {
+    const currentMst = await this.getRoot();
+    if (!currentMst) return null;
+    return currentMst.get(`${collection}/${rkey}`);
+  }
+
+  async applyPreparedWrites(writes: PreparedWrite[]): Promise<BatchCommitResult> {
+    const did = await this.getDid();
+    let mst = await this.getOrCreateRoot();
+    const prevMstRoot = await mst.getPointer();
+    const ops: RepoOp[] = [];
+    const sideEffects: Array<
+      | { action: 'put'; uri: string; cid: string; record: unknown; blobKeys: string[] }
+      | { action: 'delete'; uri: string }
+    > = [];
+    const results: BatchCommitResult['results'] = [];
+
+    for (const write of writes) {
+      const path = `${write.collection}/${write.rkey}`;
+      const uri = `at://${did}/${path}`;
+      if (write.action === 'delete') {
+        const prev = await mst.get(path);
+        if (prev) {
+          mst = await mst.delete(path);
+          ops.push({ action: 'delete', path, cid: null, prev });
+          sideEffects.push({ action: 'delete', uri });
+        }
+        results.push({ $type: 'com.atproto.repo.applyWrites#deleteResult' });
+        continue;
+      }
+
+      const prev = await mst.get(path);
+      const recordCid = await storeRecord(this.blockstore, write.record);
+      if (prev) {
+        mst = await mst.update(path, recordCid);
+        ops.push({ action: 'update', path, cid: recordCid, prev });
+      } else {
+        mst = await mst.add(path, recordCid);
+        ops.push({ action: 'create', path, cid: recordCid });
+      }
+      const cid = recordCid.toString();
+      sideEffects.push({
+        action: 'put',
+        uri,
+        cid,
+        record: write.record,
+        blobKeys: write.blobKeys,
+      });
+      results.push({
+        $type: write.action === 'create'
+          ? 'com.atproto.repo.applyWrites#createResult'
+          : 'com.atproto.repo.applyWrites#updateResult',
+        uri,
+        cid,
+        validationStatus: write.validationStatus,
+      });
+    }
+
+    if (ops.length === 0) {
+      return { commit: null, ops, results };
+    }
+
+    const currentRoot = await mst.getPointer();
+    const newMstBlocks = await storeMstBlocks(this.blockstore, mst);
+    const { commitCid, rev, commitData, sig, blocks } = await bumpRoot(
+      this.env,
+      prevMstRoot ?? undefined,
+      currentRoot,
+      {
+        ops,
+        newMstBlocks: Array.from(newMstBlocks),
+      },
+    );
+
+    for (const effect of sideEffects) {
+      if (effect.action === 'delete') {
+        await dalDeleteRecord(this.env, effect.uri);
+        await setRecordBlobUsage(this.env, effect.uri, []);
+      } else {
+        await dalPutRecord(this.env, {
+          uri: effect.uri,
+          did,
+          cid: effect.cid,
+          json: JSON.stringify(effect.record),
+        });
+        await setRecordBlobUsage(this.env, effect.uri, effect.blobKeys);
+      }
+    }
+
+    return {
+      commit: { cid: commitCid, rev },
+      commitCid,
+      rev,
+      ops,
+      commitData,
+      sig,
+      blocks,
+      results,
+    };
   }
 
   async deleteRecord(

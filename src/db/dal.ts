@@ -62,7 +62,7 @@ export async function setRecordBlobUsage(env: Env, uri: string, keys: string[]) 
   // remove existing usage for this record
   await db.delete(blob_usage).where(eq(blob_usage.recordUri, uri)).run();
   // insert new usage
-  for (const key of keys) {
+  for (const key of new Set(keys)) {
     await db.insert(blob_usage).values({ recordUri: uri, key }).run();
   }
 }
