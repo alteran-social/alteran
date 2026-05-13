@@ -296,6 +296,7 @@ function parsePermissionScope(scope: string): ParsedPermissionScope | null {
     case 'include':
       return positional && paramsHaveOnly(params, new Set(['aud'])) ? { resource: 'include' } : null;
   }
+  return null;
 }
 
 function parseRepoScope(positional: string | null, params: URLSearchParams): ParsedPermissionScope | null {
@@ -304,10 +305,11 @@ function parseRepoScope(positional: string | null, params: URLSearchParams): Par
   const collections = positional !== null ? [positional] : params.getAll('collection');
   if (!collections.length || collections.some((value) => value === '')) return null;
   const actionsRaw = params.getAll('action');
-  const actions = actionsRaw.length
-    ? unique(actionsRaw).filter((action): action is RepoWriteAction => REPO_ACTIONS.has(action))
+  const actionValues = unique(actionsRaw);
+  const actions = actionValues.length
+    ? actionValues.filter((action): action is RepoWriteAction => REPO_ACTIONS.has(action))
     : null;
-  if (actionsRaw.length && actions.length !== unique(actionsRaw).length) return null;
+  if (actions && actions.length !== actionValues.length) return null;
   return { resource: 'repo', collections, actions };
 }
 
