@@ -13,5 +13,5 @@
     "types": ["@cloudflare/workers-types", "bun"]
   },
   "include": [".astro/types.d.ts", "**/*"],
-  "exclude": ["dist", "atproto", "social-app"]
+  "exclude": ["dist", "atproto", "social-app", "atproto-website"]
 }

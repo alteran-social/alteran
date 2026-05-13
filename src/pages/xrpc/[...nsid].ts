@@ -1,6 +1,10 @@
 import type { APIContext } from 'astro';
 import { proxyAppView } from '../../lib/appview';
 import { authErrorResponse, authenticateRequest, unauthorized } from '../../lib/auth';
+import {
+  isSingleUserUnsupportedRoute,
+  unsupportedSingleUserRouteResponse,
+} from '../../lib/unsupported-routes';
 
 export const prerender = false;
 
@@ -20,6 +24,19 @@ function nsidFromParams(params: Record<string, any>): string {
 
 async function handle({ locals, request, params }: APIContext): Promise<Response> {
   const { env } = locals.runtime;
+  const nsid = nsidFromParams(params).trim();
+  console.log('xrpc catchall invoked:', { nsid, url: request.url });
+  if (!nsid) {
+    return new Response(JSON.stringify({ error: 'NotFound' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (isSingleUserUnsupportedRoute(nsid)) {
+    return unsupportedSingleUserRouteResponse(nsid);
+  }
+
   let auth;
   try {
     auth = await authenticateRequest(request, env);
@@ -28,15 +45,6 @@ async function handle({ locals, request, params }: APIContext): Promise<Response
     const handled = await authErrorResponse(env, error);
     if (handled) return handled;
     throw error;
-  }
-
-  const nsid = nsidFromParams(params).trim();
-  console.log('xrpc catchall invoked:', { nsid, url: request.url });
-  if (!nsid) {
-    return new Response(JSON.stringify({ error: 'NotFound' }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json' },
-    });
   }
 
   if (!shouldProxy(nsid)) {
