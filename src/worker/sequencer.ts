@@ -15,6 +15,7 @@ import { reviveOps, base64ToBytes } from './sequencer/cid-helpers';
 import { createCommitPayload } from './sequencer/payload';
 import {
   handleUpgrade,
+  isWebSocketUpgrade,
   type HibernatableSocket,
   type HibernatableState,
   type WebSocketAttachment,
@@ -93,8 +94,14 @@ export class Sequencer {
       return this.handleMetrics();
     }
 
-    const upgradeHeader = request.headers.get('Upgrade');
-    if (upgradeHeader !== 'websocket') {
+    if (request.method !== 'GET') {
+      return new Response('Method Not Allowed', {
+        status: 405,
+        headers: { Allow: 'GET' },
+      });
+    }
+
+    if (!isWebSocketUpgrade(request)) {
       return new Response('Expected websocket', { status: 426 });
     }
 
@@ -240,28 +247,20 @@ export class Sequencer {
     return handleUpgrade(request, url, {
       state: this.state,
       nextSeq: this.nextSeq,
+      oldestAvailableSeq: this.oldestAvailableSeq(),
       hibernate,
-      onClient: (id, cursor, server) => {
-        this.clients.set(id, { webSocket: server, id, cursor });
+      onClient: (id, cursor, replay, server) => {
+        this.clients.set(id, { webSocket: server, id, cursor, replay });
       },
     });
   }
 
+  private oldestAvailableSeq(): number {
+    return Math.max(1, this.nextSeq - this.maxWindow);
+  }
+
   private async replayFromCursor(ws: WebSocket, cursor: number): Promise<void> {
-    const bufferedEvents = this.buffer.filter((e) => e.seq > cursor);
-
-    if (bufferedEvents.length > 0) {
-      for (const event of bufferedEvents) {
-        try {
-          const message = await createCommitPayload(this.env, this.db, event);
-          ws.send(encodeCommitFrame(message));
-        } catch (error) {
-          console.error('Failed to send buffered event:', error);
-        }
-      }
-      return;
-    }
-
+    let lastSentSeq = cursor;
     try {
       const db = drizzle(this.db);
       const events = await db
@@ -269,7 +268,7 @@ export class Sequencer {
         .from(commit_log)
         .where(gt(commit_log.seq, cursor))
         .orderBy(commit_log.seq)
-        .limit(100)
+        .limit(this.maxWindow)
         .all();
 
       for (const event of events) {
@@ -286,12 +285,26 @@ export class Sequencer {
           };
           const message = await createCommitPayload(this.env, this.db, commitEvent);
           ws.send(encodeCommitFrame(message));
+          lastSentSeq = Math.max(lastSentSeq, event.seq);
         } catch (error) {
           console.error('Failed to send database event:', error);
         }
       }
     } catch (error) {
       console.error('Failed to fetch events from database:', error);
+    }
+
+    const bufferedEvents = this.buffer
+      .filter((e) => e.seq > lastSentSeq)
+      .sort((a, b) => a.seq - b.seq);
+
+    for (const event of bufferedEvents) {
+      try {
+        const message = await createCommitPayload(this.env, this.db, event);
+        ws.send(encodeCommitFrame(message));
+      } catch (error) {
+        console.error('Failed to send buffered event:', error);
+      }
     }
   }
 
@@ -411,17 +424,24 @@ export class Sequencer {
     console.log(JSON.stringify({ level: 'info', type: 'ws_open', ts: new Date().toISOString() }));
 
     let cursor: number | undefined;
+    let replay = false;
     try {
       const attachment = (ws as HibernatableSocket).deserializeAttachment?.();
-      if (attachment && typeof attachment.cursor === 'number') cursor = attachment.cursor;
+      if (attachment && typeof attachment.cursor === 'number') {
+        cursor = attachment.cursor;
+        replay = attachment.replay === true;
+      }
     } catch (attachError) {
       console.warn('Sequencer: deserializeAttachment failed on open:', attachError);
     }
     if (cursor == null) {
       const client = Array.from(this.clients.values()).find((c) => c.webSocket === ws);
-      if (client) cursor = client.cursor;
+      if (client) {
+        cursor = client.cursor;
+        replay = client.replay;
+      }
     }
-    if (cursor && cursor > 0) {
+    if (replay && cursor != null) {
       await this.replayFromCursor(ws, cursor);
     }
   }

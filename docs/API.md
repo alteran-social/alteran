@@ -597,18 +597,32 @@ Subscribe to repository events via WebSocket.
 **Method**: `GET` (WebSocket upgrade)
 **Auth**: Not required
 
+This endpoint is a Worker-level route provided by `createPdsFetchHandler()`.
+It is handled before Astro route dispatch because WebSocket upgrades cannot be
+served by the generated Astro route table alone.
+
 **Query Parameters**:
-- `cursor` (optional): Start from specific sequence number
+- `cursor` (optional): integer event cursor
 
 **WebSocket Frames**:
 
-1. **Info Frame** (on connect):
+Frames are binary messages containing a DAG-CBOR header followed by a DAG-CBOR
+payload.
+
+Cursor behavior:
+- No `cursor`: start at the current stream position.
+- `cursor=0`: replay from the oldest retained event.
+- Too-old positive cursor: send `#info` `OutdatedCursor`, then replay from the
+  oldest retained event and keep the connection open.
+- Future cursor: send an `op: -1` `FutureCursor` error frame and close.
+
+1. **Info Frame** (too-old cursor):
 ```json
 {
   "op": 1,
   "t": "#info",
-  "name": "OutOfDate",
-  "message": "Consumer is too far behind"
+  "name": "OutdatedCursor",
+  "message": "Cursor is older than the oldest available sequence"
 }
 ```
 

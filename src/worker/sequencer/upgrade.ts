@@ -1,10 +1,11 @@
 import type { DurableObjectState } from '@cloudflare/workers-types';
-import { encodeInfoFrame } from '../../lib/firehose/frames';
+import { encodeErrorFrame, encodeInfoFrame } from '../../lib/firehose/frames';
 import { InvalidRequest } from '../../lib/errors';
 
 export type WebSocketAttachment = {
   id: string;
   cursor: number;
+  replay: boolean;
 };
 
 export type HibernatableSocket = WebSocket & {
@@ -26,15 +27,37 @@ export type HibernatableState = DurableObjectState & {
 export type UpgradeContext = {
   readonly state: HibernatableState;
   readonly nextSeq: number;
+  readonly oldestAvailableSeq: number;
   readonly hibernate: boolean;
-  readonly onClient: (id: string, cursor: number, server: HibernatableSocket) => void;
+  readonly onClient: (id: string, cursor: number, replay: boolean, server: HibernatableSocket) => void;
 };
+
+export type CursorDecision =
+  | {
+      readonly type: 'accept';
+      readonly cursor: number;
+      readonly replay: boolean;
+      readonly info?: { readonly name: 'OutdatedCursor'; readonly message: string };
+    }
+  | {
+      readonly type: 'future';
+      readonly cursor: number;
+      readonly error: 'FutureCursor';
+      readonly message: string;
+    };
+
+export function isWebSocketUpgrade(request: Request): boolean {
+  return request.headers.get('upgrade')?.toLowerCase() === 'websocket';
+}
 
 // Reject NaN / negative / non-integer cursors at the boundary. parseInt('abc')
 // yields NaN, which would silently bypass `cursor > nextSeq - 1` (all NaN
 // comparisons are false) and get persisted into the attachment.
 export function parseCursorParam(raw: string | null): number {
-  if (raw === null || raw === '') return 0;
+  if (raw === null) return 0;
+  if (raw === '') {
+    throw new InvalidRequest('cursor must be a non-negative integer');
+  }
   const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed < 0) {
     throw new InvalidRequest('cursor must be a non-negative integer');
@@ -42,14 +65,59 @@ export function parseCursorParam(raw: string | null): number {
   return parsed;
 }
 
+export function classifyCursor(
+  raw: string | null,
+  nextSeq: number,
+  oldestAvailableSeq: number,
+): CursorDecision {
+  const currentSeq = Math.max(0, nextSeq - 1);
+  const oldestSeq = Math.max(1, Math.floor(oldestAvailableSeq));
+
+  if (raw === null) {
+    return { type: 'accept', cursor: currentSeq, replay: false };
+  }
+
+  const cursor = parseCursorParam(raw);
+  if (cursor > currentSeq) {
+    return {
+      type: 'future',
+      cursor,
+      error: 'FutureCursor',
+      message: 'Cursor is ahead of current sequence',
+    };
+  }
+
+  if (cursor === 0) {
+    return { type: 'accept', cursor: Math.max(0, oldestSeq - 1), replay: true };
+  }
+
+  if (cursor < oldestSeq) {
+    return {
+      type: 'accept',
+      cursor: Math.max(0, oldestSeq - 1),
+      replay: true,
+      info: {
+        name: 'OutdatedCursor',
+        message: 'Cursor is older than the oldest available sequence',
+      },
+    };
+  }
+
+  return { type: 'accept', cursor: cursor - 1, replay: true };
+}
+
 export function handleUpgrade(
   request: Request,
   url: URL,
   context: UpgradeContext,
 ): Response {
-  let cursor: number;
+  let decision: CursorDecision;
   try {
-    cursor = parseCursorParam(url.searchParams.get('cursor'));
+    decision = classifyCursor(
+      url.searchParams.get('cursor'),
+      context.nextSeq,
+      context.oldestAvailableSeq,
+    );
   } catch (error) {
     if (error instanceof InvalidRequest) {
       return new Response(
@@ -71,31 +139,32 @@ export function handleUpgrade(
     ? requestedProtoHeader.split(',').map((s) => s.trim()).filter(Boolean)[0] || undefined
     : undefined;
 
-  if (cursor > context.nextSeq - 1) {
-    // Future cursor: send an info frame then 1008-close. Use the standard
+  if (decision.type === 'future') {
+    // Future cursor: send an error frame then 1008-close. Use the standard
     // WebSocket accept path rather than hibernation for this short-lived case.
     try {
       server.accept?.();
     } catch (acceptError) {
-      console.warn('Sequencer: server.accept failed for OutdatedCursor:', acceptError);
+      console.warn('Sequencer: server.accept failed for FutureCursor:', acceptError);
     }
     try {
-      server.send?.(encodeInfoFrame('OutdatedCursor', 'Cursor is ahead of current sequence'));
+      server.send?.(encodeErrorFrame(decision.error, decision.message));
     } catch (sendError) {
-      console.warn('Sequencer: send(info) failed for OutdatedCursor:', sendError);
+      console.warn('Sequencer: send(error) failed for FutureCursor:', sendError);
     }
     try {
-      server.close(1008, 'OutdatedCursor');
+      server.close(1008, 'FutureCursor');
     } catch (closeError) {
-      console.warn('Sequencer: close failed for OutdatedCursor:', closeError);
+      console.warn('Sequencer: close failed for FutureCursor:', closeError);
     }
     return buildUpgradeResponse(client, requestedProtocol);
   }
 
+  const { cursor, replay } = decision;
   if (context.hibernate) {
     context.state.acceptWebSocket?.(server);
     try {
-      server.serializeAttachment?.({ id, cursor });
+      server.serializeAttachment?.({ id, cursor, replay });
     } catch (attachError) {
       console.warn('Sequencer: serializeAttachment failed:', attachError);
     }
@@ -117,6 +186,14 @@ export function handleUpgrade(
     });
   }
 
+  if (decision.info) {
+    try {
+      server.send?.(encodeInfoFrame(decision.info.name, decision.info.message));
+    } catch (sendError) {
+      console.warn('Sequencer: send(info) failed for OutdatedCursor:', sendError);
+    }
+  }
+
   console.log(
     JSON.stringify({
       level: 'info',
@@ -129,7 +206,7 @@ export function handleUpgrade(
     }),
   );
 
-  context.onClient(id, cursor, server);
+  context.onClient(id, cursor, replay, server);
 
   return buildUpgradeResponse(client, requestedProtocol);
 }
