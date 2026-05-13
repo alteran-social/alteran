@@ -33,8 +33,38 @@ Common error codes:
 - `AuthenticationRequired` (401): Missing or invalid auth token
 - `InvalidRequest` (400): Malformed request
 - `NotFound` (404): Resource not found
+- `NotImplemented` (501): Known endpoint intentionally unsupported by Alteran
 - `RateLimitExceeded` (429): Too many requests
 - `InternalServerError` (500): Server error
+
+---
+
+## Intentionally Unsupported Single-User Routes
+
+Alteran is a single-user PDS. Public signup, invite-code management, signup
+queues, and broad admin account-management APIs are intentionally unsupported.
+Known unsupported XRPC routes return a stable JSON error before auth is required:
+
+```json
+{
+  "error": "NotImplemented",
+  "message": "<nsid> is intentionally unsupported by Alteran single-user PDS"
+}
+```
+
+The unsupported set includes:
+
+- `com.atproto.server.createAccount`
+- `com.atproto.server.reserveSigningKey`
+- `com.atproto.server.createInviteCode`
+- `com.atproto.server.createInviteCodes`
+- `com.atproto.server.getAccountInviteCodes`
+- `com.atproto.admin.*`
+- `com.atproto.temp.addReservedHandle`
+- `com.atproto.temp.checkHandleAvailability`
+- `com.atproto.temp.checkSignupQueue`
+- `com.atproto.temp.requestPhoneVerification`
+- `com.atproto.temp.revokeAccountCredentials`
 
 ---
 
@@ -51,10 +81,15 @@ Get server information and capabilities.
 ```json
 {
   "did": "did:web:example.com",
-  "availableUserDomains": ["example.com"],
-  "inviteCodeRequired": false
+  "availableUserDomains": [],
+  "inviteCodeRequired": false,
+  "phoneVerificationRequired": false
 }
 ```
+
+`availableUserDomains: []` is intentional: this package does not expose public
+account creation. `inviteCodeRequired: false` means Alteran does not support an
+invite-code signup flow.
 
 **Example**:
 ```bash
