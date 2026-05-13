@@ -1,11 +1,24 @@
 import { errorMessage } from '../errors';
 
+export type OauthEndpoint = 'par' | 'authorize' | 'consent' | 'token' | 'revoke';
+
 export type OauthParStage =
   | 'metadata_fetch'
   | 'metadata_shape'
   | 'par_validate'
   | 'client_auth'
   | 'dpop'
+  | 'outer'
+  | 'success';
+
+export type OauthTokenStage =
+  | 'dpop'
+  | 'parse'
+  | 'unsupported_grant'
+  | 'auth_code'
+  | 'refresh_token'
+  | 'client_auth'
+  | 'session_issue'
   | 'outer'
   | 'success';
 
@@ -20,20 +33,30 @@ export type OauthParFormSummary = {
   hasClientAssertion: boolean;
 };
 
-export type OauthParLogDetails = {
+export type OauthTokenFormSummary = {
+  grantType: string;
+  clientId: string;
+  redirectUri: string;
+  hasCode: boolean;
+  hasCodeVerifier: boolean;
+  hasRefreshToken: boolean;
+  hasClientAssertion: boolean;
+  clientAssertionType: string | null;
+};
+
+export type OauthLogDetails = {
+  endpoint: OauthEndpoint;
+  stage: string;
   outcome: 'ok' | 'error';
   requestId?: string | null;
   error?: unknown;
   clientId?: string | null;
-  form?: OauthParFormSummary | null;
+  form?: Record<string, unknown> | null;
   metadataStatus?: number | null;
   metadataContentType?: string | null;
   metadataRedirected?: boolean | null;
 };
 
-// Read context off an Error attached by safeFetchJson when the metadata HTTP
-// roundtrip itself failed; absent for shape/validation errors that never made
-// a request.
 export type FetchAugmentedError = Error & {
   metadataStatus?: number;
   metadataContentType?: string | null;
@@ -69,16 +92,25 @@ export function summarizeParForm(form: URLSearchParams): OauthParFormSummary {
   };
 }
 
-export function logOauthPar(
-  stage: OauthParStage,
-  request: Request,
-  details: OauthParLogDetails,
-): void {
+export function summarizeTokenForm(form: URLSearchParams): OauthTokenFormSummary {
+  return {
+    grantType: form.get('grant_type') ?? '',
+    clientId: form.get('client_id') ?? '',
+    redirectUri: form.get('redirect_uri') ?? '',
+    hasCode: !!form.get('code'),
+    hasCodeVerifier: !!form.get('code_verifier'),
+    hasRefreshToken: !!form.get('refresh_token'),
+    hasClientAssertion: !!form.get('client_assertion'),
+    clientAssertionType: form.get('client_assertion_type'),
+  };
+}
+
+export function logOauth(request: Request, details: OauthLogDetails): void {
   const url = new URL(request.url);
   const record = {
     level: details.outcome === 'ok' ? 'info' : 'error',
-    type: 'oauth_par',
-    stage,
+    type: `oauth_${details.endpoint}`,
+    stage: details.stage,
     outcome: details.outcome,
     requestId: details.requestId ?? null,
     method: request.method,
@@ -96,4 +128,13 @@ export function logOauthPar(
   } else {
     console.error(JSON.stringify(record));
   }
+}
+
+// Backward-compatible alias for PAR call sites.
+export function logOauthPar(
+  stage: OauthParStage,
+  request: Request,
+  details: Omit<OauthLogDetails, 'endpoint' | 'stage'>,
+): void {
+  logOauth(request, { ...details, endpoint: 'par', stage });
 }

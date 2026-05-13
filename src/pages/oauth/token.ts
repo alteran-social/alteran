@@ -15,15 +15,46 @@ import {
   storeRefreshToken,
   updateOAuthSessionCurrent,
 } from '../../db/account';
+import {
+  logOauth,
+  summarizeTokenForm,
+  type OauthTokenFormSummary,
+  type OauthTokenStage,
+} from '../../lib/oauth/observability';
 
 export const prerender = false;
 
 export async function POST({ locals, request }: APIContext) {
   const { env } = locals.runtime;
+  const requestId = (locals as { requestId?: string }).requestId ?? null;
+
+  let formSummary: OauthTokenFormSummary | null = null;
+  let clientId: string | null = null;
+
+  const log = (
+    stage: OauthTokenStage,
+    extra: { error?: unknown; outcome?: 'ok' | 'error' } = {},
+  ) =>
+    logOauth(request, {
+      endpoint: 'token',
+      stage,
+      outcome: extra.outcome ?? (extra.error !== undefined ? 'error' : 'ok'),
+      requestId,
+      error: extra.error,
+      clientId,
+      form: formSummary as Record<string, unknown> | null,
+    });
+
+  const fail = (stage: OauthTokenStage, code: string, desc: string): Response => {
+    log(stage, { error: new Error(desc) });
+    return jsonError(code, desc);
+  };
 
   try {
     const ver = await verifyDpop(env, request, { consumeJti: false, requireNonce: false });
     const form = new URLSearchParams(await request.text());
+    formSummary = summarizeTokenForm(form);
+    clientId = form.get('client_id') || null;
     const grant_type = form.get('grant_type') || '';
     const issuer = publicPdsOrigin(env, request);
 
@@ -33,24 +64,28 @@ export async function POST({ locals, request }: APIContext) {
       const redirect_uri = form.get('redirect_uri') || '';
       const code_verifier = form.get('code_verifier') || '';
       if (!code || !client_id || !redirect_uri || !code_verifier) {
-        return jsonError('invalid_request', 'Missing parameters');
+        return fail('auth_code', 'invalid_request', 'Missing parameters');
       }
 
       const rec = await consumeCode(env, code);
-      if (!rec) return jsonError('invalid_grant', 'Invalid or used code');
-      if (rec.client_id !== client_id) return jsonError('invalid_grant', 'client_id mismatch');
-      if (rec.redirect_uri !== redirect_uri) return jsonError('invalid_grant', 'redirect_uri mismatch');
+      if (!rec) return fail('auth_code', 'invalid_grant', 'Invalid or used code');
+      if (rec.client_id !== client_id) return fail('auth_code', 'invalid_grant', 'client_id mismatch');
+      if (rec.redirect_uri !== redirect_uri) return fail('auth_code', 'invalid_grant', 'redirect_uri mismatch');
 
       const expected = await sha256b64url(code_verifier);
-      if (expected !== rec.code_challenge) return jsonError('invalid_grant', 'PKCE verification failed');
-      if (ver.jkt !== rec.dpopJkt) return jsonError('invalid_dpop', 'DPoP key mismatch');
+      if (expected !== rec.code_challenge) return fail('auth_code', 'invalid_grant', 'PKCE verification failed');
+      if (ver.jkt !== rec.dpopJkt) return fail('auth_code', 'invalid_dpop', 'DPoP key mismatch');
 
-      await requireStoredClientAuthentication(env, client_id, issuer, form, {
-        method: rec.clientAuthMethod,
-        keyId: rec.clientAuthKeyId ?? null,
-      }).catch((error) => {
-        throw new Error(`Client authentication failed: ${errorMessage(error) ?? error}`);
-      });
+      try {
+        await requireStoredClientAuthentication(env, client_id, issuer, form, {
+          method: rec.clientAuthMethod,
+          keyId: rec.clientAuthKeyId ?? null,
+        });
+      } catch (error) {
+        const wrapped = new Error(`Client authentication failed: ${errorMessage(error) ?? error}`);
+        log('client_auth', { error: wrapped });
+        throw wrapped;
+      }
       await consumeDpopVerificationJti(env, ver);
 
       const sessionId = crypto.randomUUID().replace(/-/g, '');
@@ -91,6 +126,7 @@ export async function POST({ locals, request }: APIContext) {
       });
 
       const expires_in = accessExpiresIn(accessPayload);
+      log('success', { outcome: 'ok' });
       return tokenResponse({
         access_token: accessJwt,
         token_type: 'DPoP',
@@ -105,41 +141,45 @@ export async function POST({ locals, request }: APIContext) {
       const refresh_token = form.get('refresh_token') || '';
       const client_id = form.get('client_id') || '';
       if (!refresh_token || !client_id) {
-        return jsonError('invalid_request', 'Missing refresh_token or client_id');
+        return fail('refresh_token', 'invalid_request', 'Missing refresh_token or client_id');
       }
 
       const verification = await verifyRefreshToken(env, refresh_token).catch(() => null);
-      if (!verification || !verification.decoded) return jsonError('invalid_grant', 'Invalid refresh token');
+      if (!verification || !verification.decoded) return fail('refresh_token', 'invalid_grant', 'Invalid refresh token');
       const nowSec = Math.floor(Date.now() / 1000);
-      if (verification.decoded.exp <= nowSec) return jsonError('invalid_grant', 'Expired refresh token');
+      if (verification.decoded.exp <= nowSec) return fail('refresh_token', 'invalid_grant', 'Expired refresh token');
 
       const stored = await getRefreshToken(env, verification.decoded.jti);
       if (!stored || stored.tokenKind !== 'oauth' || !stored.oauthSessionId) {
-        return jsonError('invalid_grant', 'Refresh token revoked');
+        return fail('refresh_token', 'invalid_grant', 'Refresh token revoked');
       }
       const session = await getOAuthSession(env, stored.oauthSessionId);
       if (!session || session.revokedAt || session.expiresAt <= nowSec) {
-        return jsonError('invalid_grant', 'OAuth session revoked');
+        return fail('refresh_token', 'invalid_grant', 'OAuth session revoked');
       }
 
       if (stored.revokedAt || stored.nextId || stored.id !== session.currentRefreshTokenId) {
         await revokeOAuthSession(env, session.id, nowSec);
-        return jsonError('invalid_grant', 'Refresh token replayed');
+        return fail('refresh_token', 'invalid_grant', 'Refresh token replayed');
       }
-      if (stored.expiresAt <= nowSec) return jsonError('invalid_grant', 'Expired refresh token');
+      if (stored.expiresAt <= nowSec) return fail('refresh_token', 'invalid_grant', 'Expired refresh token');
       if (stored.did !== verification.decoded.sub || stored.did !== session.did) {
         await revokeOAuthSession(env, session.id, nowSec);
-        return jsonError('invalid_grant', 'Subject mismatch');
+        return fail('refresh_token', 'invalid_grant', 'Subject mismatch');
       }
-      if (client_id !== session.clientId) return jsonError('invalid_grant', 'client_id mismatch');
-      if (ver.jkt !== session.dpopJkt) return jsonError('invalid_dpop', 'DPoP key mismatch');
+      if (client_id !== session.clientId) return fail('refresh_token', 'invalid_grant', 'client_id mismatch');
+      if (ver.jkt !== session.dpopJkt) return fail('refresh_token', 'invalid_dpop', 'DPoP key mismatch');
 
-      await requireStoredClientAuthentication(env, client_id, issuer, form, {
-        method: session.clientAuthMethod,
-        keyId: session.clientAuthKeyId,
-      }).catch((error) => {
-        throw new Error(`Client authentication failed: ${errorMessage(error) ?? error}`);
-      });
+      try {
+        await requireStoredClientAuthentication(env, client_id, issuer, form, {
+          method: session.clientAuthMethod,
+          keyId: session.clientAuthKeyId,
+        });
+      } catch (error) {
+        const wrapped = new Error(`Client authentication failed: ${errorMessage(error) ?? error}`);
+        log('client_auth', { error: wrapped });
+        throw wrapped;
+      }
       await consumeDpopVerificationJti(env, ver);
 
       const accessJti = crypto.randomUUID().replace(/-/g, '');
@@ -175,9 +215,10 @@ export async function POST({ locals, request }: APIContext) {
         });
       } catch {
         await revokeOAuthSession(env, session.id, nowSec);
-        return jsonError('invalid_grant', 'Refresh token replayed');
+        return fail('refresh_token', 'invalid_grant', 'Refresh token replayed');
       }
 
+      log('success', { outcome: 'ok' });
       return tokenResponse({
         access_token: accessJwt,
         token_type: 'DPoP',
@@ -188,9 +229,13 @@ export async function POST({ locals, request }: APIContext) {
       }, await getAuthzNonce(env));
     }
 
-    return jsonError('unsupported_grant_type', 'grant_type must be authorization_code or refresh_token');
+    return fail('unsupported_grant', 'unsupported_grant_type', 'grant_type must be authorization_code or refresh_token');
   } catch (e) {
-    if (e instanceof DpopNonceError) return dpopErrorResponse(env, e);
+    if (e instanceof DpopNonceError) {
+      log('dpop', { error: e });
+      return dpopErrorResponse(env, e);
+    }
+    log('outer', { error: e });
     return jsonError('invalid_request', errorMessage(e) ?? 'Unknown error');
   }
 }
