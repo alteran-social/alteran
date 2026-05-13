@@ -2,6 +2,7 @@ import type { APIContext } from 'astro';
 import { authErrorResponse, authenticateRequest, unauthorized } from '../../lib/auth';
 import { canAccessFullAccount } from '../../lib/auth-scope';
 import { resolveSecret } from '../../lib/secrets';
+import { canonicalPdsOrigin, configuredHandle, validAtprotoHandle } from '../../lib/public-host';
 
 export const prerender = false;
 
@@ -25,8 +26,9 @@ export async function GET({ locals, request }: APIContext) {
   }
 
   try {
-    const handle = (await resolveSecret(env.PDS_HANDLE)) ?? 'example.com';
-    const hostname = env.PDS_HOSTNAME ?? handle;
+    const handle = await configuredHandle(env);
+    const claimedHandle = validAtprotoHandle(handle);
+    const serviceEndpoint = await canonicalPdsOrigin(env);
 
     // Always ES256K: derive did:key from the secp256k1 signing key
     let didKey: string | undefined;
@@ -72,12 +74,12 @@ export async function GET({ locals, request }: APIContext) {
 
     const credentials = {
       rotationKeys,
-      alsoKnownAs: [`at://${handle}`],
+      alsoKnownAs: claimedHandle ? [`at://${claimedHandle}`] : [],
       verificationMethods: { atproto: didKey },
       services: {
         atproto_pds: {
           type: 'AtprotoPersonalDataServer',
-          endpoint: `https://${hostname}`
+          endpoint: serviceEndpoint
         }
       }
     };

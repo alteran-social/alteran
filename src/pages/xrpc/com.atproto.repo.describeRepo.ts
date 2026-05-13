@@ -1,5 +1,11 @@
 import type { APIContext } from 'astro';
-import { getRoot } from '../../db/repo';
+import { buildDidDocument } from '../../lib/did-document';
+import {
+  configuredDid,
+  configuredHandle,
+  didDocClaimsHandle,
+  handleResolvesToDid,
+} from '../../lib/public-host';
 
 export const prerender = false;
 
@@ -10,30 +16,25 @@ export const prerender = false;
 export async function GET({ locals, url }: APIContext) {
   const { env } = locals.runtime;
 
-  const repo = url.searchParams.get('repo') || (env.PDS_DID as string);
-  const did = env.PDS_DID as string;
-  const handle = env.PDS_HANDLE || 'user.example.com';
+  const repo = url.searchParams.get('repo');
+  const did = await configuredDid(env);
+  const handle = await configuredHandle(env);
+  if (repo && repo !== did && repo.toLowerCase() !== handle.toLowerCase()) {
+    return new Response(
+      JSON.stringify({ error: 'NotFound', message: 'Repo not found' }),
+      { status: 404, headers: { 'Content-Type': 'application/json' } },
+    );
+  }
 
-  // Get repo root to check if repo exists
-  const root = await getRoot(env);
+  const didDoc = await buildDidDocument(env, did, handle);
+  const handleIsCorrect = didDocClaimsHandle(didDoc, handle) &&
+    await handleResolvesToDid(env, handle, did);
 
   return new Response(
     JSON.stringify({
       did,
       handle,
-      didDoc: {
-        '@context': ['https://www.w3.org/ns/did/v1'],
-        id: did,
-        alsoKnownAs: [`at://${handle}`],
-        verificationMethod: [],
-        service: [
-          {
-            id: '#atproto_pds',
-            type: 'AtprotoPersonalDataServer',
-            serviceEndpoint: `https://${handle}`,
-          },
-        ],
-      },
+      didDoc,
       collections: [
         'app.bsky.feed.post',
         'app.bsky.feed.like',
@@ -41,7 +42,7 @@ export async function GET({ locals, url }: APIContext) {
         'app.bsky.graph.follow',
         'app.bsky.actor.profile',
       ],
-      handleIsCorrect: true,
+      handleIsCorrect,
     }),
     {
       status: 200,

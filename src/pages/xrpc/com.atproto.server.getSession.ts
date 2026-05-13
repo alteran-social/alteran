@@ -1,6 +1,7 @@
 import type { APIContext } from 'astro';
 import { authErrorResponse, authenticateRequest, unauthorized } from '../../lib/auth';
 import { getAccountByIdentifier } from '../../db/account';
+import { buildDidDocument } from '../../lib/did-document';
 
 export const prerender = false;
 
@@ -27,6 +28,7 @@ export async function GET({ locals, request }: APIContext) {
   const did = authContext.claims.sub;
   const account = await getAccountByIdentifier(env, did);
   const handle = account?.handle ?? (env.PDS_HANDLE as string) ?? 'user.example.com';
+  const didDoc = await buildDidDocument(env, did, handle);
 
   return new Response(
     JSON.stringify({
@@ -35,19 +37,7 @@ export async function GET({ locals, request }: APIContext) {
       email: account?.email ?? (env.PDS_EMAIL as string | undefined) ?? 'user@example.com',
       emailConfirmed: true,
       emailAuthFactor: false,
-      didDoc: {
-        '@context': ['https://www.w3.org/ns/did/v1'],
-        id: did,
-        alsoKnownAs: [`at://${handle}`],
-        verificationMethod: [],
-        service: [
-          {
-            id: '#atproto_pds',
-            type: 'AtprotoPersonalDataServer',
-            serviceEndpoint: `https://${env.PDS_HOSTNAME ?? handle}`,
-          },
-        ],
-      },
+      didDoc,
     }),
     {
       status: 200,
