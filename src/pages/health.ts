@@ -1,4 +1,5 @@
 import type { APIContext } from 'astro';
+import { checkRuntimeDependencies, runtimeDependenciesHealthy } from '../lib/health';
 
 export const prerender = false;
 
@@ -13,45 +14,8 @@ interface HealthCheck {
 
 export async function GET({ locals }: APIContext) {
   const { env } = locals.runtime;
-  const checks: HealthCheck['checks'] = {
-    database: { status: 'ok' },
-    storage: { status: 'ok' },
-  };
-
-  let overallStatus: 'healthy' | 'unhealthy' = 'healthy';
-
-  // Check D1 database connectivity
-  try {
-    if (env.ALTERAN_DB) {
-      await env.ALTERAN_DB.prepare('SELECT 1').first();
-      checks.database.status = 'ok';
-    } else {
-      checks.database.status = 'error';
-      checks.database.message = 'Database not configured';
-      overallStatus = 'unhealthy';
-    }
-  } catch (error) {
-    checks.database.status = 'error';
-    checks.database.message = error instanceof Error ? error.message : 'Database connection failed';
-    overallStatus = 'unhealthy';
-  }
-
-  // Check R2 storage connectivity
-  try {
-    if (env.ALTERAN_BLOBS) {
-      // Simple list operation to verify connectivity
-      await env.ALTERAN_BLOBS.list({ limit: 1 });
-      checks.storage.status = 'ok';
-    } else {
-      checks.storage.status = 'error';
-      checks.storage.message = 'Storage not configured';
-      overallStatus = 'unhealthy';
-    }
-  } catch (error) {
-    checks.storage.status = 'error';
-    checks.storage.message = error instanceof Error ? error.message : 'Storage connection failed';
-    overallStatus = 'unhealthy';
-  }
+  const checks = await checkRuntimeDependencies(env);
+  const overallStatus: HealthCheck['status'] = runtimeDependenciesHealthy(checks) ? 'healthy' : 'unhealthy';
 
   const response: HealthCheck = {
     status: overallStatus,
