@@ -1,4 +1,4 @@
-import type { AstroIntegration } from "npm:astro@^6.3.3";
+import type { AstroIntegration } from "astro";
 import type { PdsIntegrationOptions } from "./index.d.ts";
 import alteran from "./index.js";
 
