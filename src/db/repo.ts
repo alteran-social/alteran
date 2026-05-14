@@ -139,7 +139,7 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
   blocksBase64 = btoa(blocksBase64);
 
   const ts = Date.now();
-  const guard = { did, commitCid: cidString };
+  const guard = { did, commitCid: cidString, rev };
   const requiredBlobKeys = Array.from(new Set(opts?.requiredBlobKeys ?? []));
   const rootStatement = rootMutationStatement(env, did, cidString, rev, expectedCommitCid, requiredBlobKeys);
   const blockStatements = blockstorePutStatements(env, [
@@ -258,7 +258,22 @@ function blobPreconditionSql(requiredBlobKeys: string[], did?: string): { sql: s
     throw new Error('did is required for blob preconditions');
   }
   const placeholders = requiredBlobKeys.map(() => '?').join(', ');
-  const sql = `(SELECT COUNT(DISTINCT key) FROM blob WHERE did = ? AND key IN (${placeholders})) = ?`;
+  const sql = `(SELECT COUNT(DISTINCT key)
+    FROM blob
+    WHERE did = ?
+      AND key IN (${placeholders})
+      AND takedown_ref IS NULL
+      AND (
+        state = 'temp'
+        OR (
+          state = 'permanent'
+          AND EXISTS (
+            SELECT 1 FROM blob_usage
+            WHERE blob_usage.did = blob.did
+              AND blob_usage.key = blob.key
+          )
+        )
+      )) = ?`;
   return {
     sql,
     clause: ` AND ${sql}`,

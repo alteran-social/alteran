@@ -20,8 +20,7 @@ export async function GET({ locals, url }: APIContext) {
   const { env } = locals.runtime;
 
   try {
-    const configuredDid = typeof env.PDS_DID === 'string' ? env.PDS_DID : undefined;
-    const did = url.searchParams.get('did') ?? configuredDid;
+    const did = url.searchParams.get('did');
     const cid = url.searchParams.get('cid');
     if (!did || !cid) {
       return new Response(
@@ -36,7 +35,7 @@ export async function GET({ locals, url }: APIContext) {
     const active = await isAccountActive(env, did);
     if (!active) {
       return new Response(
-        JSON.stringify({ error: 'AccountInactive', message: 'Account is not active' }),
+        JSON.stringify({ error: 'RepoDeactivated', message: 'Repo is deactivated' }),
         { status: 403, headers: { 'Content-Type': 'application/json' } }
       );
     }
@@ -49,9 +48,14 @@ export async function GET({ locals, url }: APIContext) {
       .where(and(eq(blob_ref.did, did), eq(blob_ref.cid, cid)))
       .get();
 
-    if (!blobMeta || !(await blobKeyHasUsage(env, did, blobMeta.key))) {
+    if (
+      !blobMeta ||
+      blobMeta.state !== 'permanent' ||
+      blobMeta.takedownRef !== null ||
+      !(await blobKeyHasUsage(env, did, blobMeta.key))
+    ) {
       return new Response(
-        JSON.stringify({ error: 'InvalidRequest', message: 'Blob not found' }),
+        JSON.stringify({ error: 'BlobNotFound', message: 'Blob not found' }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
       );
     }
@@ -62,7 +66,7 @@ export async function GET({ locals, url }: APIContext) {
 
     if (!object) {
       return new Response(
-        JSON.stringify({ error: 'InvalidRequest', message: 'Blob not found' }),
+        JSON.stringify({ error: 'BlobNotFound', message: 'Blob not found' }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
       );
     }

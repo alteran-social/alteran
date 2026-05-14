@@ -196,7 +196,7 @@ export class RepoManager {
             cid: recordCid.toString(),
             json: JSON.stringify(record),
           }, guard),
-          ...setRecordBlobUsageStatements(this.env, did, uri, effectiveBlobKeys, guard),
+          ...setRecordBlobUsageStatements(this.env, did, uri, effectiveBlobKeys, guard, recordCid.toString()),
         ],
       },
     );
@@ -283,7 +283,7 @@ export class RepoManager {
             cid: recordCid.toString(),
             json: JSON.stringify(record),
           }, guard),
-          ...setRecordBlobUsageStatements(this.env, did, uri, effectiveBlobKeys, guard),
+          ...setRecordBlobUsageStatements(this.env, did, uri, effectiveBlobKeys, guard, recordCid.toString()),
         ],
       },
     );
@@ -448,7 +448,7 @@ export class RepoManager {
               cid: effect.cid,
               json: JSON.stringify(effect.record),
             }, guard),
-            ...setRecordBlobUsageStatements(this.env, did, effect.uri, effect.blobKeys, guard),
+              ...setRecordBlobUsageStatements(this.env, did, effect.uri, effect.blobKeys, guard, effect.cid),
           ];
         }),
       },
@@ -593,7 +593,22 @@ export class RepoManager {
 async function assertBlobKeysAvailable(env: Env, did: string, keys: string[]): Promise<void> {
   for (const key of new Set(keys)) {
     const row = await env.ALTERAN_DB.prepare(
-      'SELECT cid FROM blob WHERE did = ? AND key = ? LIMIT 1',
+      `SELECT b.cid
+       FROM blob b
+       WHERE b.did = ?
+         AND b.key = ?
+         AND b.takedown_ref IS NULL
+         AND (
+           b.state = 'temp'
+           OR (
+             b.state = 'permanent'
+             AND EXISTS (
+               SELECT 1 FROM blob_usage u
+               WHERE u.did = b.did AND u.key = b.key
+             )
+           )
+         )
+       LIMIT 1`,
     )
       .bind(did, key)
       .first<{ cid: string }>();
@@ -615,7 +630,22 @@ async function resolveRecordBlobKeys(env: Env, did: string, record: unknown): Pr
   const keys = new Set<string>();
   for (const ref of refs) {
     const row = await env.ALTERAN_DB.prepare(
-      'SELECT key, mime, size FROM blob WHERE did = ? AND cid = ? LIMIT 1',
+      `SELECT b.key, b.mime, b.size
+       FROM blob b
+       WHERE b.did = ?
+         AND b.cid = ?
+         AND b.takedown_ref IS NULL
+         AND (
+           b.state = 'temp'
+           OR (
+             b.state = 'permanent'
+             AND EXISTS (
+               SELECT 1 FROM blob_usage u
+               WHERE u.did = b.did AND u.key = b.key
+             )
+           )
+         )
+       LIMIT 1`,
     )
       .bind(did, ref.cid)
       .first<{ key: string; mime: string; size: number }>();
