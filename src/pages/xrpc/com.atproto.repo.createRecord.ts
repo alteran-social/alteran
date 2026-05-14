@@ -31,13 +31,13 @@ export async function POST({ locals, request }: APIContext) {
     throw error;
   }
 
-  let body: any;
+  let body: unknown;
   try {
     body = await readJsonBounded(env, request);
-  } catch (e) {
+  } catch (error) {
     const rateLimitResponse = await checkRate(env, request, 'writes', { key: auth.did });
     if (rateLimitResponse) return rateLimitResponse;
-    if (errorCode(e) === 'PayloadTooLarge') {
+    if (errorCode(error) === 'PayloadTooLarge') {
       return jsonError('PayloadTooLarge', undefined, 413);
     }
     return jsonError('BadRequest');

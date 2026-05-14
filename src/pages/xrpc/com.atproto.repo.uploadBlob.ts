@@ -1,12 +1,17 @@
 import type { APIContext } from 'astro';
+import type { Env } from '../../env';
 import { errorMessage } from '../../lib/errors';
 import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError, insufficientScopeResponse } from '../../lib/oauth/resource';
 import { canUploadBlob } from '../../lib/auth-scope';
 import { verifyServiceAuth, isServiceAuthToken } from '../../lib/service-auth';
 import { checkRate } from '../../lib/ratelimit';
-import { isAllowedMime, sniffMime, baseMime } from '../../lib/util';
-import { R2BlobStore } from '../../services/r2-blob-store';
-import { putBlobRef, checkBlobQuota, updateBlobQuota, isAccountActive } from '../../db/dal';
+import { sniffMime, baseMime } from '../../lib/util';
+import {
+  deleteUnreferencedBlobRef,
+  isAccountActive,
+  registerBlobRefWithQuota,
+  sweepEligibleUnreferencedBlobKeys,
+} from '../../db/dal';
 import { resolveSecret } from '../../lib/secrets';
 import { CID } from 'multiformats/cid';
 import { sha256 } from 'multiformats/hashes/sha2';
@@ -90,36 +95,45 @@ export async function POST({ locals, request }: APIContext) {
   // Skip MIME type validation during migration - accept all types
   // Uncomment to enforce: if (!isAllowedMime(env, contentType)) return new Response(JSON.stringify({ error: 'UnsupportedMediaType' }), { status: 415 });
 
-  // Check quota before upload
-  const canUpload = await checkBlobQuota(env, did, buf.byteLength);
-  if (!canUpload) {
-    return new Response(
-      JSON.stringify({
-        error: 'BlobQuotaExceeded',
-        message: 'Blob storage quota exceeded'
-      }),
-      { status: 413 }
-    );
-  }
+  await sweepEligibleUnreferencedBlobKeys(env, { did, limit: 20 }).catch((error) => {
+    console.warn('[uploadBlob] Failed to sweep dereferenced blobs:', error);
+  });
 
-  const store = new R2BlobStore(env);
+  let registeredCid: string | undefined;
   try {
-    const response = await store.put(buf, { contentType });
+    const identity = await blobIdentity(env, buf);
 
-    // Compute a CIDv1 (raw) for the blob so clients receive a valid CID link
-    const digest = await sha256.digest(new Uint8Array(buf));
-    const cid = CID.createV1(0x55, digest); // 0x55 = raw codec
-    const cidStr = cid.toString();
+    const registration = await registerBlobRefWithQuota(
+      env,
+      did,
+      identity.cid,
+      identity.key,
+      contentType,
+      identity.size,
+    );
+    if (registration.tag === 'quotaExceeded') {
+      return new Response(
+        JSON.stringify({
+          error: 'BlobQuotaExceeded',
+          message: 'Blob storage quota exceeded',
+        }),
+        { status: 413, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    if (registration.tag === 'registered') registeredCid = identity.cid;
 
-    // Register blob ref with CID-based key
-    await putBlobRef(env, did, cidStr, response.key, contentType, response.size);
-
-    // Update quota
-    await updateBlobQuota(env, did, response.size, 1);
+    await ensureBlobObject(env, registration.blob.key, buf, registration.blob.mime, registration.blob.size);
 
     // Mirror upstream shape exactly; helpful debugging header
     // Conform to lexicon: blob object must include $type: 'blob'
-    const body = { blob: { $type: 'blob', ref: { $link: cidStr }, mimeType: contentType, size: response.size } };
+    const body = {
+      blob: {
+        $type: 'blob',
+        ref: { $link: registration.blob.cid },
+        mimeType: registration.blob.mime,
+        size: registration.blob.size,
+      },
+    };
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     // Debug-only headers (safe for clients to ignore)
     headers['x-sniffed-mime'] = sniffed || '';
@@ -127,8 +141,53 @@ export async function POST({ locals, request }: APIContext) {
     if (enc) headers['x-upload-encoding'] = enc;
 
     return new Response(JSON.stringify(body), { headers });
-  } catch (e) {
-    if (String(errorMessage(e) || '').startsWith('BlobTooLarge')) return new Response(JSON.stringify({ error: 'PayloadTooLarge' }), { status: 413 });
+  } catch (error) {
+    if (registeredCid) await deleteUnreferencedBlobRef(env, did, registeredCid).catch(() => undefined);
+    if (String(errorMessage(error) || '').startsWith('BlobTooLarge')) return new Response(JSON.stringify({ error: 'PayloadTooLarge' }), { status: 413 });
     return new Response(JSON.stringify({ error: 'UploadFailed' }), { status: 500 });
   }
+}
+
+type BlobIdentity = {
+  cid: string;
+  key: string;
+  size: number;
+};
+
+async function blobIdentity(env: Env, body: ArrayBuffer): Promise<BlobIdentity> {
+  const size = body.byteLength;
+  const limit = maxBlobBytes(env);
+  if (size > limit) throw new Error(`BlobTooLarge:${size}>${limit}`);
+
+  const digest = await sha256.digest(new Uint8Array(body));
+  const cid = CID.createV1(0x55, digest);
+  return {
+    cid: cid.toString(),
+    key: `blobs/by-cid/${base64Url(digest.digest)}`,
+    size,
+  };
+}
+
+async function ensureBlobObject(
+  env: Env,
+  key: string,
+  body: ArrayBuffer,
+  contentType: string,
+  expectedSize: number,
+): Promise<void> {
+  const existing = await env.ALTERAN_BLOBS.head(key);
+  if (existing?.size === expectedSize) return;
+  await env.ALTERAN_BLOBS.put(key, body, { httpMetadata: { contentType } });
+}
+
+function maxBlobBytes(env: Env, defaultMax = 5 * 1024 * 1024): number {
+  const raw = env.PDS_MAX_BLOB_SIZE;
+  const parsed = raw ? Number(raw) : defaultMax;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultMax;
+}
+
+function base64Url(bytes: Uint8Array): string {
+  let value = '';
+  for (const byte of bytes) value += String.fromCharCode(byte);
+  return btoa(value).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
 }

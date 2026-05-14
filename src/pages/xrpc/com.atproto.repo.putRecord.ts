@@ -5,7 +5,7 @@ import { canWriteRepo } from '../../lib/auth-scope';
 import { checkRate } from '../../lib/ratelimit';
 import { readJsonBounded } from '../../lib/util';
 import { notifySequencer } from '../../lib/sequencer';
-import { deleteUnreferencedBlobKeys, isAccountActive } from '../../db/dal';
+import { deleteUnreferencedBlobKeys, isAccountActive, sweepEligibleUnreferencedBlobKeys } from '../../db/dal';
 import {
   assertRepoWriteInput,
   handleRepoWriteError,
@@ -19,7 +19,7 @@ import {
 export const prerender = false;
 
 export async function POST({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env, ctx } = locals.runtime;
   let auth: NonNullable<Awaited<ReturnType<typeof verifyResourceRequestHybrid>>>;
   try {
     const verified = await verifyResourceRequestHybrid(env, request);
@@ -31,13 +31,13 @@ export async function POST({ locals, request }: APIContext) {
     throw error;
   }
 
-  let body: any;
+  let body: unknown;
   try {
     body = await readJsonBounded(env, request);
-  } catch (e) {
+  } catch (error) {
     const rateLimitResponse = await checkRate(env, request, 'writes', { key: auth.did });
     if (rateLimitResponse) return rateLimitResponse;
-    if (errorCode(e) === 'PayloadTooLarge') {
+    if (errorCode(error) === 'PayloadTooLarge') {
       return jsonError('PayloadTooLarge', undefined, 413);
     }
     return jsonError('BadRequest');
@@ -83,6 +83,9 @@ export async function POST({ locals, request }: APIContext) {
       await deleteUnreferencedBlobKeys(env, result.dereferencedBlobKeys).catch((error) => {
         console.warn('[putRecord] Failed to clean dereferenced blobs:', error);
       });
+      ctx?.waitUntil(sweepEligibleUnreferencedBlobKeys(env).catch((error) => {
+        console.warn('[putRecord] Failed to sweep dereferenced blobs:', error);
+      }));
     }
 
     return new Response(JSON.stringify({

@@ -135,7 +135,7 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
   blocksBase64 = btoa(blocksBase64);
 
   const ts = Date.now();
-  const guard = { did, commitCid: cidString };
+  const guard = { did, commitCid: cidString, rev };
   const requiredBlobKeys = Array.from(new Set(opts?.requiredBlobKeys ?? []));
   const rootStatement = rootMutationStatement(env, did, cidString, rev, expectedCommitCid, requiredBlobKeys);
   const statements = [

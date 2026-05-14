@@ -29,7 +29,9 @@ export async function checkRate(
       ).bind(cost, key, bucket, win, cost, limit),
     ]);
     if (changedRows(results[1]) !== 1) return rateLimited();
-    const row: any = await env.ALTERAN_DB.prepare('SELECT count FROM rate_limit WHERE ip=? AND bucket=? AND window=?').bind(key, bucket, win).first();
+    const row = await env.ALTERAN_DB.prepare(
+      'SELECT count FROM rate_limit WHERE ip=? AND bucket=? AND window=?',
+    ).bind(key, bucket, win).first<{ count: number }>();
     const count = row?.count ? Number(row.count) : cost;
 
     const headers = new Headers();

@@ -3,7 +3,7 @@ import { errorCode } from '../../lib/errors';
 import { readJsonBounded } from '../../lib/util';
 import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError, insufficientScopeResponse } from '../../lib/oauth/resource';
 import { canWriteRepo } from '../../lib/auth-scope';
-import { deleteUnreferencedBlobKeys, isAccountActive } from '../../db/dal';
+import { deleteUnreferencedBlobKeys, isAccountActive, sweepEligibleUnreferencedBlobKeys } from '../../db/dal';
 import { checkRate } from '../../lib/ratelimit';
 import { notifySequencer } from '../../lib/sequencer';
 import {
@@ -23,7 +23,7 @@ export const prerender = false;
  * Apply a batch of repository writes atomically
  */
 export async function POST({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env, ctx } = locals.runtime;
   let auth: NonNullable<Awaited<ReturnType<typeof verifyResourceRequestHybrid>>>;
   try {
     const verified = await verifyResourceRequestHybrid(env, request);
@@ -35,13 +35,13 @@ export async function POST({ locals, request }: APIContext) {
     throw error;
   }
 
-  let body: any;
+  let body: unknown;
   try {
     body = await readJsonBounded(env, request);
-  } catch (e) {
+  } catch (error) {
     const rateLimitResponse = await checkRate(env, request, 'writes', { key: auth.did });
     if (rateLimitResponse) return rateLimitResponse;
-    if (errorCode(e) === 'PayloadTooLarge') {
+    if (errorCode(error) === 'PayloadTooLarge') {
       return jsonError('PayloadTooLarge', undefined, 413);
     }
     return jsonError('BadRequest');
@@ -50,7 +50,8 @@ export async function POST({ locals, request }: APIContext) {
   let writeRateCharged = false;
   try {
     const input = assertRepoWriteInput('com.atproto.repo.applyWrites', body);
-    if (input.writes.length > 200) {
+    const writes = Array.isArray(input.writes) ? input.writes : [];
+    if (writes.length > 200) {
       const rateLimitResponse = await checkRate(env, request, 'writes', { key: auth.did });
       writeRateCharged = true;
       if (rateLimitResponse) return rateLimitResponse;
@@ -62,14 +63,13 @@ export async function POST({ locals, request }: APIContext) {
 
     const rateLimitResponse = await checkRate(env, request, 'writes', {
       key: auth.did,
-      cost: input.writes.length,
+      cost: writes.length,
     });
     writeRateCharged = true;
     if (rateLimitResponse) return rateLimitResponse;
 
     // Check if account is active
-    const did = env.PDS_DID as string;
-    const active = await isAccountActive(env, did);
+    const active = await isAccountActive(env, auth.did);
     if (!active) {
       return new Response(
         JSON.stringify({
@@ -100,6 +100,9 @@ export async function POST({ locals, request }: APIContext) {
       await deleteUnreferencedBlobKeys(env, applied.dereferencedBlobKeys).catch((error) => {
         console.warn('[applyWrites] Failed to clean dereferenced blobs:', error);
       });
+      ctx?.waitUntil(sweepEligibleUnreferencedBlobKeys(env).catch((error) => {
+        console.warn('[applyWrites] Failed to sweep dereferenced blobs:', error);
+      }));
     }
 
     return new Response(

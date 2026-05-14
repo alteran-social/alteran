@@ -5,7 +5,11 @@ import type { Env } from '../env';
 import { resolveSecret } from './secrets';
 import { generateTid } from './commit';
 import { RepoManager } from '../services/repo-manager';
-import { cidForRecord } from '../services/repo/blockstore-ops';
+import { resolveRecordBlobKeys } from '../services/repo/blob-refs';
+import { validateRawRecord } from './repo-write-data';
+import { RepoWriteError } from './repo-write-error';
+
+export { handleRepoWriteError, invalidSwap, jsonError, RepoWriteError } from './repo-write-error';
 
 export type ValidationStatus = 'valid' | 'unknown' | undefined;
 export type RepoWriteAction = 'create' | 'update' | 'delete';
@@ -44,45 +48,6 @@ export type RequestedWriteAuthorization = {
   collection: string;
   action: RepoWriteAction;
 };
-
-export class RepoWriteError extends Error {
-  constructor(
-    public readonly error: string,
-    message: string,
-    public readonly status = 400,
-  ) {
-    super(message);
-  }
-
-  toResponse(): Response {
-    return jsonError(this.error, this.message, this.status);
-  }
-}
-
-export function jsonError(error: string, message?: string, status = 400): Response {
-  return new Response(JSON.stringify({
-    error,
-    ...(message ? { message } : {}),
-  }), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
-export function invalidSwap(message = 'Invalid swap'): Response {
-  return jsonError('InvalidSwap', message, 400);
-}
-
-export function handleRepoWriteError(error: unknown): Response {
-  if (error instanceof RepoWriteError) return error.toResponse();
-  if (isRepoBlobNotFound(error)) {
-    return jsonError('BlobNotFound', 'blob not found', 400);
-  }
-  if (isRepoCommitConflict(error)) {
-    return jsonError('InvalidSwap', 'repo head changed', 400);
-  }
-  throw error;
-}
 
 export function hasSwapCommit(input: Record<string, unknown>): boolean {
   return Object.prototype.hasOwnProperty.call(input, 'swapCommit');
@@ -187,7 +152,6 @@ export async function preparePutRecord(
     record: body.record,
     validate: body.validate,
   });
-  const candidateCid = await cidForRecord(write.record);
   const expectedCommitCid = expectedCommitCidForRequest(body, ctx.currentCommitCid);
   checkSwapRecord(body.swapRecord, currentCid, true);
 
@@ -297,13 +261,13 @@ export function repoPath(collection: string, rkey: string): string {
 }
 
 export function createRecordAuthorizations(
-  input: Record<string, any>,
+  input: Record<string, unknown>,
 ): RequestedWriteAuthorization[] {
   return [{ collection: requireString(input.collection, 'collection'), action: 'create' }];
 }
 
 export function putRecordAuthorizations(
-  input: Record<string, any>,
+  input: Record<string, unknown>,
 ): RequestedWriteAuthorization[] {
   const collection = requireString(input.collection, 'collection');
   if (input.swapRecord === null) {
@@ -319,13 +283,13 @@ export function putRecordAuthorizations(
 }
 
 export function deleteRecordAuthorizations(
-  input: Record<string, any>,
+  input: Record<string, unknown>,
 ): RequestedWriteAuthorization[] {
   return [{ collection: requireString(input.collection, 'collection'), action: 'delete' }];
 }
 
 export function applyWritesAuthorizations(
-  input: Record<string, any>,
+  input: Record<string, unknown>,
 ): RequestedWriteAuthorization[] {
   const rawWrites = Array.isArray(input.writes) ? input.writes : [];
   return rawWrites.map((raw) => {
@@ -344,9 +308,9 @@ export function applyWritesAuthorizations(
   });
 }
 
-export function assertRepoWriteInput(lexUri: string, input: unknown): Record<string, any> {
+export function assertRepoWriteInput(lexUri: string, input: unknown): Record<string, unknown> {
   try {
-    return lexicons.assertValidXrpcInput(lexUri, input) as Record<string, any>;
+    return lexicons.assertValidXrpcInput(lexUri, input) as Record<string, unknown>;
   } catch (error) {
     throw new RepoWriteError('InvalidRequest', error instanceof Error ? error.message : 'invalid input');
   }
@@ -410,7 +374,7 @@ function validateLexiconRecord(
 
   enforceRecordKeyPolicy(knownRecord.key, rkey);
 
-  let result;
+  let result: ReturnType<typeof lexicons.validate>;
   try {
     result = lexicons.validate(collection, jsonToLex(record));
   } catch (error) {
@@ -438,216 +402,20 @@ function enforceRecordKeyPolicy(policy: unknown, rkey: string): void {
   }
 }
 
-function validateRawRecord(collection: string, value: unknown): Record<string, unknown> {
-  if (!isPlainObject(value)) {
-    throw new RepoWriteError('InvalidRequest', 'record must be an object');
-  }
-  const record = { ...value } as Record<string, unknown>;
-  if (record.$type === undefined) {
-    throw new RepoWriteError('InvalidRequest', 'record $type is required');
-  } else if (record.$type !== collection) {
-    throw new RepoWriteError('InvalidRequest', 'record $type must match collection');
-  }
-  validateRawValue(record, 'record');
-  return record;
-}
-
-function validateRawValue(value: unknown, path: string): void {
-  if (value === null) return;
-  if (typeof value === 'string' || typeof value === 'boolean') return;
-  if (typeof value === 'number') {
-    if (!Number.isInteger(value)) {
-      throw new RepoWriteError('InvalidRequest', `${path} must contain integer numbers`);
-    }
-    if (!Number.isSafeInteger(value)) {
-      throw new RepoWriteError('InvalidRequest', `${path} contains an unsafe integer`);
-    }
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (let i = 0; i < value.length; i++) validateRawValue(value[i], `${path}/${i}`);
-    return;
-  }
-  if (!isPlainObject(value)) {
-    throw new RepoWriteError('InvalidRequest', `${path} contains an unsupported value`);
-  }
-
-  const obj = value as Record<string, unknown>;
-  if ('$link' in obj) {
-    validateCidLinkObject(obj, path);
-    return;
-  }
-  if ('$bytes' in obj) {
-    validateBytesObject(obj, path);
-    return;
-  }
-  if (isLegacyBlobObject(obj)) {
-    throw new RepoWriteError('InvalidRequest', `${path} contains a legacy blob object`);
-  }
-  if (obj.$type === 'blob') {
-    validateBlobObject(obj, path);
-    return;
-  }
-
-  for (const [key, child] of Object.entries(obj)) {
-    if (key.length === 0) {
-      throw new RepoWriteError('InvalidRequest', `${path} contains an empty object key`);
-    }
-    if (key === '$type' && typeof child !== 'string') {
-      throw new RepoWriteError('InvalidRequest', `${path} $type must be a string`);
-    }
-    validateRawValue(child, `${path}/${key}`);
-  }
-}
-
-function validateCidLinkObject(obj: Record<string, unknown>, path: string): CID {
-  const keys = Object.keys(obj);
-  if (keys.length !== 1 || typeof obj.$link !== 'string') {
-    throw new RepoWriteError('InvalidRequest', `${path} must be a CID link object`);
-  }
-  if (!obj.$link.startsWith('b') || obj.$link !== obj.$link.toLowerCase()) {
-    throw new RepoWriteError('InvalidRequest', `${path} must contain a base32 CID string`);
-  }
-  let cid;
-  try {
-    cid = CID.parse(obj.$link);
-  } catch {
-    throw new RepoWriteError('InvalidRequest', `${path} must contain a valid CID`);
-  }
-  if (cid.toString() !== obj.$link) {
-    throw new RepoWriteError('InvalidRequest', `${path} must contain a base32 CID string`);
-  }
-  validateDataCid(cid, path);
-  return cid;
-}
-
-function validateBytesObject(obj: Record<string, unknown>, path: string): void {
-  const keys = Object.keys(obj);
-  if (keys.length !== 1 || typeof obj.$bytes !== 'string') {
-    throw new RepoWriteError('InvalidRequest', `${path} must be a bytes object`);
-  }
-  if (!isSimpleBase64(obj.$bytes)) {
-    throw new RepoWriteError('InvalidRequest', `${path} must contain RFC-4648 base64 bytes`);
-  }
-}
-
-function validateBlobObject(obj: Record<string, unknown>, path: string): {
-  cid: CID;
-  mimeType: string;
-  size: number;
-} {
-  const keys = Object.keys(obj).sort();
-  if (keys.join('\0') !== ['$type', 'mimeType', 'ref', 'size'].sort().join('\0')) {
-    throw new RepoWriteError('InvalidRequest', `${path} must be a regular blob object`);
-  }
-  if (obj.$type !== 'blob') {
-    throw new RepoWriteError('InvalidRequest', `${path} must be a typed blob`);
-  }
-  if (!isPlainObject(obj.ref)) {
-    throw new RepoWriteError('InvalidRequest', `${path}.ref must be a CID link`);
-  }
-  const cid = validateCidLinkObject(obj.ref as Record<string, unknown>, `${path}/ref`);
-  validateRawBlobCid(cid, path);
-  if (typeof obj.mimeType !== 'string' || obj.mimeType.length === 0) {
-    throw new RepoWriteError('InvalidRequest', `${path}.mimeType must be non-empty`);
-  }
-  if (typeof obj.size !== 'number' || !Number.isInteger(obj.size) || obj.size < 0) {
-    throw new RepoWriteError('InvalidRequest', `${path}.size must be a non-negative integer`);
-  }
-  return { cid, mimeType: obj.mimeType, size: obj.size };
-}
-
-function validateRawBlobCid(cid: CID, path: string): void {
-  if (cid.version !== 1 || cid.code !== 0x55) {
-    throw new RepoWriteError('InvalidRequest', `${path}.ref must be a raw CIDv1 blob CID`);
-  }
-  if (cid.multihash.code !== 0x12 || cid.multihash.digest.byteLength !== 32) {
-    throw new RepoWriteError('InvalidRequest', `${path}.ref must use a SHA-256 multihash`);
-  }
-}
-
-function isLegacyBlobObject(obj: Record<string, unknown>): boolean {
-  const keys = Object.keys(obj).sort();
-  return keys.join('\0') === ['cid', 'mimeType'].join('\0') &&
-    typeof obj.cid === 'string' &&
-    typeof obj.mimeType === 'string';
-}
-
-function validateDataCid(cid: CID, path: string): void {
-  if (cid.version !== 1) {
-    throw new RepoWriteError('InvalidRequest', `${path} must contain a CIDv1 link`);
-  }
-  if (cid.code !== 0x71 && cid.code !== 0x55) {
-    throw new RepoWriteError('InvalidRequest', `${path} must use dag-cbor or raw multicodec`);
-  }
-  if (cid.multihash.code !== 0x12 || cid.multihash.digest.byteLength !== 32) {
-    throw new RepoWriteError('InvalidRequest', `${path} must use a SHA-256 multihash`);
-  }
-}
-
-function isSimpleBase64(value: string): boolean {
-  if (value === '') return true;
-  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(value)) return false;
-  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
-  const bodyLength = value.length - padding;
-  if (bodyLength === 0) return false;
-  if (padding > 0 && value.length % 4 !== 0) return false;
-  if (padding === 1) return bodyLength % 4 === 3;
-  if (padding === 2) return bodyLength % 4 === 2;
-  return bodyLength % 4 !== 1;
-}
-
-async function validateBlobRefs(
+function validateBlobRefs(
   env: Env,
   did: string,
   record: Record<string, unknown>,
 ): Promise<string[]> {
-  const blobs: Array<{ cid: string; mimeType: string; size: number }> = [];
-  collectBlobRefs(record, blobs);
-  const keys = new Set<string>();
-  for (const blob of blobs) {
-    const row = await env.ALTERAN_DB.prepare(
-      'SELECT key, mime, size FROM blob WHERE did = ? AND cid = ? LIMIT 1',
-    ).bind(did, blob.cid).first<{ key: string; mime: string; size: number }>();
-    if (!row) {
-      throw new RepoWriteError('BlobNotFound', `blob not found: ${blob.cid}`);
-    }
-    if (row.mime !== blob.mimeType) {
-      throw new RepoWriteError('InvalidMimeType', `blob mime type mismatch: ${blob.cid}`);
-    }
-    if (Number(row.size) !== blob.size) {
-      throw new RepoWriteError('InvalidSize', `blob size mismatch: ${blob.cid}`);
-    }
-    const object = typeof (env.ALTERAN_BLOBS as any).head === 'function'
-      ? await (env.ALTERAN_BLOBS as any).head(row.key)
-      : await env.ALTERAN_BLOBS.get(row.key);
-    if (!object) {
-      throw new RepoWriteError('BlobNotFound', `blob not found: ${blob.cid}`);
-    }
-    keys.add(row.key);
-  }
-  return Array.from(keys);
-}
-
-function collectBlobRefs(value: unknown, refs: Array<{ cid: string; mimeType: string; size: number }>): void {
-  if (!value || typeof value !== 'object') return;
-  if (Array.isArray(value)) {
-    for (const item of value) collectBlobRefs(item, refs);
-    return;
-  }
-  const obj = value as Record<string, unknown>;
-  if (obj.$type === 'blob') {
-    const blob = validateBlobObject(obj, 'blob');
-    refs.push({ cid: blob.cid.toString(), mimeType: blob.mimeType, size: blob.size });
-    return;
-  }
-  for (const child of Object.values(obj)) collectBlobRefs(child, refs);
+  return resolveRecordBlobKeys(env, did, record);
 }
 
 function checkSwapCommit(value: unknown, currentCommitCid: string | null): void {
   if (value === undefined) return;
-  if (typeof value !== 'string') throw new RepoWriteError('InvalidRequest', 'swapCommit must be a CID');
-  if (value !== currentCommitCid) throw new RepoWriteError('InvalidSwap', 'swapCommit mismatch');
+  const expected = parseSwapCid(value, 'swapCommit');
+  if (!currentCommitCid || !expected.equals(CID.parse(currentCommitCid))) {
+    throw new RepoWriteError('InvalidSwap', 'swapCommit mismatch');
+  }
 }
 
 function expectedCommitCidForRequest(
@@ -662,18 +430,14 @@ function isRepoCommitConflict(error: unknown): boolean {
   return error instanceof Error && error.name === 'RepoCommitConflictError';
 }
 
-function isRepoBlobNotFound(error: unknown): boolean {
-  return error instanceof Error && error.name === 'RepoBlobNotFoundError';
-}
-
 function checkSwapRecord(value: unknown, currentCid: CID | null, nullable: boolean): void {
   if (value === undefined) return;
   if (value === null && nullable) {
     if (currentCid) throw new RepoWriteError('InvalidSwap', 'swapRecord mismatch');
     return;
   }
-  if (typeof value !== 'string') throw new RepoWriteError('InvalidRequest', 'swapRecord must be a CID');
-  if (!currentCid || value !== currentCid.toString()) {
+  const expected = parseSwapCid(value, 'swapRecord');
+  if (!currentCid || !expected.equals(currentCid)) {
     throw new RepoWriteError('InvalidSwap', 'swapRecord mismatch');
   }
 }
@@ -685,8 +449,13 @@ async function getCurrentCommitCid(env: Env, did: string): Promise<string | null
   return row?.commitCid ?? null;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
+function parseSwapCid(value: unknown, field: 'swapCommit' | 'swapRecord'): CID {
+  if (typeof value !== 'string') {
+    throw new RepoWriteError('InvalidRequest', `${field} must be a CID`);
+  }
+  try {
+    return CID.parse(value);
+  } catch {
+    throw new RepoWriteError('InvalidRequest', `${field} must be a CID`);
+  }
 }

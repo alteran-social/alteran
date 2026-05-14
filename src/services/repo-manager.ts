@@ -7,7 +7,6 @@ import { eq, sql } from 'drizzle-orm';
 import type { RepoOp } from '../lib/firehose/frames';
 import {
   putRecordStatements,
-  deleteRecordStatements,
   setRecordBlobUsageStatements,
   getRecordBlobKeys,
   type BlobKeyRef,
@@ -18,11 +17,13 @@ import { resolveSecret } from '../lib/secrets';
 import { storeRecord, storeMstBlocks, cidForRecord } from './repo/blockstore-ops';
 import { extractOps as extractOpsImpl } from './repo/operations';
 import { ServerMisconfigured } from '../lib/errors';
+import { RepoWriteError } from '../lib/repo-write-error';
+import type { PreparedWrite } from '../lib/repo-write-validation';
+import { assertBlobKeysAvailable, resolveRecordBlobKeys } from './repo/blob-refs';
 import {
-  RepoWriteError,
-  type PreparedWrite,
-  type ValidationStatus,
-} from '../lib/repo-write-validation';
+  applyPreparedWritesToRepo,
+  type BatchCommitResult,
+} from './repo/apply-prepared-writes';
 
 interface RecordMutation {
   mst: MST;
@@ -56,26 +57,6 @@ interface NoopRecordResult {
 }
 
 type RecordWriteResult = CommitResult | NoopRecordResult;
-
-export interface BatchCommitResult {
-  commit: {
-    cid: string;
-    rev: string;
-  } | null;
-  commitCid?: string;
-  rev?: string;
-  ops: RepoOp[];
-  commitData?: string;
-  sig?: string;
-  blocks?: string;
-  results: Array<{
-    $type: string;
-    uri?: string;
-    cid?: string;
-    validationStatus?: ValidationStatus;
-  }>;
-  dereferencedBlobKeys: BlobKeyRef[];
-}
 
 export class RepoManager {
   private blockstore: D1Blockstore;
@@ -293,141 +274,14 @@ export class RepoManager {
     expectedCommitCid?: string | null,
   ): Promise<BatchCommitResult> {
     const did = await this.getDid();
-    let mst = await this.getOrCreateRoot();
-    const prevMstRoot = await mst.getPointer();
-    const ops: RepoOp[] = [];
-    const sideEffects: Array<
-      | { action: 'put'; uri: string; cid: string; record: unknown; blobKeys: string[] }
-      | { action: 'delete'; uri: string }
-    > = [];
-    const results: BatchCommitResult['results'] = [];
-
-    for (const write of writes) {
-      const path = `${write.collection}/${write.rkey}`;
-      const uri = `at://${did}/${path}`;
-      if (write.action === 'delete') {
-        const prev = await mst.get(path);
-        if (!prev) throw new RepoWriteError('InvalidRequest', 'record does not exist');
-        mst = await mst.delete(path);
-        ops.push({ action: 'delete', path, cid: null, prev });
-        sideEffects.push({ action: 'delete', uri });
-        results.push({ $type: 'com.atproto.repo.applyWrites#deleteResult' });
-        continue;
-      }
-
-      const prev = await mst.get(path);
-      if (write.action === 'update') {
-        if (!prev) throw new RepoWriteError('InvalidRequest', 'record does not exist');
-        const recordCid = await storeRecord(this.blockstore, write.record);
-        mst = await mst.update(path, recordCid);
-        ops.push({ action: 'update', path, cid: recordCid, prev });
-        const cid = recordCid.toString();
-        sideEffects.push({
-          action: 'put',
-          uri,
-          cid,
-          record: write.record,
-          blobKeys: write.blobKeys,
-        });
-        results.push({
-          $type: 'com.atproto.repo.applyWrites#updateResult',
-          uri,
-          cid,
-          validationStatus: write.validationStatus,
-        });
-        continue;
-      }
-
-      if (prev) throw new RepoWriteError('InvalidRequest', 'record already exists');
-      const recordCid = await storeRecord(this.blockstore, write.record);
-      mst = await mst.add(path, recordCid);
-      ops.push({ action: 'create', path, cid: recordCid });
-      const cid = recordCid.toString();
-      sideEffects.push({
-        action: 'put',
-        uri,
-        cid,
-        record: write.record,
-        blobKeys: write.blobKeys,
-      });
-      results.push({
-        $type: 'com.atproto.repo.applyWrites#createResult',
-        uri,
-        cid,
-        validationStatus: write.validationStatus,
-      });
-    }
-
-    const previousBlobKeysByUri = new Map<string, string[]>();
-    const finalBlobKeysByUri = new Map<string, string[]>();
-    for (const effect of sideEffects) {
-      if (!previousBlobKeysByUri.has(effect.uri)) {
-        previousBlobKeysByUri.set(
-          effect.uri,
-          await getRecordBlobKeys(this.env, did, effect.uri),
-        );
-      }
-      finalBlobKeysByUri.set(
-        effect.uri,
-        effect.action === 'put' ? effect.blobKeys : [],
-      );
-    }
-    const dereferencedBlobKeys = Array.from(previousBlobKeysByUri).flatMap(
-      ([uri, previousKeys]) => {
-        const finalKeys = finalBlobKeysByUri.get(uri) ?? [];
-        return previousKeys.filter((key) => !finalKeys.includes(key));
-      },
-    );
-
-    const currentRoot = await mst.getPointer();
-    const newMstBlocks = await storeMstBlocks(this.blockstore, mst);
-    await assertBlobKeysAvailable(
+    return applyPreparedWritesToRepo(
       this.env,
+      this.blockstore,
       did,
-      sideEffects.flatMap((effect) => effect.action === 'put' ? effect.blobKeys : []),
+      await this.getOrCreateRoot(),
+      writes,
+      expectedCommitCid,
     );
-    const { commitCid, rev, commitData, sig, blocks } = await bumpRoot(
-      this.env,
-      prevMstRoot ?? undefined,
-      currentRoot,
-      {
-        ops,
-        newMstBlocks: Array.from(newMstBlocks),
-        expectedCommitCid,
-        requiredBlobKeys: sideEffects.flatMap((effect) =>
-          effect.action === 'put' ? effect.blobKeys : [],
-        ),
-        sideEffectStatements: (guard) => sideEffects.flatMap((effect) => {
-          if (effect.action === 'delete') {
-            return [
-              ...deleteRecordStatements(this.env, effect.uri, guard),
-              ...setRecordBlobUsageStatements(this.env, did, effect.uri, [], guard),
-            ];
-          }
-          return [
-            ...putRecordStatements(this.env, {
-              uri: effect.uri,
-              did,
-            cid: effect.cid,
-            json: JSON.stringify(effect.record),
-          }, guard),
-            ...setRecordBlobUsageStatements(this.env, did, effect.uri, effect.blobKeys, guard),
-          ];
-        }),
-      },
-    );
-
-    return {
-      commit: { cid: commitCid, rev },
-      commitCid,
-      rev,
-      ops,
-      commitData,
-      sig,
-      blocks,
-      results,
-      dereferencedBlobKeys: dereferencedBlobKeys.map((key) => ({ did, key })),
-    };
   }
 
   async deleteRecord(
@@ -551,74 +405,4 @@ export class RepoManager {
   extractOps(prevRoot: CID | null, newRoot: CID): Promise<RepoOp[]> {
     return extractOpsImpl(this.blockstore, prevRoot, newRoot);
   }
-}
-
-async function assertBlobKeysAvailable(env: Env, did: string, keys: string[]): Promise<void> {
-  for (const key of new Set(keys)) {
-    const row = await env.ALTERAN_DB.prepare(
-      'SELECT cid FROM blob WHERE did = ? AND key = ? LIMIT 1',
-    )
-      .bind(did, key)
-      .first<{ cid: string }>();
-    if (!row) {
-      throw new RepoWriteError('BlobNotFound', 'blob not found');
-    }
-    const object = typeof (env.ALTERAN_BLOBS as any).head === 'function'
-      ? await (env.ALTERAN_BLOBS as any).head(key)
-      : await env.ALTERAN_BLOBS.get(key);
-    if (!object) {
-      throw new RepoWriteError('BlobNotFound', `blob not found: ${row.cid}`);
-    }
-  }
-}
-
-async function resolveRecordBlobKeys(env: Env, did: string, record: unknown): Promise<string[]> {
-  const refs: Array<{ cid: string; mimeType: string; size: number }> = [];
-  collectBlobRefs(record, refs);
-  const keys = new Set<string>();
-  for (const ref of refs) {
-    const row = await env.ALTERAN_DB.prepare(
-      'SELECT key, mime, size FROM blob WHERE did = ? AND cid = ? LIMIT 1',
-    )
-      .bind(did, ref.cid)
-      .first<{ key: string; mime: string; size: number }>();
-    if (!row) {
-      throw new RepoWriteError('BlobNotFound', `blob not found: ${ref.cid}`);
-    }
-    if (row.mime !== ref.mimeType) {
-      throw new RepoWriteError('InvalidMimeType', `blob mime type mismatch: ${ref.cid}`);
-    }
-    if (Number(row.size) !== ref.size) {
-      throw new RepoWriteError('InvalidSize', `blob size mismatch: ${ref.cid}`);
-    }
-    const object = typeof (env.ALTERAN_BLOBS as any).head === 'function'
-      ? await (env.ALTERAN_BLOBS as any).head(row.key)
-      : await env.ALTERAN_BLOBS.get(row.key);
-    if (!object) {
-      throw new RepoWriteError('BlobNotFound', `blob not found: ${ref.cid}`);
-    }
-    keys.add(row.key);
-  }
-  return Array.from(keys);
-}
-
-function collectBlobRefs(value: unknown, refs: Array<{ cid: string; mimeType: string; size: number }>): void {
-  if (!value || typeof value !== 'object') return;
-  if (Array.isArray(value)) {
-    for (const item of value) collectBlobRefs(item, refs);
-    return;
-  }
-  const obj = value as Record<string, unknown>;
-  if (obj.$type === 'blob') {
-    const ref = obj.ref;
-    const cid = ref && typeof ref === 'object'
-      ? (ref as Record<string, unknown>).$link
-      : obj.cid;
-    if (typeof cid === 'string' && typeof obj.mimeType === 'string' && typeof obj.size === 'number') {
-      CID.parse(cid);
-      refs.push({ cid, mimeType: obj.mimeType, size: obj.size });
-    }
-    return;
-  }
-  for (const child of Object.values(obj)) collectBlobRefs(child, refs);
 }

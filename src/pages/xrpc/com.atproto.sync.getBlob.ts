@@ -1,8 +1,11 @@
 import type { APIContext } from 'astro';
+import { ensureValidDid } from '@atproto/syntax';
+import { CID } from 'multiformats/cid';
 import { getDb } from '../../db/client';
 import { blob_ref } from '../../db/schema';
 import { and, eq } from 'drizzle-orm';
 import { blobKeyHasUsage, isAccountActive } from '../../db/dal';
+import { resolveSecret } from '../../lib/secrets';
 
 export const prerender = false;
 
@@ -20,25 +23,22 @@ export async function GET({ locals, url }: APIContext) {
   const { env } = locals.runtime;
 
   try {
-    const configuredDid = typeof env.PDS_DID === 'string' ? env.PDS_DID : undefined;
-    const did = url.searchParams.get('did') ?? configuredDid;
+    const configuredDid = await resolveSecret(env.PDS_DID);
+    const did = url.searchParams.get('did');
     const cid = url.searchParams.get('cid');
     if (!did || !cid) {
-      return new Response(
-        JSON.stringify({
-          error: 'InvalidRequest',
-          message: 'did and cid parameters are required'
-        }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return jsonError('InvalidRequest', 'did and cid parameters are required');
+    }
+    if (!isValidDid(did) || !isValidCid(cid)) {
+      return jsonError('InvalidRequest', 'did and cid parameters must be valid');
+    }
+    if (!configuredDid || did !== configuredDid) {
+      return jsonError('RepoNotFound', 'Repo not found');
     }
 
     const active = await isAccountActive(env, did);
     if (!active) {
-      return new Response(
-        JSON.stringify({ error: 'AccountInactive', message: 'Account is not active' }),
-        { status: 403, headers: { 'Content-Type': 'application/json' } }
-      );
+      return jsonError('RepoDeactivated', 'Repo is deactivated');
     }
 
     const db = getDb(env);
@@ -50,24 +50,18 @@ export async function GET({ locals, url }: APIContext) {
       .get();
 
     if (!blobMeta || !(await blobKeyHasUsage(env, did, blobMeta.key))) {
-      return new Response(
-        JSON.stringify({ error: 'InvalidRequest', message: 'Blob not found' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return blobNotFound();
     }
 
     // Fetch blob from R2
     const r2 = env.ALTERAN_BLOBS;
     const object = await r2.get(blobMeta.key);
 
-    if (!object) {
-      return new Response(
-        JSON.stringify({ error: 'InvalidRequest', message: 'Blob not found' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+    if (!object || object.size !== Number(blobMeta.size)) {
+      return blobNotFound();
     }
 
-    const body = await object.arrayBuffer();
+    const body = await responseBody(object);
     return new Response(body, {
       status: 200,
       headers: {
@@ -88,4 +82,74 @@ export async function GET({ locals, url }: APIContext) {
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
   }
+}
+
+function blobNotFound(): Response {
+  return jsonError('BlobNotFound', 'Blob not found');
+}
+
+function jsonError(error: string, message: string, status = 400): Response {
+  return new Response(
+    JSON.stringify({ error, message }),
+    { status, headers: { 'Content-Type': 'application/json' } },
+  );
+}
+
+function isValidDid(did: string): boolean {
+  try {
+    ensureValidDid(did);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isValidCid(cid: string): boolean {
+  try {
+    CID.parse(cid);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function responseBody(object: {
+  body: unknown;
+  arrayBuffer(): Promise<ArrayBuffer>;
+}): Promise<BodyInit> {
+  if ('Bun' in globalThis) {
+    // Direct Miniflare tests expose R2 bodies through a workerd object that
+    // cannot be read as a stream from Bun. Workers production takes the stream
+    // path below.
+    return object.arrayBuffer();
+  }
+  try {
+    return localReadableStream(object.body as ReadableStream<Uint8Array>);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('can not be cloned')) {
+      return object.arrayBuffer();
+    }
+    throw error;
+  }
+}
+
+function localReadableStream(source: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const reader = source.getReader();
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(new Uint8Array(chunk.value));
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
 }
