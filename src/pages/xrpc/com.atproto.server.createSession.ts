@@ -4,6 +4,7 @@ import { drizzle } from 'drizzle-orm/d1';
 import { login_attempts } from '../../db/schema';
 import { eq } from 'drizzle-orm';
 import { createAccount, getAccountByIdentifier, storeRefreshToken } from '../../db/account';
+import { findMatchingAppPassword } from '../../db/app-password';
 import { hashPassword, verifyPassword } from '../../lib/password';
 import { issueSessionTokens } from '../../lib/session-tokens';
 import { AuthScope } from '../../lib/auth-scope';
@@ -59,8 +60,25 @@ export async function POST({ locals, request }: APIContext) {
       account = await getAccountByIdentifier(env, identifier);
     }
   }
-  const passwordHash = account?.passwordScrypt ?? null;
-  const ok = !!password && !!account && (await verifyPassword(password, passwordHash));
+  type LoginOutcome =
+    | { tag: 'primary' }
+    | { tag: 'app-password'; name: string; privileged: boolean }
+    | { tag: 'failed' };
+
+  async function authenticate(): Promise<LoginOutcome> {
+    if (!password || !account) return { tag: 'failed' };
+    if (await verifyPassword(password, account.passwordScrypt ?? null)) {
+      return { tag: 'primary' };
+    }
+    const match = await findMatchingAppPassword(env, account.did, password);
+    if (match) {
+      return { tag: 'app-password', name: match.name, privileged: match.privileged };
+    }
+    return { tag: 'failed' };
+  }
+
+  const login = await authenticate();
+  const ok = login.tag !== 'failed';
 
   if (!ok) {
     // Track failed attempt
@@ -112,15 +130,20 @@ export async function POST({ locals, request }: APIContext) {
   const did = (account?.did ?? (await getRuntimeString(env, 'PDS_DID', 'did:example:single-user')) ?? 'did:example:single-user');
   const handle = (account?.handle ?? (await getRuntimeString(env, 'PDS_HANDLE', identifier ?? 'user.example')) ?? (identifier ?? 'user.example'));
 
+  const accessScope: string = login.tag === 'app-password'
+    ? (login.privileged ? AuthScope.AppPassPrivileged : AuthScope.AppPass)
+    : AuthScope.Access;
+  const appPasswordName: string | null = login.tag === 'app-password' ? login.name : null;
+
   const { accessJwt, refreshJwt, refreshPayload, refreshExpiry } = await issueSessionTokens(env, did, {
-    accessScope: AuthScope.Access,
+    accessScope,
   });
 
   await storeRefreshToken(env, {
     id: refreshPayload.jti,
     did,
     expiresAt: refreshExpiry,
-    appPasswordName: null,
+    appPasswordName,
   });
 
   // Build didDoc for the response (required by official API contract)
