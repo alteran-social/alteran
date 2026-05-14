@@ -115,12 +115,14 @@ export async function proxyAppView({
   }
 
   let target: ProxyTarget = { did: defaultService.did, url: defaultService.url };
-  let audience = `${defaultService.did}#${defaultService.id}`;
+  let permissionAudience = `${defaultService.did}#${defaultService.id}`;
+  let serviceJwtAudience = target.did;
   const proxyHeader = request.headers.get('atproto-proxy');
   if (proxyHeader) {
     try {
       target = await resolveProxyTargetWithRegistry(env, proxyHeader, registry);
-      audience = proxyHeader.trim();
+      permissionAudience = proxyHeader.trim();
+      serviceJwtAudience = target.did;
     } catch (error) {
       console.error('AppView proxy header error:', error);
       const isHeaderError = error instanceof InvalidProxyHeader;
@@ -134,7 +136,7 @@ export async function proxyAppView({
     }
   }
   const hasPrivilegedAccess = auth.access.isOAuth
-    ? canMakeRpcCall(auth.access, lxm, audience)
+    ? canMakeRpcCall(auth.access, lxm, permissionAudience)
     : !!scope && PRIVILEGED_SCOPES.has(scope);
   if (!hasPrivilegedAccess && PRIVILEGED_METHODS.has(lxm)) {
     return new Response(JSON.stringify({ error: 'InvalidToken' }), {
@@ -142,7 +144,7 @@ export async function proxyAppView({
       headers: { 'Content-Type': 'application/json' },
     });
   }
-  if (auth.access.isOAuth && !canMakeRpcCall(auth.access, lxm, audience)) {
+  if (auth.access.isOAuth && !canMakeRpcCall(auth.access, lxm, permissionAudience)) {
     return new Response(JSON.stringify({ error: 'InvalidToken', message: 'bad token scope' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' },
@@ -175,7 +177,7 @@ export async function proxyAppView({
     if (!issuerDid || !issuerDid.startsWith('did:')) {
       throw new Error(`Invalid issuer DID: ${issuerDid || '(empty)'}`);
     }
-    serviceJwt = await createServiceJwt(env, issuerDid, audience, lxm);
+    serviceJwt = await createServiceJwt(env, issuerDid, serviceJwtAudience, lxm);
   } catch (error) {
     console.error('AppView service token error:', error);
     return new Response(JSON.stringify({ error: 'ServiceAuthFailed' }), {

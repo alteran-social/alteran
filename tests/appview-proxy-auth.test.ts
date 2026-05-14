@@ -29,14 +29,18 @@ function decodeJwtPayload(token: string): Record<string, unknown> {
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
-async function issueOauthAccess(env: any, key: Awaited<ReturnType<typeof makeDpopKey>>) {
+async function issueOauthAccess(
+  env: any,
+  key: Awaited<ReturnType<typeof makeDpopKey>>,
+  scope = 'atproto transition:generic',
+) {
   const sessionId = crypto.randomUUID().replace(/-/g, '');
   const accessJti = crypto.randomUUID().replace(/-/g, '');
   const { accessJwt, accessPayload, refreshPayload, refreshExpiry } = await issueSessionTokens(
     env,
     did,
     {
-      scope: 'atproto transition:generic',
+      scope,
       clientId,
       dpopJkt: key.jkt,
       oauthSessionId: sessionId,
@@ -50,7 +54,7 @@ async function issueOauthAccess(env: any, key: Awaited<ReturnType<typeof makeDpo
     clientAuthMethod: 'none',
     clientAuthKeyId: null,
     dpopJkt: key.jkt,
-    scope: 'atproto transition:generic',
+    scope,
     currentRefreshTokenId: refreshPayload.jti,
     accessJti: String(accessPayload.jti),
     expiresAt: refreshExpiry,
@@ -64,7 +68,7 @@ async function issueOauthAccess(env: any, key: Awaited<ReturnType<typeof makeDpo
     clientId,
     clientAuthMethod: 'none',
     dpopJkt: key.jkt,
-    oauthScope: 'atproto transition:generic',
+    oauthScope: scope,
     accessJti: String(accessPayload.jti),
   });
   return accessJwt;
@@ -107,7 +111,7 @@ async function withFetch<T>(handler: TestFetch, run: () => Promise<T>): Promise<
 }
 
 describe('AppView proxy authentication', () => {
-  it('proxies legacy Bearer auth with a service JWT audience that includes the service fragment', async () => {
+  it('proxies legacy Bearer auth with a deployed AppView-compatible service JWT audience', async () => {
     const env = await makeEnv({ REPO_SIGNING_KEY: testRepoSigningKey });
     const { accessJwt } = await issueSessionTokens(env, did);
     const nsid = 'app.bsky.feed.getTimeline';
@@ -135,7 +139,7 @@ describe('AppView proxy authentication', () => {
     const serviceToken = (upstreamAuthorization ?? '').slice('Bearer '.length);
     expect(decodeJwtPayload(serviceToken)).toMatchObject({
       iss: did,
-      aud: 'did:web:api.bsky.app#bsky_appview',
+      aud: 'did:web:api.bsky.app',
       lxm: nsid,
     });
   });
@@ -164,6 +168,158 @@ describe('AppView proxy authentication', () => {
 
     expect(response.status).toBe(200);
     expect(fetchCalls).toBe(1);
+  });
+
+  it('authorizes exact OAuth RPC scopes against the full AppView service reference', async () => {
+    const env = await makeEnv({ REPO_SIGNING_KEY: testRepoSigningKey });
+    const key = await makeDpopKey();
+    const nsid = 'app.bsky.actor.getProfile';
+    const permissionAudience = 'did:web:api.bsky.app#bsky_appview';
+    const access = await issueOauthAccess(
+      env,
+      key,
+      `atproto rpc:${nsid}?aud=${encodeURIComponent(permissionAudience)}`,
+    );
+    const requestUrl = `https://pds.example/xrpc/${nsid}?actor=${encodeURIComponent(did)}`;
+    const proof = await signResourceDpop(env, key, 'GET', requestUrl, access);
+    let upstreamAuthorization: string | null = null;
+
+    const response = await withFetch(async (input, init) => {
+      const headers = input instanceof Request
+        ? input.headers
+        : new Headers(init?.headers);
+      upstreamAuthorization = headers.get('authorization');
+      return new Response(JSON.stringify({ did }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }, () =>
+      catchallGet(apiContext(
+        env,
+        new Request(requestUrl, {
+          headers: { authorization: `DPoP ${access}`, dpop: proof },
+        }),
+        nsid,
+      ))
+    );
+
+    expect(response.status).toBe(200);
+    expect((upstreamAuthorization ?? '').startsWith('Bearer ')).toBe(true);
+    const serviceToken = (upstreamAuthorization ?? '').slice('Bearer '.length);
+    expect(decodeJwtPayload(serviceToken)).toMatchObject({
+      iss: did,
+      aud: 'did:web:api.bsky.app',
+      lxm: nsid,
+    });
+  });
+
+  it('does not authorize exact OAuth RPC scopes for a different service reference', async () => {
+    const env = await makeEnv({ REPO_SIGNING_KEY: testRepoSigningKey });
+    const key = await makeDpopKey();
+    const nsid = 'app.bsky.actor.getProfile';
+    const access = await issueOauthAccess(
+      env,
+      key,
+      `atproto rpc:${nsid}?aud=${encodeURIComponent('did:web:api.bsky.app#other_service')}`,
+    );
+    const requestUrl = `https://pds.example/xrpc/${nsid}?actor=${encodeURIComponent(did)}`;
+    const proof = await signResourceDpop(env, key, 'GET', requestUrl, access);
+    let fetchCalls = 0;
+
+    const response = await withFetch(async () => {
+      fetchCalls++;
+      return new Response(JSON.stringify({ ok: true }));
+    }, () =>
+      catchallGet(apiContext(
+        env,
+        new Request(requestUrl, {
+          headers: { authorization: `DPoP ${access}`, dpop: proof },
+        }),
+        nsid,
+      ))
+    );
+
+    expect(response.status).toBe(401);
+    expect(fetchCalls).toBe(0);
+  });
+
+  it('keeps proxy authorization on the full service reference while minting a bare-DID service JWT', async () => {
+    const env = await makeEnv({ REPO_SIGNING_KEY: testRepoSigningKey });
+    const key = await makeDpopKey();
+    const nsid = 'chat.bsky.convo.getLog';
+    const permissionAudience = 'did:web:api.bsky.chat#bsky_chat';
+    const access = await issueOauthAccess(
+      env,
+      key,
+      `atproto rpc:${nsid}?aud=${encodeURIComponent(permissionAudience)}`,
+    );
+    const requestUrl = `https://pds.example/xrpc/${nsid}`;
+    const proof = await signResourceDpop(env, key, 'GET', requestUrl, access);
+    let upstreamAuthorization: string | null = null;
+    let upstreamUrl: string | null = null;
+
+    const response = await withFetch(async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      upstreamUrl = request.url;
+      upstreamAuthorization = request.headers.get('authorization');
+      return new Response(JSON.stringify({ logs: [] }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }, () =>
+      catchallGet(apiContext(
+        env,
+        new Request(requestUrl, {
+          headers: {
+            authorization: `DPoP ${access}`,
+            dpop: proof,
+            'atproto-proxy': permissionAudience,
+          },
+        }),
+        nsid,
+      ))
+    );
+
+    expect(response.status).toBe(200);
+    expect(upstreamUrl).toBe(`https://api.bsky.chat/xrpc/${nsid}`);
+    const serviceToken = (upstreamAuthorization ?? '').slice('Bearer '.length);
+    expect(decodeJwtPayload(serviceToken)).toMatchObject({
+      iss: did,
+      aud: 'did:web:api.bsky.chat',
+      lxm: nsid,
+    });
+  });
+
+  it('rejects OAuth RPC scopes for a different proxied service before calling upstream', async () => {
+    const env = await makeEnv({ REPO_SIGNING_KEY: testRepoSigningKey });
+    const key = await makeDpopKey();
+    const nsid = 'app.bsky.actor.getProfile';
+    const access = await issueOauthAccess(
+      env,
+      key,
+      `atproto rpc:${nsid}?aud=${encodeURIComponent('did:web:api.bsky.app#bsky_appview')}`,
+    );
+    const requestUrl = `https://pds.example/xrpc/${nsid}?actor=${encodeURIComponent(did)}`;
+    const proof = await signResourceDpop(env, key, 'GET', requestUrl, access);
+    let fetchCalls = 0;
+
+    const response = await withFetch(async () => {
+      fetchCalls++;
+      return new Response(JSON.stringify({ ok: true }));
+    }, () =>
+      catchallGet(apiContext(
+        env,
+        new Request(requestUrl, {
+          headers: {
+            authorization: `DPoP ${access}`,
+            dpop: proof,
+            'atproto-proxy': 'did:web:api.bsky.chat#bsky_chat',
+          },
+        }),
+        nsid,
+      ))
+    );
+
+    expect(response.status).toBe(401);
+    expect(fetchCalls).toBe(0);
   });
 
   it('rejects DPoP-bound OAuth access tokens replayed as Bearer on proxy paths', async () => {
