@@ -8,7 +8,7 @@ export const prerender = false;
  * List repositories (single-user PDS returns one repo)
  */
 export async function GET({ locals, url }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
 
   const did = env.PDS_DID || 'did:example:single-user';
   const handle = env.PDS_HANDLE || 'user.example.com';

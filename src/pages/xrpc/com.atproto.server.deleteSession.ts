@@ -11,7 +11,7 @@ export const prerender = false;
  * owning OAuth session, which invalidates the current DPoP-bound access token.
  */
 export async function POST({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const token = bearerToken(request);
   if (!token) {
     return new Response(JSON.stringify({ error: 'AuthRequired', message: 'No authorization token provided' }), {

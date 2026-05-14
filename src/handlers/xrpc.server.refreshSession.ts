@@ -16,7 +16,7 @@ async function signJwt(_ctx: APIContext, payload: any, _kind: 'access'|'refresh'
 }
 
 export async function POST(ctx: APIContext) {
-  const env: any = (ctx.locals as any).runtime?.env ?? (ctx.locals as any) ?? (globalThis as any);
+  const env: any = (ctx.locals as any).env ?? (ctx.locals as any) ?? (globalThis as any);
   const token = bearer(ctx.request);
   if (!token) return Response.json({ error: 'AuthRequired' }, { status: 401 });
   const ver = await verifyJwt(ctx, token);

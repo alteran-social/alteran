@@ -14,7 +14,7 @@ export const prerender = false;
  * Get metadata about a repository
  */
 export async function GET({ locals, url }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
 
   const repo = url.searchParams.get('repo');
   const did = await configuredDid(env);

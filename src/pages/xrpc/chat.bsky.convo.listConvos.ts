@@ -7,7 +7,7 @@ import { getPrimaryActor } from '../../lib/actor';
 export const prerender = false;
 
 export async function GET({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   try {
     const auth = await authenticateRequest(request, env);
     if (!auth || !canAccessChat(auth.access)) return unauthorized();

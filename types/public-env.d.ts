@@ -54,10 +54,10 @@ export type Env = {
 };
 
 export type PdsLocals = {
-  runtime: {
-    env: Env;
-    ctx: ExecutionContext;
-    request: Request;
-  };
+  // Resolved environment bindings (Secret Store values materialized to strings).
+  // Set by the alteran middleware on every request.
+  env: Env;
+  // Cloudflare ExecutionContext — Astro v6 surfaces it via `locals.cfContext`.
+  cfContext: ExecutionContext;
   requestId?: string;
 };

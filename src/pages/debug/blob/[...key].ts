@@ -3,7 +3,7 @@ import type { APIContext } from 'astro';
 export const prerender = false;
 
 export async function GET({ locals, params }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const key = params.key;
   if (!key) return new Response('missing key', { status: 400 });
 
@@ -17,7 +17,7 @@ export async function GET({ locals, params }: APIContext) {
 }
 
 export async function PUT({ locals, request, params }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const key = params.key;
   if (!key) return new Response('missing key', { status: 400 });
 

@@ -17,7 +17,7 @@ export async function createRecord(ctx: APIContext) {
   if (!(await ensureAuth(ctx))) return Response.json({ error: 'AuthRequired' }, { status: 401 });
   const { collection, rkey, record } = await readJson(ctx.request);
   if (!collection || !record) return Response.json({ error: 'BadRequest' }, { status: 400 });
-  const env: any = (ctx.locals as any).runtime?.env ?? (ctx.locals as any) ?? (globalThis as any);
+  const env: any = (ctx.locals as any).env ?? (ctx.locals as any) ?? (globalThis as any);
   const repo = new RepoManager(env);
   const commit = await repo.createRecord(collection, record, rkey);
   return Response.json(commit);
@@ -27,7 +27,7 @@ export async function putRecord(ctx: APIContext) {
   if (!(await ensureAuth(ctx))) return Response.json({ error: 'AuthRequired' }, { status: 401 });
   const { collection, rkey, record } = await readJson(ctx.request);
   if (!collection || !rkey || !record) return Response.json({ error: 'BadRequest' }, { status: 400 });
-  const env: any = (ctx.locals as any).runtime?.env ?? (ctx.locals as any) ?? (globalThis as any);
+  const env: any = (ctx.locals as any).env ?? (ctx.locals as any) ?? (globalThis as any);
   const repo = new RepoManager(env);
   const commit = await repo.putRecord(collection, rkey, record);
   return Response.json(commit);
@@ -37,7 +37,7 @@ export async function deleteRecord(ctx: APIContext) {
   if (!(await ensureAuth(ctx))) return Response.json({ error: 'AuthRequired' }, { status: 401 });
   const { collection, rkey } = await readJson(ctx.request);
   if (!collection || !rkey) return Response.json({ error: 'BadRequest' }, { status: 400 });
-  const env: any = (ctx.locals as any).runtime?.env ?? (ctx.locals as any) ?? (globalThis as any);
+  const env: any = (ctx.locals as any).env ?? (ctx.locals as any) ?? (globalThis as any);
   const repo = new RepoManager(env);
   const commit = await repo.deleteRecord(collection, rkey);
   return Response.json(commit);
@@ -49,7 +49,7 @@ export async function getRecord(ctx: APIContext) {
   const collection = url.searchParams.get('collection') || '';
   const rkey = url.searchParams.get('rkey') || '';
   if (!repo || !collection || !rkey) return Response.json({ error: 'BadRequest' }, { status: 400 });
-  const env: any = (ctx.locals as any).runtime?.env ?? (ctx.locals as any) ?? (globalThis as any);
+  const env: any = (ctx.locals as any).env ?? (ctx.locals as any) ?? (globalThis as any);
   const manager = new RepoManager(env);
   const res = await manager.getRecord(collection, rkey);
   if (!res) return Response.json({ error: 'NotFound' }, { status: 404 });

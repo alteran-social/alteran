@@ -5,7 +5,7 @@ import { proxyAppView } from '../../lib/appview';
 export const prerender = false;
 
 export async function GET({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const url = new URL(request.url);
   let uri = url.searchParams.get('uri');
   if (!uri) {

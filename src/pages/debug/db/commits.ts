@@ -6,7 +6,7 @@ import { desc } from 'drizzle-orm';
 export const prerender = false;
 
 export async function GET({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const host = env.PDS_HOSTNAME as string | undefined;
   const envName = (env as any).ENVIRONMENT as string | undefined;
   const isLocal = envName !== 'production' && (!host || host.includes('localhost') || host.startsWith('127.') || host === '::1');

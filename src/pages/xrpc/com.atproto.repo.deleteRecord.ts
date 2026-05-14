@@ -27,7 +27,8 @@ import {
 export const prerender = false;
 
 export async function POST({ locals, request }: APIContext) {
-  const { env, ctx } = locals.runtime;
+  const { env } = locals;
+  const ctx = locals.cfContext;
   let auth: NonNullable<Awaited<ReturnType<typeof verifyResourceRequestHybrid>>>;
   try {
     const verified = await verifyResourceRequestHybrid(env, request);

@@ -14,7 +14,7 @@ export const prerender = false;
  * used when updating the PLC identity.
  */
 export async function GET({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
 
   try {
     const auth = await authenticateRequest(request, env);

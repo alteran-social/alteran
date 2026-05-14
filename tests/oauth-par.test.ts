@@ -17,7 +17,7 @@ describe('OAuth PAR endpoint', () => {
       const key = await makeDpopKey();
       const url = 'https://pds.example/oauth/par';
       const proof = await signAuthzDpop(env, key, 'POST', url);
-      const res = await parPost({ locals: { runtime: { env } }, request: new Request(url, {
+      const res = await parPost({ locals: { env }, request: new Request(url, {
         method: 'POST',
         headers: { dpop: proof, 'content-type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
@@ -49,7 +49,7 @@ describe('OAuth PAR endpoint', () => {
       const key = await makeDpopKey();
       const url = 'https://pds.example/oauth/par';
       const proof = await signDpopProof({ key, method: 'POST', url });
-      const res = await parPost({ locals: { runtime: { env } }, request: new Request(url, {
+      const res = await parPost({ locals: { env }, request: new Request(url, {
         method: 'POST',
         headers: { dpop: proof, 'content-type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
@@ -78,7 +78,7 @@ describe('OAuth PAR endpoint', () => {
     const key = await makeDpopKey();
     const url = 'https://pds.example/oauth/par';
     const proof = await signAuthzDpop(env, key, 'POST', url);
-    const res = await parPost({ locals: { runtime: { env } }, request: new Request(url, {
+    const res = await parPost({ locals: { env }, request: new Request(url, {
       method: 'POST',
       headers: { dpop: proof, 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -118,7 +118,7 @@ describe('OAuth PAR endpoint', () => {
       const key = await makeDpopKey();
       const url = 'https://pds.example/oauth/par';
       const proof = await signAuthzDpop(env, key, 'POST', url);
-      const res = await parPost({ locals: { runtime: { env } }, request: new Request(url, {
+      const res = await parPost({ locals: { env }, request: new Request(url, {
         method: 'POST',
         headers: { dpop: proof, 'content-type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
@@ -152,7 +152,7 @@ describe('OAuth PAR endpoint', () => {
       nonce: await getAuthzNonce(env),
       jti,
     });
-    const res = await parPost({ locals: { runtime: { env } }, request: new Request(url, {
+    const res = await parPost({ locals: { env }, request: new Request(url, {
       method: 'POST',
       headers: { dpop: proof, 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({

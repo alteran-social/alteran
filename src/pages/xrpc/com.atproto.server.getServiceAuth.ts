@@ -23,7 +23,7 @@ const APP_PASSWORD_DENIED_SERVICE_AUTH_METHODS: ReadonlySet<string> = new Set([
 ]);
 
 export async function GET({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   let auth: NonNullable<Awaited<ReturnType<typeof verifyResourceRequestHybrid>>>;
   try {
     const verified = await verifyResourceRequestHybrid(env, request);

@@ -17,7 +17,7 @@ const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_DURATION_SEC = 15 * 60; // 15 minutes
 
 export async function POST({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const clientIp = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || 'unknown';
 
   const db = drizzle(env.ALTERAN_DB);

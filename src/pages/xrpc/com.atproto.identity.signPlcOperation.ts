@@ -14,7 +14,7 @@ export const prerender = false;
  * token is accepted but not enforced here.
  */
 export async function POST({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
 
   try {
     const auth = await authenticateRequest(request, env);

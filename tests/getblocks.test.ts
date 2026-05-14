@@ -31,7 +31,7 @@ describe('sync.getBlocks (CAR from blockstore)', () => {
     url.searchParams.set('cids', [a.cid.toString(), b.cid.toString()].join(','));
 
     const res = await (GetBlocks as any).GET({
-      locals: { runtime: { env } },
+      locals: { env },
       request: new Request(url),
     });
 

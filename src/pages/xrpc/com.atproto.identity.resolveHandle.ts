@@ -9,7 +9,7 @@ export const prerender = false;
  * Resolve a handle to a DID
  */
 export async function GET({ locals, url }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
 
   const handle = url.searchParams.get('handle');
 

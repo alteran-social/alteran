@@ -19,7 +19,7 @@ const pdsOrigin = `https://${pdsHost}`;
 
 function apiContext(env: any, request: Request, extra: Record<string, unknown> = {}) {
   return {
-    locals: { runtime: { env } },
+    locals: { env },
     request,
     ...extra,
   } as any;

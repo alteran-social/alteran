@@ -5,7 +5,7 @@ import { tryParse } from '../../lib/util';
 export const prerender = false;
 
 export async function GET({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const url = new URL(request.url);
   const cids = (url.searchParams.get('cids') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
   const rows = await dalGetByCids(env, cids);

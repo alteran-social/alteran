@@ -24,7 +24,7 @@ function parseRequestUri(v: string | null): string | null {
 }
 
 export async function GET({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const url = new URL(request.url);
   const request_uri = url.searchParams.get('request_uri');
   const id = parseRequestUri(request_uri);
@@ -93,7 +93,7 @@ export async function GET({ locals, request }: APIContext) {
 }
 
 export async function POST({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   if (!isSameOriginPost(request)) {
     return new Response(JSON.stringify({ error: 'invalid_request', error_description: 'same-origin POST required' }), {
       status: 403,

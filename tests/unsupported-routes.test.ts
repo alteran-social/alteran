@@ -9,7 +9,7 @@ const did = 'did:example:test';
 
 function apiContext(env: any, request: Request, nsid: string) {
   return {
-    locals: { runtime: { env } },
+    locals: { env },
     params: { nsid },
     request,
   } as any;
@@ -109,7 +109,7 @@ describe('intentionally unsupported single-user XRPC routes', () => {
   it('advertises no public signup or invite capability from describeServer', async () => {
     const env = await makeEnv();
     const response = await describeServer({
-      locals: { runtime: { env } },
+      locals: { env },
       request: new Request('https://pds.example/xrpc/com.atproto.server.describeServer'),
     } as any);
 

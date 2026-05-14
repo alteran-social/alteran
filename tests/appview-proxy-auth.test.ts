@@ -15,7 +15,7 @@ const testRepoSigningKey = '8b5e3d226b44c4c88fbd3d4529f6283fb2b20f6deee8a0b34e7f
 
 function apiContext(env: any, request: Request, nsid: string) {
   return {
-    locals: { runtime: { env } },
+    locals: { env },
     params: { nsid },
     request,
   } as any;

@@ -32,7 +32,7 @@ type UploadAuth =
   | { tag: 'user'; auth: ResourceAuthContext };
 
 export async function POST({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const did = await resolveSecret(env.PDS_DID);
   if (!did) {
     return jsonError('InternalServerError', 'PDS_DID is not configured', 500);

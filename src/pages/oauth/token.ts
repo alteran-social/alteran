@@ -25,7 +25,7 @@ import {
 export const prerender = false;
 
 export async function POST({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const requestId = (locals as { requestId?: string }).requestId ?? null;
 
   let formSummary: OauthTokenFormSummary | null = null;

@@ -52,7 +52,7 @@ async function issueOauthRefresh(env: any, key: Awaited<ReturnType<typeof makeDp
 }
 
 function apiContext(env: any, request: Request) {
-  return { locals: { runtime: { env } }, request } as any;
+  return { locals: { env }, request } as any;
 }
 
 describe('OAuth refresh and revocation state', () => {

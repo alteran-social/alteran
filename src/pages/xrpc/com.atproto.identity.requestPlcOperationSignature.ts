@@ -14,7 +14,7 @@ export const prerender = false;
  * triggering any side effects.
  */
 export async function POST({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
 
   try {
     const auth = await authenticateRequest(request, env);

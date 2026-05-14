@@ -3,7 +3,7 @@ import type { APIContext } from 'astro';
 export const prerender = false;
 
 export async function POST({ locals }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   // Gate to development by default. In production, require local hostname explicitly.
   const envName = (env as any).ENVIRONMENT as string | undefined;
   const host = env.PDS_HOSTNAME as string | undefined;

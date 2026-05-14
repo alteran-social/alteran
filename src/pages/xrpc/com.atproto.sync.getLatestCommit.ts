@@ -8,7 +8,7 @@ export const prerender = false;
  * Get the latest commit CID and revision for a repository
  */
 export async function GET({ locals, url }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
 
   const did = url.searchParams.get('did') || (env.PDS_DID as string);
 

@@ -8,7 +8,7 @@ export const prerender = false;
  * Query: ?from=<seq>&to=<seq>
  */
 export async function GET({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const url = new URL(request.url);
 
   const fromParam = url.searchParams.get('from');

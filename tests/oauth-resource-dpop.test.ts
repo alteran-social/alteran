@@ -120,13 +120,13 @@ describe('OAuth resource DPoP binding', () => {
     const sessionRequest = new Request(sessionUrl, {
       headers: { authorization: `DPoP ${access}`, dpop: sessionProof },
     });
-    const session = await getSession({ locals: { runtime: { env } }, request: sessionRequest } as any);
+    const session = await getSession({ locals: { env }, request: sessionRequest } as any);
     expect(session.status).toBe(200);
     expect(((await session.json()) as any).did).toBe('did:example:test');
 
     const preferencesUrl = 'https://pds.example/xrpc/app.bsky.actor.getPreferences';
     const preferencesProof = await signResourceDpop(env, key, 'GET', preferencesUrl, access);
-    const preferences = await getPreferences({ locals: { runtime: { env } }, request: new Request(preferencesUrl, {
+    const preferences = await getPreferences({ locals: { env }, request: new Request(preferencesUrl, {
       headers: { authorization: `DPoP ${access}`, dpop: preferencesProof },
     }) } as any);
     expect(preferences.status).toBe(200);
@@ -140,7 +140,7 @@ describe('OAuth resource DPoP binding', () => {
         headers: { 'Content-Type': 'application/json' },
       })) as unknown as typeof fetch;
       const proxied = await catchallGet({
-        locals: { runtime: { env } },
+        locals: { env },
         params: { nsid: 'app.bsky.feed.getTimeline' },
         request: new Request(catchallUrl, {
           headers: { authorization: `DPoP ${access}`, dpop: catchallProof },
@@ -186,7 +186,7 @@ describe('OAuth resource DPoP binding', () => {
     const access = await issueOAuthAccess(env, key);
 
     const sessionUrl = 'https://pds.example/xrpc/com.atproto.server.getSession';
-    const session = await getSession({ locals: { runtime: { env } }, request: new Request(sessionUrl, {
+    const session = await getSession({ locals: { env }, request: new Request(sessionUrl, {
       headers: { authorization: `DPoP ${access}` },
     }) } as any);
     expect(session.status).toBe(401);
@@ -194,7 +194,7 @@ describe('OAuth resource DPoP binding', () => {
 
     const catchallUrl = 'https://pds.example/xrpc/app.bsky.feed.getTimeline';
     const proxied = await catchallGet({
-      locals: { runtime: { env } },
+      locals: { env },
       params: { nsid: 'app.bsky.feed.getTimeline' },
       request: new Request(catchallUrl, {
         headers: { authorization: `DPoP ${access}` },

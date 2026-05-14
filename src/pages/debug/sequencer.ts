@@ -4,7 +4,7 @@ import { errorMessage } from '../../lib/errors';
 export const prerender = false;
 
 export async function GET({ locals }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
 
   if (!env.ALTERAN_SEQUENCER) {
     return new Response(JSON.stringify({ error: 'SequencerNotConfigured' }), {

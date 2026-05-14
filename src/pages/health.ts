@@ -12,7 +12,7 @@ interface HealthCheck {
 }
 
 export async function GET({ locals }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const checks: HealthCheck['checks'] = {
     database: { status: 'ok' },
     storage: { status: 'ok' },

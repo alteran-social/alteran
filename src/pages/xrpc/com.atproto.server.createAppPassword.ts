@@ -21,7 +21,7 @@ function isUniqueConstraintViolation(error: unknown): boolean {
 }
 
 export async function POST({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const auth = await authenticateRequest(request, env).catch(() => null);
   if (!auth || !canAccessFullAccount(auth.access)) {
     return new Response(JSON.stringify({ error: 'AuthRequired', message: 'Full-access session required' }), {

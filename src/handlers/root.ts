@@ -95,7 +95,7 @@ const HTML_TEMPLATE = (
 </html>`;
 
 export async function GET({ locals }: APIContext) {
-  const { env } = locals.runtime ?? {};
+  const { env } = locals;
   const handle = String(env?.PDS_HANDLE ?? 'unknown.handle');
   const did = String(env?.PDS_DID ?? 'did:plc:unknown');
 

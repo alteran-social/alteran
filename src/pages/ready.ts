@@ -3,7 +3,7 @@ import type { APIContext } from 'astro';
 export const prerender = false;
 
 export async function GET({ locals }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
 
   try {
     if (env.ALTERAN_DB) {

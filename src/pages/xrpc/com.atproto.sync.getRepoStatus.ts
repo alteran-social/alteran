@@ -10,7 +10,7 @@ export const prerender = false;
  * Mirrors upstream PDS: returns did, active, optional status, and rev if active.
  */
 export async function GET({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const url = new URL(request.url);
   const configuredDid = typeof env.PDS_DID === 'string' ? env.PDS_DID : '';
   const did = url.searchParams.get('did') ?? configuredDid;

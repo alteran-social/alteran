@@ -2,7 +2,7 @@ import type { APIContext } from 'astro';
 import { putRecord as dalPutRecord, getRecord as dalGetRecord } from '../db/dal';
 
 export async function POST_db_bootstrap(ctx: APIContext) {
-  const env: any = (ctx.locals as any).runtime?.env ?? (ctx.locals as any) ?? (globalThis as any);
+  const env: any = (ctx.locals as any).env ?? (ctx.locals as any) ?? (globalThis as any);
   const db = env.ALTERAN_DB;
   await db.exec("CREATE TABLE IF NOT EXISTS record (uri TEXT PRIMARY KEY, cid TEXT NOT NULL, json TEXT NOT NULL, created_at INTEGER DEFAULT (strftime('%s','now')));");
   await db.exec("CREATE TABLE IF NOT EXISTS blob (cid TEXT NOT NULL, did TEXT NOT NULL, key TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, uploaded_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (did, cid));");
@@ -15,7 +15,7 @@ export async function POST_db_bootstrap(ctx: APIContext) {
 }
 
 export async function POST_record(ctx: APIContext) {
-  const env: any = (ctx.locals as any).runtime?.env ?? (ctx.locals as any) ?? (globalThis as any);
+  const env: any = (ctx.locals as any).env ?? (ctx.locals as any) ?? (globalThis as any);
   const body: any = await ctx.request.json().catch(() => ({} as any));
   const uri = body.uri;
   if (!uri) return new Response('missing uri', { status: 400 });
@@ -25,7 +25,7 @@ export async function POST_record(ctx: APIContext) {
 }
 
 export async function GET_record(ctx: APIContext) {
-  const env: any = (ctx.locals as any).runtime?.env ?? (ctx.locals as any) ?? (globalThis as any);
+  const env: any = (ctx.locals as any).env ?? (ctx.locals as any) ?? (globalThis as any);
   const url = new URL(ctx.request.url);
   const uri = url.searchParams.get('uri');
   if (!uri) return new Response('missing uri', { status: 400 });

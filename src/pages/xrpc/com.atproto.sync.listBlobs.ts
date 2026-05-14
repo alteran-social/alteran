@@ -11,7 +11,7 @@ export const prerender = false;
  * List blob CIDs for a DID
  */
 export async function GET({ locals, url }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
 
   const configuredDid = await resolveSecret(env.PDS_DID);
   const did = url.searchParams.get('did') ?? undefined;

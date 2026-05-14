@@ -29,7 +29,7 @@ async function seedPar(env: any, id = 'req123', overrides: Record<string, unknow
 
 async function consentCsrf(env: any, id: string) {
   const uri = `urn:ietf:params:oauth:request_uri:${id}`;
-  const getRes = await consentGet({ locals: { runtime: { env } }, request: new Request(`https://pds.example/oauth/consent?request_uri=${encodeURIComponent(uri)}`) } as any);
+  const getRes = await consentGet({ locals: { env }, request: new Request(`https://pds.example/oauth/consent?request_uri=${encodeURIComponent(uri)}`) } as any);
   return {
     status: getRes.status,
     location: getRes.headers.get('location'),
@@ -42,7 +42,7 @@ describe('OAuth single-user consent', () => {
   it('does not issue a code from authorize and fails prompt=none without auth', async () => {
     const env = await makeEnv();
     await seedPar(env);
-    const res = await authorize({ locals: { runtime: { env } }, request: new Request(`https://pds.example/oauth/authorize?client_id=${encodeURIComponent(clientId)}&request_uri=${encodeURIComponent(requestUri)}&prompt=none`) } as any);
+    const res = await authorize({ locals: { env }, request: new Request(`https://pds.example/oauth/authorize?client_id=${encodeURIComponent(clientId)}&request_uri=${encodeURIComponent(requestUri)}&prompt=none`) } as any);
     expect(res.status).toBe(302);
     const redirect = new URL(res.headers.get('location') ?? '');
     expect(redirect.searchParams.get('error')).toBe('login_required');
@@ -53,7 +53,7 @@ describe('OAuth single-user consent', () => {
   it('honors prompt=none from the pushed authorization request', async () => {
     const env = await makeEnv();
     await seedPar(env, 'req123', { prompt: 'none' });
-    const res = await authorize({ locals: { runtime: { env } }, request: new Request(`https://pds.example/oauth/authorize?client_id=${encodeURIComponent(clientId)}&request_uri=${encodeURIComponent(requestUri)}`) } as any);
+    const res = await authorize({ locals: { env }, request: new Request(`https://pds.example/oauth/authorize?client_id=${encodeURIComponent(clientId)}&request_uri=${encodeURIComponent(requestUri)}`) } as any);
     expect(res.status).toBe(302);
     const redirect = new URL(res.headers.get('location') ?? '');
     expect(redirect.searchParams.get('error')).toBe('login_required');
@@ -83,7 +83,7 @@ describe('OAuth single-user consent', () => {
       expect(csrf.length).toBeGreaterThan(8);
 
       const bad = await consentPost({
-        locals: { runtime: { env } },
+        locals: { env },
         request: new Request('https://pds.example/oauth/consent', {
           method: 'POST',
           headers: { origin: 'https://evil.example', 'content-type': 'application/x-www-form-urlencoded' },
@@ -93,7 +93,7 @@ describe('OAuth single-user consent', () => {
       expect(bad.status).toBe(403);
 
       const ok = await consentPost({
-        locals: { runtime: { env } },
+        locals: { env },
         request: new Request('https://pds.example/oauth/consent', {
           method: 'POST',
           headers: { origin: 'https://pds.example', 'content-type': 'application/x-www-form-urlencoded' },
@@ -121,7 +121,7 @@ describe('OAuth single-user consent', () => {
       await seedPar(env);
       const { csrf } = await consentCsrf(env, 'req123');
       const denied = await consentPost({
-        locals: { runtime: { env } },
+        locals: { env },
         request: new Request('https://pds.example/oauth/consent', {
           method: 'POST',
           headers: { origin: 'https://pds.example', 'content-type': 'application/x-www-form-urlencoded' },
@@ -141,7 +141,7 @@ describe('OAuth single-user consent', () => {
     try {
       const env = await makeEnv();
       await seedPar(env);
-      const res = await consentGet({ locals: { runtime: { env } }, request: new Request(`https://pds.example/oauth/consent?request_uri=${encodeURIComponent(requestUri)}`) } as any);
+      const res = await consentGet({ locals: { env }, request: new Request(`https://pds.example/oauth/consent?request_uri=${encodeURIComponent(requestUri)}`) } as any);
       const html = await res.text();
       expect(html).toContain('name="password" type="password" autocomplete="current-password" required');
       expect(html).toContain('name="decision" value="deny" type="submit" formnovalidate');
@@ -155,7 +155,7 @@ describe('OAuth single-user consent', () => {
     await seedPar(env);
     const { csrf } = await consentCsrf(env, 'req123');
     const denied = await consentPost({
-      locals: { runtime: { env } },
+      locals: { env },
       request: new Request('https://worker-preview.example/oauth/consent', {
         method: 'POST',
         headers: { origin: 'https://worker-preview.example', 'content-type': 'application/x-www-form-urlencoded' },
@@ -176,7 +176,7 @@ describe('OAuth single-user consent', () => {
         await seedPar(env, id);
         const { csrf, uri } = await consentCsrf(env, id);
         const bad = await consentPost({
-          locals: { runtime: { env } },
+          locals: { env },
           request: new Request('https://pds.example/oauth/consent', {
             method: 'POST',
             headers: { origin: 'https://pds.example', 'content-type': 'application/x-www-form-urlencoded', 'cf-connecting-ip': '203.0.113.10' },
@@ -189,7 +189,7 @@ describe('OAuth single-user consent', () => {
       await seedPar(env, 'locked');
       const { csrf, uri } = await consentCsrf(env, 'locked');
       const locked = await consentPost({
-        locals: { runtime: { env } },
+        locals: { env },
         request: new Request('https://pds.example/oauth/consent', {
           method: 'POST',
           headers: { origin: 'https://pds.example', 'content-type': 'application/x-www-form-urlencoded', 'cf-connecting-ip': '203.0.113.10' },

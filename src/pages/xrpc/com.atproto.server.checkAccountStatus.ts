@@ -21,7 +21,7 @@ export const prerender = false;
  * - Missing blob count (for migration tracking)
  */
 export async function GET({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
 
   try {
     const auth = await authenticateRequest(request, env);

@@ -7,7 +7,7 @@ import { getActorPreferences } from '../../lib/preferences';
 export const prerender = false;
 
 export async function GET({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   let auth: NonNullable<Awaited<ReturnType<typeof authenticateRequest>>>;
   try {
     const verified = await authenticateRequest(request, env);

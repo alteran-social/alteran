@@ -34,11 +34,8 @@ export function buildHandlerContext(env: Env, options: BuildOptions = {}): APICo
     request,
     url: new URL(url),
     locals: {
-      runtime: {
-        env,
-        cf: {} as never,
-        ctx: workerExecutionContext,
-      },
+      env,
+      cfContext: workerExecutionContext,
     },
   } as unknown as APIContext;
 }

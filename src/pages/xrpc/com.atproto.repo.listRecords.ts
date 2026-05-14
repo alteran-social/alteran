@@ -8,7 +8,7 @@ export const prerender = false;
  * List records in a collection with pagination
  */
 export async function GET({ locals, url }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
 
   const repo = url.searchParams.get('repo') || (env.PDS_DID as string);
   const collection = url.searchParams.get('collection');

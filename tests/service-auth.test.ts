@@ -13,7 +13,7 @@ const clientId = 'https://client.example/metadata';
 const signingKey = '8b5e3d226b44c4c88fbd3d4529f6283fb2b20f6deee8a0b34e7f0a9b12d3e4f1';
 
 function apiContext(env: any, request: Request) {
-  return { locals: { runtime: { env } }, request } as any;
+  return { locals: { env }, request } as any;
 }
 
 function serviceAuthEnv(overrides: Record<string, unknown> = {}) {

@@ -10,7 +10,7 @@ export const prerender = false;
  * Get information about the current session
  */
 export async function GET({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
 
   // Validate the access token
   let authContext;

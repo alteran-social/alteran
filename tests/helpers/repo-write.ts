@@ -28,11 +28,11 @@ const FIXED_DATE = '2026-05-13T00:00:00.000Z';
 const WRONG_CID = 'bafkreigh2akiscaildc4q7fapfs3krvmxz2s5tapqyqdr6fhyjn4zpd6du';
 
 function apiContext(env: Awaited<ReturnType<typeof makeEnv>>, request: Request) {
-  return { locals: { runtime: { env } }, request } as any;
+  return { locals: { env }, request } as any;
 }
 
 function apiGetContext(env: Awaited<ReturnType<typeof makeEnv>>, request: Request) {
-  return { locals: { runtime: { env } }, request, url: new URL(request.url) } as any;
+  return { locals: { env }, request, url: new URL(request.url) } as any;
 }
 
 async function authHeader(env: Awaited<ReturnType<typeof makeEnv>>, did = String(env.PDS_DID)) {

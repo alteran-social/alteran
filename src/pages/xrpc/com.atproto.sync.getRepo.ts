@@ -9,7 +9,7 @@ export const prerender = false;
  * Returns a CAR snapshot of the repo for initial crawl/index.
  */
 export async function GET({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const url = new URL(request.url);
   const did = url.searchParams.get('did') ?? (env.PDS_DID as string);
   // Phase 1: accept but ignore since param (diff to be implemented later)

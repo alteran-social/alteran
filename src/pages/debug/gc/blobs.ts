@@ -11,7 +11,7 @@ function isLocalDebugAllowed(env: Env): boolean {
 }
 
 export async function POST({ locals }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   if (!isLocalDebugAllowed(env)) return new Response('Not Found', { status: 404 });
 
   const deleted = await deleteUnreferencedBlobKeys(env, await listOrphanBlobRefs(env));

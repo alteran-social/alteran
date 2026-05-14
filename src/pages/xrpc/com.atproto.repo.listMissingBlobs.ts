@@ -16,7 +16,7 @@ export const prerender = false;
  * Used during migration to identify which blobs need to be transferred.
  */
 export async function GET({ locals, request, url }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
 
   try {
     const auth = await authenticateRequest(request, env);

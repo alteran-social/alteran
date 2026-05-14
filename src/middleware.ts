@@ -1,4 +1,7 @@
 import { defineMiddleware, sequence } from 'astro/middleware';
+import { env as cloudflareEnv } from 'cloudflare:workers';
+import type { Env } from './env';
+import { resolveEnvSecrets } from './lib/secrets';
 
 // Response.redirect() (and a few other constructors) returns a Response whose
 // headers are immutable. Re-wrap into a fresh Response so downstream middleware
@@ -8,7 +11,7 @@ function ensureMutableResponse(response: Response): Response {
   return new Response(response.body, response);
 }
 
-const cors = defineMiddleware(async ({ locals, request }, next) => {
+const cors = defineMiddleware(async ({ request }, next) => {
   // Match atproto CORS implementation: use wildcard for public endpoints
   // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin
   // For requests without credentials, "*" can be specified as a wildcard
@@ -28,7 +31,22 @@ const cors = defineMiddleware(async ({ locals, request }, next) => {
     return new Response(null, { status: 204, headers });
   }
 
-  const response = ensureMutableResponse(await next());
+  // Defense-in-depth: catch any thrown error from downstream so the browser
+  // sees a real response (with CORS headers) instead of a bare CF 500 that
+  // surfaces as a CORS failure. The error gets logged downstream before it
+  // reaches us here.
+  let response: Response;
+  try {
+    response = ensureMutableResponse(await next());
+  } catch (error) {
+    response = new Response(
+      JSON.stringify({
+        error: 'InternalError',
+        message: error instanceof Error ? error.message : 'Internal server error',
+      }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } },
+    );
+  }
 
   // Set CORS headers on all responses (atproto standard)
   response.headers.set('Access-Control-Allow-Origin', '*');
@@ -41,6 +59,16 @@ const cors = defineMiddleware(async ({ locals, request }, next) => {
   }
 
   return response;
+});
+
+// Astro v6 removed `Astro.locals.runtime.env` (the @astrojs/cloudflare getter
+// now throws). Resolve any Secret Store bindings up front and expose the
+// materialized env on `locals.env` so handlers don't need to import
+// `cloudflare:workers` (and re-resolve secrets) themselves.
+const resolveEnv = defineMiddleware(async ({ locals }, next) => {
+  const resolved = await resolveEnvSecrets(cloudflareEnv as unknown as Env);
+  (locals as unknown as { env: Env }).env = resolved;
+  return next();
 });
 
 const logger = defineMiddleware(async ({ request, locals }, next) => {
@@ -106,4 +134,4 @@ const logger = defineMiddleware(async ({ request, locals }, next) => {
   }
 });
 
-export const onRequest = sequence(cors, logger);
+export const onRequest = sequence(cors, resolveEnv, logger);

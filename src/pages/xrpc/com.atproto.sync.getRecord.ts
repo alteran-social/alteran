@@ -9,7 +9,7 @@ export const prerender = false;
  * Get a single record as a CAR file
  */
 export async function GET({ locals, url }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
 
   const did = url.searchParams.get('did') || (env.PDS_DID as string);
   const collection = url.searchParams.get('collection');

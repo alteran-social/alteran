@@ -5,7 +5,7 @@ import * as DebugRecord from '../src/pages/debug/record';
 import * as DebugBlobGc from '../src/pages/debug/gc/blobs';
 
 function ctx(env: Awaited<ReturnType<typeof makeEnv>>, request: Request) {
-  return { locals: { runtime: { env } }, request } as any;
+  return { locals: { env }, request } as any;
 }
 
 describe('debug routes', () => {

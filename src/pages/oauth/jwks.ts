@@ -4,7 +4,7 @@ import { getAuthorizationServerPublicJwk } from '../../lib/oauth/as-keys';
 export const prerender = false;
 
 export async function GET({ locals }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const jwk = await getAuthorizationServerPublicJwk(env);
   return new Response(JSON.stringify({ keys: [jwk] }, null, 2), {
     headers: {

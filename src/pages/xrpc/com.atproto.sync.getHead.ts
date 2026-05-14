@@ -4,7 +4,7 @@ import { getRoot as getRepoRoot } from '../../db/repo';
 export const prerender = false;
 
 export async function GET({ locals }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const root = await getRepoRoot(env);
   if (!root) {
     return new Response(

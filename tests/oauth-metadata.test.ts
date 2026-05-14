@@ -12,7 +12,7 @@ describe('OAuth metadata and route injection', () => {
   it('advertises atproto OAuth server metadata with PAR, JWKS, and revocation', async () => {
     const env = await makeEnv();
     const request = new Request('https://pds.example/.well-known/oauth-authorization-server');
-    const res = await authServerMetadata({ locals: { runtime: { env } }, request } as any);
+    const res = await authServerMetadata({ locals: { env }, request } as any);
     const body = await res.json() as any;
     expect(body.issuer).toBe('https://pds.example');
     expect(body.pushed_authorization_request_endpoint).toBe('https://pds.example/oauth/par');
@@ -27,7 +27,7 @@ describe('OAuth metadata and route injection', () => {
   it('advertises protected-resource metadata', async () => {
     const env = await makeEnv();
     const request = new Request('https://pds.example/.well-known/oauth-protected-resource');
-    const res = await protectedResourceMetadata({ locals: { runtime: { env } }, request } as any);
+    const res = await protectedResourceMetadata({ locals: { env }, request } as any);
     const body = await res.json() as any;
     expect(body.resource).toBe('https://pds.example');
     expect(body.authorization_servers).toEqual(['https://pds.example']);
@@ -36,7 +36,7 @@ describe('OAuth metadata and route injection', () => {
 
   it('redirects non-dotted well-known aliases to spec paths', async () => {
     const res = await authServerRedirect({
-      locals: { runtime: { env: {} } },
+      locals: { env: {} },
       request: new Request('https://pds.example/well-known/oauth-authorization-server?client=1'),
     } as any);
 
@@ -48,7 +48,7 @@ describe('OAuth metadata and route injection', () => {
     const env = await makeEnv({ PDS_HOSTNAME: 'canonical.example' });
 
     const authRes = await authServerMetadata({
-      locals: { runtime: { env } },
+      locals: { env },
       request: new Request('https://worker-preview.example/.well-known/oauth-authorization-server'),
     } as any);
     const authBody = await authRes.json() as any;
@@ -57,7 +57,7 @@ describe('OAuth metadata and route injection', () => {
     expect(authBody.protected_resources).toEqual(['https://canonical.example']);
 
     const resourceRes = await protectedResourceMetadata({
-      locals: { runtime: { env } },
+      locals: { env },
       request: new Request('https://worker-preview.example/.well-known/oauth-protected-resource'),
     } as any);
     const resourceBody = await resourceRes.json() as any;
@@ -67,7 +67,7 @@ describe('OAuth metadata and route injection', () => {
 
   it('serves a public AS JWKS without exposing symmetric session secrets', async () => {
     const env = await makeEnv();
-    const res = await jwks({ locals: { runtime: { env } } } as any);
+    const res = await jwks({ locals: { env } } as any);
     const body = await res.json() as any;
     expect(body.keys).toHaveLength(1);
     expect(body.keys[0].kty).toBe('EC');

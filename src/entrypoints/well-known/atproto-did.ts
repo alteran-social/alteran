@@ -7,7 +7,7 @@ import {
 export const prerender = false;
 
 export async function GET({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
 
   if (!await requestMatchesConfiguredHandle(request, env)) {
     return new Response("NotFound", {

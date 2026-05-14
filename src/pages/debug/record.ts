@@ -11,7 +11,7 @@ function isLocalDebugAllowed(env: Env): boolean {
 }
 
 export async function GET({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   if (!isLocalDebugAllowed(env)) return new Response('Not Found', { status: 404 });
 
   const url = new URL(request.url);
@@ -25,7 +25,7 @@ export async function GET({ locals, request }: APIContext) {
 }
 
 export async function POST({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   if (!isLocalDebugAllowed(env)) return new Response('Not Found', { status: 404 });
 
   const body = (await request.json()) as { uri?: string; json?: unknown };

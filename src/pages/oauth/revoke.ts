@@ -10,7 +10,7 @@ import { getOAuthSession, getRefreshToken, revokeOAuthSession, revokeRefreshToke
 export const prerender = false;
 
 export async function POST({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   try {
     const dpop = await verifyDpop(env, request, { consumeJti: false, requireNonce: false });
     const form = new URLSearchParams(await request.text());

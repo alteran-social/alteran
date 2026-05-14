@@ -23,7 +23,7 @@ function nsidFromParams(params: Record<string, any>): string {
 }
 
 async function handle({ locals, request, params }: APIContext): Promise<Response> {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const nsid = nsidFromParams(params).trim();
   console.log('xrpc catchall invoked:', { nsid, url: request.url });
   if (!nsid) {

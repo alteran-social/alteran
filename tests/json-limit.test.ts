@@ -23,10 +23,10 @@ describe('JSON size limit enforcement', () => {
       body,
     });
     const res = await (Create.POST as unknown as (ctx: {
-      locals: { runtime: { env: typeof env } };
+      locals: { env: typeof env };
       request: Request;
     }) => Promise<Response>)({
-      locals: { runtime: { env } },
+      locals: { env },
       request: req,
     });
     expect(res.status).toBe(413);

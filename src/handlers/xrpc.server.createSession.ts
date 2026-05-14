@@ -12,7 +12,7 @@ async function signJwt(_ctx: APIContext, payload: any, _kind: 'access'|'refresh'
 
 export async function POST(ctx: APIContext) {
   const { identifier, password } = await readJson(ctx.request);
-  const env: any = (ctx.locals as any).runtime?.env ?? (ctx.locals as any) ?? (globalThis as any);
+  const env: any = (ctx.locals as any).env ?? (ctx.locals as any) ?? (globalThis as any);
   const ok = !!password && password === (env.USER_PASSWORD ?? 'changeme');
   if (!ok) return Response.json({ error: 'InvalidPassword' }, { status: 401 });
   const did = env.PDS_DID ?? 'did:example:single-user';

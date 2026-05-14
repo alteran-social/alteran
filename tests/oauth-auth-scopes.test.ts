@@ -16,7 +16,7 @@ const did = 'did:example:test';
 const clientId = 'https://client.example/metadata';
 
 function apiContext(env: any, request: Request) {
-  return { locals: { runtime: { env } }, request } as any;
+  return { locals: { env }, request } as any;
 }
 
 async function signAccessWithScope(env: any, scope: string): Promise<string> {

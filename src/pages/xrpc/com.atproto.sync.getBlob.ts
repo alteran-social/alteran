@@ -20,7 +20,7 @@ export const prerender = false;
  * - cid: The CID of the blob to retrieve (required)
  */
 export async function GET({ locals, url }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
 
   try {
     const configuredDid = await resolveSecret(env.PDS_DID);

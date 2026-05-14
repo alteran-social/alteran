@@ -5,7 +5,7 @@ import { publicPdsOrigin } from "../../lib/oauth/consent";
 export const prerender = false;
 
 export async function GET({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   return withCache(
     request,
     async () => {

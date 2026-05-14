@@ -5,7 +5,7 @@ import { canUseAppPasswordLevelAccess } from '../../lib/auth-scope';
 export const prerender = false;
 
 export async function GET({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   try {
     const auth = await authenticateRequest(request, env);
     if (!auth || !canUseAppPasswordLevelAccess(auth.access)) return unauthorized();

@@ -10,7 +10,7 @@ import { toWireStatus } from '../../lib/account-state';
 export const prerender = false;
 
 export async function POST({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const token = bearerToken(request);
   const nowSec = Math.floor(Date.now() / 1000);
 

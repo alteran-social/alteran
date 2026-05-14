@@ -4,7 +4,7 @@ import { getAppViewConfig } from '../../lib/appview';
 export const prerender = false;
 
 export function GET({ locals }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const did = env.PDS_DID as string;
   const availableUserDomains: string[] = [];
 

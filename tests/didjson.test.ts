@@ -18,7 +18,7 @@ describe('did.json exposes publicKeyMultibase when REPO_SIGNING_KEY is provided'
       REPO_SIGNING_KEY: privHex,
     };
     const req = new Request('http://localhost/.well-known/did.json');
-    const res = await (Did as any).GET({ locals: { runtime: { env } }, request: req });
+    const res = await (Did as any).GET({ locals: { env }, request: req });
     expect(res.status).toBe(200);
     const json = await res.json();
     const vm = (json.verificationMethod || [])[0];

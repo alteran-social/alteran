@@ -12,7 +12,7 @@ function parseRequestUri(v: string | null): string | null {
 }
 
 export async function GET({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env } = locals;
   const url = new URL(request.url);
   const issuer = publicPdsOrigin(env, request);
   const client_id = url.searchParams.get('client_id') || '';
