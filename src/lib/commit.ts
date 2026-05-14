@@ -144,6 +144,11 @@ function getTidClockId(): number {
   return tidClockId;
 }
 
+export function resetTidStateForTests(): void {
+  lastTidTimestamp = 0;
+  tidClockId = undefined;
+}
+
 /**
  * Generate an ATProto Timestamp Identifier for use as a record key or revision.
  *

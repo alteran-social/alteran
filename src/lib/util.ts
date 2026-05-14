@@ -20,11 +20,66 @@ export async function readJson(request: Request): Promise<unknown> {
 }
 
 export async function readJsonBounded(env: Env, request: Request): Promise<unknown> {
+  requireJsonContentType(request);
   const raw = env.PDS_MAX_JSON_BYTES ?? '65536';
   const max = Number(raw) > 0 ? Number(raw) : 65536;
-  const text = await request.text();
-  if (text.length > max) throw new PayloadTooLarge();
+  const bytes = await readBodyBounded(request, max);
+  const text = new TextDecoder().decode(bytes);
   return JSON.parse(text || '{}');
+}
+
+export async function readBodyBounded(request: Request, maxBytes: number): Promise<Uint8Array> {
+  const contentLength = request.headers.get('content-length');
+  return readStreamBounded(request.body, maxBytes, contentLength);
+}
+
+export async function readStreamBounded(
+  stream: ReadableStream<Uint8Array> | null,
+  maxBytes: number,
+  contentLength?: string | null,
+): Promise<Uint8Array> {
+  if (contentLength != null) {
+    const parsed = Number(contentLength);
+    if (Number.isFinite(parsed) && parsed > maxBytes) throw new PayloadTooLarge();
+  }
+
+  if (!stream) return new Uint8Array();
+
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      const bytes = chunk.value instanceof Uint8Array ? chunk.value : new Uint8Array(chunk.value);
+      total += bytes.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new PayloadTooLarge();
+      }
+      chunks.push(bytes);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
+export function requireJsonContentType(request: Request): void {
+  const contentType = request.headers.get('content-type') ?? '';
+  const mediaType = contentType.split(';', 1)[0]?.trim().toLowerCase();
+  if (mediaType !== 'application/json') {
+    throw new TypeError('Content-Type must be application/json');
+  }
 }
 
 export function bearerToken(request: Request): string | null {

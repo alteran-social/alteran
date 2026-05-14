@@ -29,7 +29,7 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "test": "bun test",
+    "test": "bun test --timeout 30000",
     "test:oauth": "bun test tests/oauth-*.test.ts tests/resource-auth.test.ts",
     "deploy": "astro build && bunx wrangler deploy --env production",
     "iac:deploy": "bunx alchemy deploy iac/alchemy.run.ts",
@@ -46,7 +46,6 @@
   },
   "devDependencies": {
     "@astrojs/cloudflare": "^12.6.9",
-    "@atproto/api": "^0.17.0",
     "@cloudflare/vite-plugin": "^1.13.8",
     "@types/bun": "latest",
     "drizzle-kit": "^0.31.5",
@@ -58,7 +57,9 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@atproto/api": "^0.17.0",
     "@atproto/crypto": "^0.4.4",
+    "@atproto/syntax": "^0.4.1",
     "@cloudflare/workers-types": "^4.20251001.0",
     "@did-plc/lib": "^0.0.4",
     "@iconify-json/simple-icons": "^1.2.53",

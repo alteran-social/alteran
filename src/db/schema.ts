@@ -78,21 +78,30 @@ export const record = sqliteTable('record', {
 }));
 
 export const blob_ref = sqliteTable('blob', {
-  cid: text('cid').primaryKey().notNull(),
+  cid: text('cid').notNull(),
   did: text('did').notNull(),
   key: text('key').notNull(),
   mime: text('mime').notNull(),
   size: integer('size').notNull(),
-});
+  uploadedAt: integer('uploaded_at', { mode: 'number' }).notNull().default(0),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.did, table.cid] }),
+  keyIdx: index('blob_key_idx').on(table.key),
+}));
 
 export const blob_usage = sqliteTable('blob_usage', {
+  did: text('did').notNull(),
   recordUri: text('record_uri').notNull(),
   key: text('key').notNull(),
+  cid: text('cid').notNull(),
+  repoRev: text('repo_rev').notNull(),
 }, (table) => ({
-  // Composite primary key on recordUri and key
-  pk: primaryKey({ columns: [table.recordUri, table.key] }),
+  // Composite primary key on did, recordUri, and key
+  pk: primaryKey({ columns: [table.did, table.recordUri, table.key] }),
   // Index for GC queries (finding blobs by record)
-  recordUriIdx: index('blob_usage_record_uri_idx').on(table.recordUri),
+  recordUriIdx: index('blob_usage_record_uri_idx').on(table.did, table.recordUri),
+  didKeyIdx: index('blob_usage_did_key_idx').on(table.did, table.key),
+  didRepoRevCidIdx: index('blob_usage_did_repo_rev_cid_idx').on(table.did, table.repoRev, table.cid),
 }));
 
 // Commit log stores full commit history for firehose and sync

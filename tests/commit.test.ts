@@ -6,6 +6,7 @@ import {
   commitCid,
   generateTid,
   isValidTid,
+  resetTidStateForTests,
 } from '../src/lib/commit';
 import { CID } from 'multiformats/cid';
 import { Secp256k1Keypair } from '@atproto/crypto';
@@ -25,6 +26,7 @@ async function withFixedDateNow<T>(value: number, fn: () => Promise<T> | T): Pro
 describe('Commit Structure & Signing', () => {
   test('should emit fixed-width TIDs for small clocks and full clock id range', async () => {
     const originalRandom = Math.random;
+    resetTidStateForTests();
     Math.random = () => 0.999999999;
     try {
       await withFixedDateNow(0, () => {
@@ -35,6 +37,7 @@ describe('Commit Structure & Signing', () => {
       });
     } finally {
       Math.random = originalRandom;
+      resetTidStateForTests();
     }
   });
 

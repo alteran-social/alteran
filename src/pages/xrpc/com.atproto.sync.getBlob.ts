@@ -1,11 +1,11 @@
 import type { APIContext } from 'astro';
+import { ensureValidDid } from '@atproto/syntax';
+import { CID } from 'multiformats/cid';
 import { getDb } from '../../db/client';
 import { blob_ref } from '../../db/schema';
-import { eq } from 'drizzle-orm';
-import { CID } from 'multiformats/cid';
-import { sha256 } from 'multiformats/hashes/sha2';
-import { putBlobRef } from '../../db/dal';
-import { isAccountActive } from '../../db/dal';
+import { and, eq } from 'drizzle-orm';
+import { blobKeyHasUsage, isAccountActive } from '../../db/dal';
+import { resolveSecret } from '../../lib/secrets';
 
 export const prerender = false;
 
@@ -23,98 +23,50 @@ export async function GET({ locals, url }: APIContext) {
   const { env } = locals.runtime;
 
   try {
-    const configuredDid = typeof env.PDS_DID === 'string' ? env.PDS_DID : undefined;
-    const did = url.searchParams.get('did') ?? configuredDid;
+    const configuredDid = await resolveSecret(env.PDS_DID);
+    const did = url.searchParams.get('did');
     const cid = url.searchParams.get('cid');
     if (!did || !cid) {
-      return new Response(
-        JSON.stringify({
-          error: 'InvalidRequest',
-          message: 'did and cid parameters are required'
-        }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return jsonError('InvalidRequest', 'did and cid parameters are required');
+    }
+    if (!isValidDid(did) || !isValidCid(cid)) {
+      return jsonError('InvalidRequest', 'did and cid parameters must be valid');
+    }
+    if (!configuredDid || did !== configuredDid) {
+      return jsonError('RepoNotFound', 'Repo not found');
     }
 
     const active = await isAccountActive(env, did);
     if (!active) {
-      return new Response(
-        JSON.stringify({ error: 'AccountInactive', message: 'Account is not active' }),
-        { status: 403, headers: { 'Content-Type': 'application/json' } }
-      );
+      return jsonError('RepoDeactivated', 'Repo is deactivated');
     }
 
     const db = getDb(env);
 
-    // Look up blob metadata by CID
-    let blobMeta = await db
+    const blobMeta = await db
       .select()
       .from(blob_ref)
-      .where(eq(blob_ref.cid, cid))
+      .where(and(eq(blob_ref.did, did), eq(blob_ref.cid, cid)))
       .get();
 
-    let key: string | null = blobMeta?.key ?? null;
-    let mime: string = blobMeta?.mime ?? 'application/octet-stream';
-    let size: number | null = blobMeta?.size ?? null;
-
-    // Fallback for older uploads: derive R2 key from CID (raw/sha256) if DB row missing
-    if (!key) {
-      try {
-        const link = CID.parse(cid);
-        // blob CIDs are raw (0x55) with sha256 multihash
-        if (link.multihash.code !== sha256.code) {
-          return new Response(
-            JSON.stringify({ error: 'InvalidRequest', message: 'Unsupported multihash' }),
-            { status: 400, headers: { 'Content-Type': 'application/json' } }
-          );
-        }
-        // Recreate legacy R2 key scheme used by store.put()
-        const digest = link.multihash.digest; // Uint8Array
-        // base64url encode
-        let s = '';
-        for (const b of digest) s += String.fromCharCode(b);
-        const b64url = btoa(s).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
-        key = `blobs/by-cid/${b64url}`;
-      } catch {
-        key = null;
-      }
-    }
-
-    if (!key) {
-      return new Response(
-        JSON.stringify({ error: 'InvalidRequest', message: 'Blob not found' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+    if (!blobMeta || !(await blobKeyHasUsage(env, did, blobMeta.key))) {
+      return blobNotFound();
     }
 
     // Fetch blob from R2
     const r2 = env.ALTERAN_BLOBS;
-    const object = await r2.get(key);
+    const object = await r2.get(blobMeta.key);
 
-    if (!object) {
-      return new Response(
-        JSON.stringify({ error: 'InvalidRequest', message: 'Blob not found' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+    if (!object || object.size !== Number(blobMeta.size)) {
+      return blobNotFound();
     }
 
-    if (!blobMeta) {
-      try {
-        size = object.size ?? size ?? 0;
-        await putBlobRef(env, did, cid, key, mime, Number(size ?? 0));
-      } catch (backfillError) {
-        // Backfill is opportunistic; serving the blob is the priority.
-        console.warn('getBlob backfill failed:', backfillError);
-      }
-    }
-
-    // workers-types' ReadableStream lacks the DOM-types readMany member; the
-    // shapes are wire-compatible at runtime, so widen through unknown.
-    return new Response(object.body as unknown as ReadableStream<Uint8Array>, {
+    const body = await responseBody(object);
+    return new Response(body, {
       status: 200,
       headers: {
-        'Content-Type': mime,
-        ...(size != null ? { 'Content-Length': String(size) } : {}),
+        'Content-Type': blobMeta.mime,
+        'Content-Length': String(blobMeta.size),
         'Cache-Control': 'public, max-age=31536000, immutable',
         'x-content-type-options': 'nosniff',
         'content-security-policy': "default-src 'none'; sandbox",
@@ -130,4 +82,74 @@ export async function GET({ locals, url }: APIContext) {
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
   }
+}
+
+function blobNotFound(): Response {
+  return jsonError('BlobNotFound', 'Blob not found');
+}
+
+function jsonError(error: string, message: string, status = 400): Response {
+  return new Response(
+    JSON.stringify({ error, message }),
+    { status, headers: { 'Content-Type': 'application/json' } },
+  );
+}
+
+function isValidDid(did: string): boolean {
+  try {
+    ensureValidDid(did);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isValidCid(cid: string): boolean {
+  try {
+    CID.parse(cid);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function responseBody(object: {
+  body: unknown;
+  arrayBuffer(): Promise<ArrayBuffer>;
+}): Promise<BodyInit> {
+  if ('Bun' in globalThis) {
+    // Direct Miniflare tests expose R2 bodies through a workerd object that
+    // cannot be read as a stream from Bun. Workers production takes the stream
+    // path below.
+    return object.arrayBuffer();
+  }
+  try {
+    return localReadableStream(object.body as ReadableStream<Uint8Array>);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('can not be cloned')) {
+      return object.arrayBuffer();
+    }
+    throw error;
+  }
+}
+
+function localReadableStream(source: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const reader = source.getReader();
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(new Uint8Array(chunk.value));
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
 }

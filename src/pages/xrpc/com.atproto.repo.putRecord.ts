@@ -1,16 +1,25 @@
 import type { APIContext } from 'astro';
-import { errorCode, errorMessage } from '../../lib/errors';
+import { errorCode } from '../../lib/errors';
 import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError, insufficientScopeResponse } from '../../lib/oauth/resource';
 import { canWriteRepo } from '../../lib/auth-scope';
 import { checkRate } from '../../lib/ratelimit';
 import { readJsonBounded } from '../../lib/util';
-import { RepoManager } from '../../services/repo-manager';
 import { notifySequencer } from '../../lib/sequencer';
+import { deleteUnreferencedBlobKeys, isAccountActive, sweepEligibleUnreferencedBlobKeys } from '../../db/dal';
+import {
+  assertRepoWriteInput,
+  handleRepoWriteError,
+  jsonError,
+  preparePutRecord,
+  putRecordAuthorizations,
+  RepoWriteError,
+  retryNoSwapCommit,
+} from '../../lib/repo-write-validation';
 
 export const prerender = false;
 
 export async function POST({ locals, request }: APIContext) {
-  const { env } = locals.runtime;
+  const { env, ctx } = locals.runtime;
   let auth: NonNullable<Awaited<ReturnType<typeof verifyResourceRequestHybrid>>>;
   try {
     const verified = await verifyResourceRequestHybrid(env, request);
@@ -22,55 +31,79 @@ export async function POST({ locals, request }: APIContext) {
     throw error;
   }
 
-  const rateLimitResponse = await checkRate(env, request, 'writes');
-  if (rateLimitResponse) return rateLimitResponse;
-
-  let body: any;
+  let body: unknown;
   try {
     body = await readJsonBounded(env, request);
-  } catch (e) {
-    if (errorCode(e) === 'PayloadTooLarge') {
-      return new Response(JSON.stringify({ error: 'PayloadTooLarge' }), { status: 413 });
+  } catch (error) {
+    const rateLimitResponse = await checkRate(env, request, 'writes', { key: auth.did });
+    if (rateLimitResponse) return rateLimitResponse;
+    if (errorCode(error) === 'PayloadTooLarge') {
+      return jsonError('PayloadTooLarge', undefined, 413);
     }
-    return new Response(JSON.stringify({ error: 'BadRequest' }), { status: 400 });
-  }
-  const { collection, rkey } = body ?? {};
-  let { record } = body ?? {};
-  if (!collection || !rkey || !record) return new Response(JSON.stringify({ error: 'BadRequest' }), { status: 400 });
-  if (!canWriteRepo(auth.access, collection, 'update')) return insufficientScopeResponse();
-
-  if (collection === 'app.bsky.feed.post' && record && typeof record === 'object') {
-    if (typeof record.text !== 'string') {
-      record.text = '';
-    }
-    if (typeof record.createdAt !== 'string') {
-      record.createdAt = new Date().toISOString();
-    }
+    return jsonError('BadRequest');
   }
 
-  const repo = new RepoManager(env);
-  const result = await repo.putRecord(collection, rkey, record);
-  await notifySequencer(env, {
-    did: env.PDS_DID as string,
-    commitCid: result.commitCid,
-    rev: result.rev,
-    data: result.commitData,
-    sig: result.sig,
-    ops: result.ops,
-    blocks: result.blocks
-  });
+  let writeRateCharged = false;
+  try {
+    const input = assertRepoWriteInput('com.atproto.repo.putRecord', body);
+    for (const write of putRecordAuthorizations(input)) {
+      if (!canWriteRepo(auth.access, write.collection, write.action)) return insufficientScopeResponse();
+    }
 
-  const out = {
-    uri: result.uri,
-    cid: result.cid,
-    commit: {
-      cid: result.commitCid,
-      rev: result.rev,
-    },
-    validationStatus: 'unknown' as const,
-  };
+    const rateLimitResponse = await checkRate(env, request, 'writes', { key: auth.did });
+    writeRateCharged = true;
+    if (rateLimitResponse) return rateLimitResponse;
 
-  return new Response(JSON.stringify(out), {
-    headers: { 'Content-Type': 'application/json' },
-  });
+    if (!(await isAccountActive(env, auth.did))) {
+      return jsonError('AccountDeactivated', 'Account is deactivated. Activate it before making changes.', 403);
+    }
+
+    const { prepared, result } = await retryNoSwapCommit(input, async () => {
+      const prepared = await preparePutRecord(env, auth, input);
+      const { write, repo } = prepared;
+      const result = await repo.putRecord(
+        write.collection,
+        write.rkey,
+        write.record,
+        write.blobKeys,
+        prepared.expectedCommitCid,
+      );
+      return { prepared, result };
+    });
+    if (result.commitCid && result.rev && result.commitData && result.sig && result.blocks) {
+      await notifySequencer(env, {
+        did: prepared.did,
+        commitCid: result.commitCid,
+        rev: result.rev,
+        data: result.commitData,
+        sig: result.sig,
+        ops: result.ops,
+        blocks: result.blocks
+      });
+      await deleteUnreferencedBlobKeys(env, result.dereferencedBlobKeys).catch((error) => {
+        console.warn('[putRecord] Failed to clean dereferenced blobs:', error);
+      });
+      ctx?.waitUntil(sweepEligibleUnreferencedBlobKeys(env).catch((error) => {
+        console.warn('[putRecord] Failed to sweep dereferenced blobs:', error);
+      }));
+    }
+
+    return new Response(JSON.stringify({
+      uri: result.uri,
+      cid: result.cid,
+      ...(result.commitCid && result.rev ? { commit: {
+        cid: result.commitCid,
+        rev: result.rev,
+      } } : {}),
+      validationStatus: prepared.write.validationStatus,
+    }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch (error) {
+    if (!writeRateCharged && error instanceof RepoWriteError) {
+      const rateLimitResponse = await checkRate(env, request, 'writes', { key: auth.did });
+      if (rateLimitResponse) return rateLimitResponse;
+    }
+    return handleRepoWriteError(error);
+  }
 }
