@@ -85,6 +85,13 @@
       "when": 1778724000000,
       "tag": "0011_blob_lifecycle",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1778727115000,
+      "tag": "0012_app_passwords",
+      "breakpoints": true
     }
   ]
 }

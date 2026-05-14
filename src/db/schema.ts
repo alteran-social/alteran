@@ -17,6 +17,17 @@ export const account = sqliteTable('account', {
   handleIdx: uniqueIndex('account_handle_unique').on(table.handle),
 }));
 
+export const app_password = sqliteTable('app_password', {
+  did: text('did').notNull(),
+  name: text('name').notNull(),
+  passwordScrypt: text('password_scrypt').notNull(),
+  createdAt: integer('created_at', { mode: 'number' }).notNull(),
+  privileged: integer('privileged', { mode: 'boolean' }).notNull().default(false),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.did, table.name] }),
+  didIdx: index('app_password_did_idx').on(table.did),
+}));
+
 export const refresh_token_store = sqliteTable('refresh_token', {
   id: text('id').primaryKey().notNull(),
   did: text('did').notNull(),

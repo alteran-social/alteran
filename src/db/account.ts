@@ -1,12 +1,14 @@
-import { eq, or, lt } from 'drizzle-orm';
+import { and, eq, or, lt } from 'drizzle-orm';
 import { getDb } from './client';
-import { account, oauth_session, refresh_token_store, secret } from './schema';
+import { account, app_password, oauth_session, refresh_token_store, secret } from './schema';
 import type { Env } from '../env';
 import { normalizeHandle } from '../lib/handle';
+import { verifyPassword } from '../lib/password';
 
 const NOW = () => Math.floor(Date.now());
 
 export type AccountRow = typeof account.$inferSelect;
+export type AppPasswordRow = typeof app_password.$inferSelect;
 export type RefreshTokenRow = typeof refresh_token_store.$inferSelect;
 export type OAuthSessionRow = typeof oauth_session.$inferSelect;
 
@@ -67,6 +69,98 @@ export async function updateAccountPassword(env: Env, did: string, passwordScryp
     .set({ passwordScrypt, updatedAt: NOW() })
     .where(eq(account.did, did))
     .run();
+}
+
+export async function createAppPasswordRecord(env: Env, data: {
+  did: string;
+  name: string;
+  passwordScrypt: string;
+  privileged: boolean;
+  createdAt?: number;
+}): Promise<boolean> {
+  const response = await env.ALTERAN_DB.prepare(
+    `INSERT INTO app_password (did, name, password_scrypt, created_at, privileged)
+     SELECT ?, ?, ?, ?, ?
+     WHERE NOT EXISTS (
+       SELECT 1 FROM app_password WHERE did = ? AND name = ?
+     )`,
+  ).bind(
+    data.did,
+    data.name,
+    data.passwordScrypt,
+    data.createdAt ?? NOW(),
+    data.privileged ? 1 : 0,
+    data.did,
+    data.name,
+  ).run();
+  return (response.meta.changes ?? 0) === 1;
+}
+
+export async function listAppPasswords(env: Env, did: string): Promise<AppPasswordRow[]> {
+  const db = getDb(env);
+  return db
+    .select()
+    .from(app_password)
+    .where(eq(app_password.did, did))
+    .orderBy(app_password.createdAt, app_password.name)
+    .all();
+}
+
+export async function getAppPassword(
+  env: Env,
+  did: string,
+  name: string,
+): Promise<AppPasswordRow | null> {
+  const db = getDb(env);
+  const row = await db
+    .select()
+    .from(app_password)
+    .where(and(eq(app_password.did, did), eq(app_password.name, name)))
+    .get();
+  return row ?? null;
+}
+
+export async function verifyAppPasswordForLogin(
+  env: Env,
+  did: string,
+  password: string,
+): Promise<{ name: string; privileged: boolean } | null> {
+  for (const candidate of await listAppPasswords(env, did)) {
+    if (await verifyPassword(password, candidate.passwordScrypt)) {
+      return {
+        name: candidate.name,
+        privileged: !!candidate.privileged,
+      };
+    }
+  }
+  return null;
+}
+
+export async function revokeAppPasswordRecord(
+  env: Env,
+  did: string,
+  name: string,
+): Promise<boolean> {
+  const response = await env.ALTERAN_DB.prepare(
+    'DELETE FROM app_password WHERE did = ? AND name = ?',
+  ).bind(did, name).run();
+  return (response.meta.changes ?? 0) > 0;
+}
+
+export async function revokeRefreshTokensForAppPassword(
+  env: Env,
+  did: string,
+  name: string,
+  now: number = Math.floor(Date.now() / 1000),
+): Promise<void> {
+  await env.ALTERAN_DB.prepare(
+    `UPDATE refresh_token
+     SET revoked_at = ?
+     WHERE did = ?
+       AND app_password_name = ?
+       AND token_kind = 'legacy'
+       AND revoked_at IS NULL`,
+  ).bind(now, did, name).run();
 }
 
 export async function storeRefreshToken(env: Env, data: {

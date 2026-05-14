@@ -86,6 +86,9 @@ describe('OAuth metadata and route injection', () => {
       '/xrpc/com.atproto.repo.deleteRecord',
       '/xrpc/com.atproto.repo.importRepo',
       '/xrpc/com.atproto.repo.listMissingBlobs',
+      '/xrpc/com.atproto.server.createAppPassword',
+      '/xrpc/com.atproto.server.listAppPasswords',
+      '/xrpc/com.atproto.server.revokeAppPassword',
     ]) {
       expect(integration).toContain(`pattern: '${route}'`);
     }
