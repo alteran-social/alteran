@@ -1,6 +1,6 @@
 import { setGetEnv } from "astro/env/setup";
 import type { Env } from "../env";
-import type { SecretsStoreSecret } from "../../types/env";
+import type { SecretsStoreSecret } from "../../types/public-env";
 
 const SECRET_KEYS = [
   "PDS_DID",

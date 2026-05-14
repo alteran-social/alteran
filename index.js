@@ -83,6 +83,43 @@ const pkgRoot = new URL('.', import.meta.url);
 
 const resolvePackagePath = (relative) => fileURLToPath(new URL(relative, pkgRoot));
 
+const replaceRequired = (content, search, replacement) => {
+  if (!content.includes(search)) {
+    throw new Error(`[alteran] Unable to derive injected env types: missing marker "${search}"`);
+  }
+
+  return content.replace(search, replacement);
+};
+
+const buildInjectedEnvTypes = () => {
+  const publicEnvTypes = readFileSync(resolvePackagePath('./types/public-env.d.ts'), 'utf-8');
+  const ambientEnvTypes = [
+    ['export type Env = {', 'type AlteranEnv = {'],
+    ['export type PdsLocals = {', 'type AlteranPdsLocals = {'],
+    ['env: Env;', 'env: AlteranEnv;'],
+  ].reduce(
+    (content, [search, replacement]) => replaceRequired(content, search, replacement),
+    publicEnvTypes
+  );
+
+  return `/// <reference types="astro/client" />
+
+${ambientEnvTypes}
+
+declare global {
+  interface Env extends AlteranEnv {}
+
+  namespace App {
+    interface Locals extends AlteranPdsLocals {}
+  }
+}
+
+export type Env = globalThis.Env;
+export type PdsLocals = globalThis.App.Locals;
+export {};
+`;
+};
+
 export default function alteran(options = {}) {
   const {
     debugRoutes = false,
@@ -213,9 +250,7 @@ export default function alteran(options = {}) {
       },
 
       'astro:config:done'({ config, injectTypes, logger }) {
-        const envTypesPath = resolvePackagePath('./types/env.d.ts');
-        const envTypes = readFileSync(envTypesPath, 'utf-8');
-        injectTypes({ filename: 'astro-cloudflare-pds.d.ts', content: envTypes });
+        injectTypes({ filename: 'astro-cloudflare-pds.d.ts', content: buildInjectedEnvTypes() });
 
         const adapterName = config.adapter?.name ?? 'unknown adapter';
         if (!adapterName.toLowerCase().includes('cloudflare')) {
