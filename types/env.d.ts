@@ -35,6 +35,7 @@ declare global {
     REFRESH_TOKEN?: string | SecretsStoreSecret;
     REFRESH_TOKEN_SECRET?: string | SecretsStoreSecret;
     SESSION_JWT_SECRET?: string | SecretsStoreSecret;
+    PDS_METRICS_TOKEN?: string | SecretsStoreSecret;
     PDS_ACCESS_TTL_SEC?: string;
     PDS_REFRESH_TTL_SEC?: string;
     // secp256k1 signing private key (hex or base64 32 bytes) used for commits and service-auth

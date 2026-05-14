@@ -20,6 +20,17 @@ export interface MetricHistogram {
   timestamp: number;
 }
 
+interface HistogramStats {
+  count: number;
+  sum: number;
+  avg: number;
+  min: number;
+  max: number;
+  p50: number;
+  p95: number;
+  p99: number;
+}
+
 /**
  * Simple in-memory metrics aggregator
  * In production, consider using Workers Analytics Engine or D1
@@ -80,19 +91,7 @@ class MetricsCollector {
       return null;
     }
 
-    const sorted = [...values].sort((a, b) => a - b);
-    const sum = sorted.reduce((a, b) => a + b, 0);
-
-    return {
-      count: sorted.length,
-      sum,
-      avg: sum / sorted.length,
-      min: sorted[0],
-      max: sorted[sorted.length - 1],
-      p50: this.percentile(sorted, 0.50),
-      p95: this.percentile(sorted, 0.95),
-      p99: this.percentile(sorted, 0.99),
-    };
+    return this.histogramStats(values);
   }
 
   /**
@@ -106,8 +105,8 @@ class MetricsCollector {
       counters[key] = value;
     }
 
-    for (const [key] of this.histograms.entries()) {
-      histograms[key] = this.getHistogramStats(key.split('|')[0]);
+    for (const [key, values] of this.histograms.entries()) {
+      histograms[key] = this.histogramStats(values);
     }
 
     return { counters, histograms };
@@ -130,6 +129,22 @@ class MetricsCollector {
       .map(([k, v]) => `${k}=${v}`)
       .join(',');
     return `${name}|${labelStr}`;
+  }
+
+  private histogramStats(values: number[]): HistogramStats {
+    const sorted = [...values].sort((a, b) => a - b);
+    const sum = sorted.reduce((a, b) => a + b, 0);
+
+    return {
+      count: sorted.length,
+      sum,
+      avg: sum / sorted.length,
+      min: sorted[0],
+      max: sorted[sorted.length - 1],
+      p50: this.percentile(sorted, 0.50),
+      p95: this.percentile(sorted, 0.95),
+      p99: this.percentile(sorted, 0.99),
+    };
   }
 
   private percentile(sorted: number[], p: number): number {

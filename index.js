@@ -8,6 +8,7 @@ const CORE_ROUTES = [
   { pattern: '/.well-known/oauth-authorization-server', entrypoint: './src/pages/.well-known/oauth-authorization-server.ts' },
   { pattern: '/.well-known/oauth-protected-resource', entrypoint: './src/pages/.well-known/oauth-protected-resource.ts' },
   { pattern: '/health', entrypoint: './src/pages/health.ts' },
+  { pattern: '/metrics', entrypoint: './src/pages/metrics.ts' },
   { pattern: '/oauth/authorize', entrypoint: './src/pages/oauth/authorize.ts' },
   { pattern: '/oauth/consent', entrypoint: './src/pages/oauth/consent.ts' },
   { pattern: '/oauth/jwks', entrypoint: './src/pages/oauth/jwks.ts' },
