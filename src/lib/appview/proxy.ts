@@ -203,6 +203,14 @@ export async function proxyAppView({
     headers.set('accept-encoding', 'identity');
   }
 
+  // Defensive: xrpc-server's `getBodyPresence` treats any `transfer-encoding`
+  // or non-zero `content-length` on the inbound request as a request body,
+  // and rejects query (GET) methods with `A request body was provided when
+  // none was expected`. Forwarded headers don't include these, but strip
+  // anyway in case a future change adds them or the runtime sneaks one in.
+  headers.delete('transfer-encoding');
+  headers.delete('content-length');
+
   if (method === 'POST') {
     const contentType = request.headers.get('content-type');
     if (contentType) headers.set('content-type', contentType);
@@ -211,17 +219,25 @@ export async function proxyAppView({
   }
 
   try {
-    const init: RequestInit & { duplex?: 'half' } = {
-      method,
-      headers,
-    };
-
+    // Build the upstream request explicitly so GET/HEAD never carry a body.
+    // Using `new Request(...)` (rather than fetch(url, init)) gives the runtime
+    // a single canonical Request object to forward and avoids body framing
+    // being inferred from an ambient init.body of `undefined`.
+    let upstreamRequest: Request;
     if (method === 'POST') {
-      init.body = request.body;
-      init.duplex = 'half';
+      upstreamRequest = new Request(upstreamUrl.toString(), {
+        method,
+        headers,
+        body: request.body,
+        // @ts-expect-error duplex is required by the Workers runtime when
+        // streaming a request body but is missing from the lib.dom types.
+        duplex: 'half',
+      });
+    } else {
+      upstreamRequest = new Request(upstreamUrl.toString(), { method, headers });
     }
 
-    const upstream = await fetch(upstreamUrl.toString(), init);
+    const upstream = await fetch(upstreamRequest);
     const responseHeaders = new Headers(upstream.headers);
     return new Response(upstream.body, {
       status: upstream.status,
