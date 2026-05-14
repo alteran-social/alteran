@@ -1,4 +1,4 @@
-name: jsr
+name: publish
 
 on:
   push:
@@ -28,8 +28,11 @@ jobs:
         run: deno install --allow-scripts
       - name: Validate JSR package
         run: deno publish --dry-run --allow-slow-types
-  publish:
-    name: Publish package
+      - name: Validate npm package
+        run: npm publish --dry-run --access public --provenance
+
+  publish-jsr:
+    name: Publish to JSR
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     permissions:
@@ -45,3 +48,26 @@ jobs:
         run: deno install --allow-scripts
       - name: Publish JSR package
         run: deno publish --allow-slow-types
+
+  publish-npm:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+      - name: Publish to npm
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
