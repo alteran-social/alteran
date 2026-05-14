@@ -6,7 +6,7 @@ import { makeEnv } from './helpers/env';
 import { issueSessionTokens } from '../src/lib/session-tokens';
 import { makeDpopKey, signResourceDpop } from './helpers/oauth';
 import { createOAuthSession, storeRefreshToken } from '../src/db/account';
-import { getBlobQuota, putBlobRef, listRecords, setAccountActive, updateBlobQuota } from '../src/db/dal';
+import { getBlobQuota, putBlobRef, listRecords, putRecordStatements, setAccountActive, updateBlobQuota } from '../src/db/dal';
 import * as CreateRecord from '../src/pages/xrpc/com.atproto.repo.createRecord';
 import * as PutRecord from '../src/pages/xrpc/com.atproto.repo.putRecord';
 import * as DeleteRecord from '../src/pages/xrpc/com.atproto.repo.deleteRecord';
@@ -14,6 +14,9 @@ import * as ApplyWrites from '../src/pages/xrpc/com.atproto.repo.applyWrites';
 import * as GetBlob from '../src/pages/xrpc/com.atproto.sync.getBlob';
 import * as ListBlobs from '../src/pages/xrpc/com.atproto.sync.listBlobs';
 import { RepoManager } from '../src/services/repo-manager';
+import { D1Blockstore, MST } from '../src/lib/mst';
+import { bumpRoot } from '../src/db/repo';
+import { collectMstBlocks, encodeRecordBlock } from '../src/services/repo/blockstore-ops';
 
 const FIXED_DATE = '2026-05-13T00:00:00.000Z';
 const WRONG_CID = 'bafkreigh2akiscaildc4q7fapfs3krvmxz2s5tapqyqdr6fhyjn4zpd6du';
@@ -137,6 +140,16 @@ async function readRecordBlock(env: Awaited<ReturnType<typeof makeEnv>>, cid: st
   expect(row?.bytes).toBeTruthy();
   const bytes = Uint8Array.from(atob(row!.bytes), (char) => char.charCodeAt(0));
   return dagCbor.decode(bytes) as Record<string, any>;
+}
+
+async function countRows(
+  env: Awaited<ReturnType<typeof makeEnv>>,
+  table: 'repo_root' | 'record' | 'blob_usage' | 'commit_log' | 'blockstore',
+) {
+  const row = await env.ALTERAN_DB.prepare(
+    `SELECT COUNT(*) AS count FROM ${table}`,
+  ).first<{ count: number }>();
+  return Number(row?.count ?? 0);
 }
 
 async function createPost(env: Awaited<ReturnType<typeof makeEnv>>, body: Record<string, unknown> = {}) {
@@ -655,6 +668,47 @@ describe('repo write validation', () => {
     }
   });
 
+  it('keeps staged blocks invisible when explicit swap guards fail', async () => {
+    const env = await makeEnv();
+    const created = await createPost(env, { rkey: '3m2biurz7cl27' });
+    const beforeBlocks = await countRows(env, 'blockstore');
+    const beforeCommits = await countRows(env, 'commit_log');
+
+    const originalDb = env.ALTERAN_DB;
+    const originalBatch = originalDb.batch.bind(originalDb);
+    const wrappedDb = Object.create(originalDb);
+    let racedRoot = false;
+
+    wrappedDb.batch = async (statements: unknown[]) => {
+      if (statements.length > 2 && !racedRoot) {
+        racedRoot = true;
+        await originalDb.prepare(
+          'UPDATE repo_root SET commit_cid = ?, rev = ? WHERE did = ?',
+        ).bind(WRONG_CID, '3m2biurz7cl29', env.PDS_DID).run();
+      }
+      return originalBatch(statements as any);
+    };
+    (env as any).ALTERAN_DB = wrappedDb;
+
+    try {
+      const stale = await callRoute(PutRecord, env, {
+        repo: env.PDS_DID,
+        collection: 'app.bsky.feed.post',
+        rkey: '3jzfcijpj2z2b',
+        swapCommit: created.commit.cid,
+        record: postRecord('stale guarded write'),
+      });
+      expect(stale.status).toBe(400);
+      expect((await json(stale)).error).toBe('InvalidSwap');
+    } finally {
+      (env as any).ALTERAN_DB = originalDb;
+    }
+
+    expect(await listRecords(env)).toHaveLength(1);
+    expect(await countRows(env, 'commit_log')).toBe(beforeCommits);
+    expect(await countRows(env, 'blockstore')).toBe(beforeBlocks);
+  });
+
   it('blocks deactivated accounts on single-record write routes', async () => {
     const env = await makeEnv();
     await createPost(env, { rkey: '3m2biurz7cl27' });
@@ -896,6 +950,7 @@ describe('repo write validation', () => {
       httpMetadata: { contentType: blob.mimeType },
     });
     await putBlobRef(env, String(env.PDS_DID), blob.cid, key, blob.mimeType, blob.size);
+    const beforeBlocks = await countRows(env, 'blockstore');
 
     const originalDb = env.ALTERAN_DB;
     const originalBatch = originalDb.batch.bind(originalDb);
@@ -931,6 +986,7 @@ describe('repo write validation', () => {
       expect(usage.results).toHaveLength(0);
       const commits = await env.ALTERAN_DB.prepare('SELECT cid FROM commit_log').all();
       expect(commits.results).toHaveLength(0);
+      expect(await countRows(env, 'blockstore')).toBe(beforeBlocks);
     } finally {
       (env as any).ALTERAN_DB = originalDb;
     }
@@ -1246,6 +1302,43 @@ describe('repo write validation', () => {
     expect((await json(stale)).error).toBe('InvalidSwap');
   });
 
+  it('rolls back staged blockstore and row mutations when the commit batch fails', async () => {
+    const env = await makeEnv();
+    const did = String(env.PDS_DID);
+    const blockstore = new D1Blockstore(env);
+    const baseMst = await MST.create(blockstore, []);
+    const record = postRecord('atomic batch');
+    const { cid: recordCid, bytes: recordBytes } = await encodeRecordBlock(record);
+    const path = 'app.bsky.feed.post/atomic-record';
+    const uri = `at://${did}/${path}`;
+    const nextMst = await baseMst.add(path, recordCid);
+    const nextRoot = await nextMst.getPointer();
+    const newMstBlocks = await collectMstBlocks(blockstore, nextMst);
+
+    await expect(bumpRoot(env, undefined, nextRoot, {
+      ops: [{ action: 'create', path, cid: recordCid }],
+      newMstBlocks: Array.from(newMstBlocks),
+      newRecordBlocks: [[recordCid, recordBytes]],
+      sideEffectStatements: (guard) => [
+        ...putRecordStatements(env, {
+          uri,
+          did,
+          cid: recordCid.toString(),
+          json: JSON.stringify(record),
+        }, guard),
+        env.ALTERAN_DB.prepare(
+          'INSERT INTO __repo_write_atomicity_failure__ (id) VALUES (?)',
+        ).bind('boom'),
+      ],
+    })).rejects.toThrow();
+
+    expect(await countRows(env, 'repo_root')).toBe(0);
+    expect(await countRows(env, 'record')).toBe(0);
+    expect(await countRows(env, 'blob_usage')).toBe(0);
+    expect(await countRows(env, 'commit_log')).toBe(0);
+    expect(await countRows(env, 'blockstore')).toBe(0);
+  });
+
   it('enforces encoded commit event size limits before visible mutation', async () => {
     const recordEnv = await makeEnv({
       PDS_MAX_JSON_BYTES: '1250000',
@@ -1267,6 +1360,7 @@ describe('repo write validation', () => {
     expect(await listRecords(recordEnv)).toHaveLength(0);
     let commits = await recordEnv.ALTERAN_DB.prepare('SELECT cid FROM commit_log').all();
     expect(commits.results).toHaveLength(0);
+    expect(await countRows(recordEnv, 'blockstore')).toBe(0);
 
     const env = await makeEnv({ PDS_MAX_JSON_BYTES: '3200000' });
     const largePayload = 'x'.repeat(700_000);
@@ -1290,5 +1384,6 @@ describe('repo write validation', () => {
     expect(await listRecords(env)).toHaveLength(0);
     commits = await env.ALTERAN_DB.prepare('SELECT cid FROM commit_log').all();
     expect(commits.results).toHaveLength(0);
+    expect(await countRows(env, 'blockstore')).toBe(0);
   });
 });

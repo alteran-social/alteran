@@ -59,6 +59,7 @@ export async function assertRepoHead(
 export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID, opts?: {
   ops?: import('../lib/firehose/frames').RepoOp[];
   newMstBlocks?: Array<[CID, Uint8Array]>;
+  newRecordBlocks?: Array<[CID, Uint8Array]>;
   sideEffectStatements?: (guard: CommitGuard) => D1PreparedStatement[];
   expectedCommitCid?: string | null;
   requiredBlobKeys?: string[];
@@ -129,6 +130,7 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
     ops,
     opts?.newMstBlocks,
     commitBytes,
+    opts?.newRecordBlocks,
   );
   assertCommitEventLimits(ops.length, blocksBytes.byteLength);
   // Encode to base64 (workers-safe)
@@ -140,8 +142,13 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
   const guard = { did, commitCid: cidString };
   const requiredBlobKeys = Array.from(new Set(opts?.requiredBlobKeys ?? []));
   const rootStatement = rootMutationStatement(env, did, cidString, rev, expectedCommitCid, requiredBlobKeys);
+  const blockStatements = blockstorePutStatements(env, [
+    ...(opts?.newRecordBlocks ?? []),
+    ...(opts?.newMstBlocks ?? []),
+  ], guard);
   const statements = [
     rootStatement,
+    ...blockStatements,
     ...(opts?.sideEffectStatements?.(guard) ?? []),
     env.ALTERAN_DB.prepare(
       `INSERT INTO commit_log (cid, rev, data, sig, ts)
@@ -161,6 +168,35 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
   }
 
   return { commitCid: cidString, rev, ops, mstRoot: mstRootCid, commitData, sig: sigBase64, blocks: blocksBase64 };
+}
+
+function blockstorePutStatements(
+  env: Env,
+  blocks: Array<[CID, Uint8Array]>,
+  guard: CommitGuard,
+): D1PreparedStatement[] {
+  const deduped = new Map<string, Uint8Array>();
+  for (const [cid, bytes] of blocks) {
+    deduped.set(cid.toString(), bytes);
+  }
+  return Array.from(deduped, ([cid, bytes]) =>
+    env.ALTERAN_DB.prepare(
+      `INSERT OR REPLACE INTO blockstore (cid, bytes)
+       SELECT ?, ?
+       WHERE EXISTS (
+         SELECT 1 FROM repo_root WHERE did = ? AND commit_cid = ?
+       )`,
+    ).bind(cid, bytesToBase64(bytes), guard.did, guard.commitCid),
+  );
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
 }
 
 function rootMutationStatement(

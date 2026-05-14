@@ -33,35 +33,50 @@ export function recordToIpld(record: unknown): unknown {
 }
 
 export async function cidForRecord(record: unknown): Promise<CID> {
+  const { cid } = await encodeRecordBlock(record);
+  return cid;
+}
+
+export async function encodeRecordBlock(
+  record: unknown,
+): Promise<{ cid: CID; bytes: Uint8Array }> {
   const ipldRecord = recordToIpld(record);
   const bytes = dagCbor.encode(ipldRecord);
   assertRecordBlockSize(bytes.byteLength);
-  return cidForCbor(ipldRecord);
+  const cid = await cidForCbor(ipldRecord);
+  return { cid, bytes };
 }
 
 export async function storeRecord(
   blockstore: D1Blockstore,
   record: unknown,
 ): Promise<CID> {
-  const ipldRecord = recordToIpld(record);
-  const bytes = dagCbor.encode(ipldRecord);
-  assertRecordBlockSize(bytes.byteLength);
-  const cid = await cidForCbor(ipldRecord);
+  const { cid, bytes } = await encodeRecordBlock(record);
   await blockstore.put(cid, bytes);
   return cid;
 }
 
-export async function storeMstBlocks(
+export async function collectMstBlocks(
   blockstore: D1Blockstore,
   mst: MST,
 ): Promise<BlockMap> {
   const diff = await mst.getUnstoredBlocks();
   for (const [cid, bytes] of diff.blocks) {
     console.log(
-      `[RepoManager] Storing new MST block: ${cid.toString()}, size: ${bytes.length}`,
+      `[RepoManager] Staging new MST block: ${cid.toString()}, size: ${bytes.length}`,
     );
+  }
+  return diff.blocks;
+}
+
+export async function storeMstBlocks(
+  blockstore: D1Blockstore,
+  mst: MST,
+): Promise<BlockMap> {
+  const blocks = await collectMstBlocks(blockstore, mst);
+  for (const [cid, bytes] of blocks) {
     await blockstore.put(cid, bytes);
   }
-  console.log(`[RepoManager] Stored ${diff.blocks.size} new MST blocks`);
-  return diff.blocks;
+  console.log(`[RepoManager] Stored ${blocks.size} new MST blocks`);
+  return blocks;
 }
