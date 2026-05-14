@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, beforeEach } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { __testHooks } from '../src/lib/appview/did-resolver';
 
 describe('didDocumentCache', () => {

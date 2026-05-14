@@ -7,7 +7,8 @@
  * - Commit signature validation
  */
 
-import { describe, test, expect } from 'bun:test';
+import { describe, it as test } from "./helpers/bdd";
+import { expect } from "@std/expect";
 
 describe('Federation Tests', () => {
   test('Sync getRepo between instances', async () => {

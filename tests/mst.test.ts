@@ -1,4 +1,5 @@
-import { describe, test, expect, beforeAll } from 'bun:test';
+import { describe, it as test, beforeAll } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { MST, Leaf, D1Blockstore } from '../src/lib/mst';
 import { CID } from 'multiformats/cid';
 import * as dagCbor from '@ipld/dag-cbor';

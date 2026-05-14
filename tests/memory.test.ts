@@ -7,7 +7,8 @@
  * - Memory cleanup
  */
 
-import { describe, test, expect } from 'bun:test';
+import { describe, it as test } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { StreamingCarEncoder, blocksFromArray } from '../src/lib/streaming-car';
 import { CID } from 'multiformats/cid';
 import * as dagCbor from '@ipld/dag-cbor';

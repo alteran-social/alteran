@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { checkCursor } from '../src/lib/firehose/validation';
 import * as dagCbor from '@ipld/dag-cbor';
 

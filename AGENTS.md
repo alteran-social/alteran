@@ -75,15 +75,15 @@ type Role = (typeof Role)[keyof typeof Role];
 
 ---
 
-## Bun
+## Deno
 
-**Use Bun's native test runner.** `import { describe, it, expect } from "bun:test"`. **Why:** it's already installed, fast, and matches the rest of the toolchain.
+**Use Deno's native test runner with the std BDD helpers.** `import { describe, it } from "@std/testing/bdd"` and `import { expect } from "@std/expect"`. **Why:** matches the rest of the toolchain and avoids pulling in a third-party runner.
 
-**`bun run <script>` and `bunx <tool>`.** Never `npm`, `npx`, `pnpm`, or `yarn`. **Why:** one toolchain, one lockfile, one source of truth.
+**`deno task <name>` and `deno run -A npm:<tool>`.** Never `npm`, `npx`, `pnpm`, `yarn`, or `bun`. **Why:** one toolchain, one lockfile, one source of truth. Tasks live in `deno.json`.
 
-**Prefer Bun's built-in APIs where the Workers runtime allows.** `Bun.file`, `Bun.password`, `Bun.hash` for local scripts; obviously not inside the Worker bundle. **Why:** fewer dependencies, faster startup.
+**Prefer Deno's built-in APIs in scripts where the Workers runtime allows.** `Deno.stdin`, `Deno.stdout`, `Deno.env`, `Deno.args`, `Deno.exit` for local scripts; obviously not inside the Worker bundle. **Why:** fewer dependencies, no Node-compat shim surprises.
 
-**Commit `bun.lock`. Never hand-edit it.** **Why:** it's the reproducible-build contract.
+**Commit `deno.lock`. Never hand-edit it.** **Why:** it's the reproducible-build contract. `nodeModulesDir: "auto"` in `deno.json` keeps `node_modules` populated for Astro/Wrangler/Drizzle, which still need it.
 
 ---
 
@@ -121,7 +121,7 @@ type Role = (typeof Role)[keyof typeof Role];
 
 ## Testing
 
-**`bun test` runs everything.** Tests live in `tests/*.test.ts`. **Why:** one command, predictable layout.
+**`deno task test` runs everything.** Tests live in `tests/*.test.ts`. **Why:** one command, predictable layout.
 
 **One behavior per `it()`.** Describe-block names match the module under test. **Why:** when a test fails, you should know what regressed from the failure name alone.
 
@@ -140,7 +140,7 @@ A single-user ATProto Personal Data Server on Cloudflare Workers, packaged as an
 ### Stack
 
 - **TypeScript 5** (strict)
-- **Bun** as the package manager and test runner
+- **Deno** as the task runner, package manager, and test runner (npm packages resolved via `nodeModulesDir`)
 - **Astro 5** with `@astrojs/cloudflare`
 - **Hono 4** for XRPC routing
 - **Drizzle ORM** over **Cloudflare D1**
@@ -155,25 +155,25 @@ A single-user ATProto Personal Data Server on Cloudflare Workers, packaged as an
 - `src/db/` — Drizzle schema and generated migrations.
 - `src/worker/` — Worker entry runtime and the `Sequencer` Durable Object.
 - `src/middleware.ts` — CORS and request logging.
-- `tests/` — `bun:test` files.
-- `scripts/` — One-off operational scripts (run with `bun run scripts/<name>.ts`).
+- `tests/` — `@std/testing/bdd` files.
+- `scripts/` — One-off operational scripts (run with `deno run -A scripts/<name>.ts`).
 - `iac/` — Alchemy infrastructure-as-code.
 
 ### Commands
 
 | Task | Command |
 |---|---|
-| Dev server | `bun run dev` |
-| Build | `bun run build` |
-| Deploy (build + wrangler) | `bun run deploy` |
-| Generate migrations | `bun run db:generate` |
-| Apply migrations locally | `bun run db:apply:local` |
-| Apply migrations to prod D1 | `bun run db:apply` |
-| Reset local DB and migrations | `bun run db:reset:local` |
-| Set up secrets | `bun run secrets:setup` |
-| IaC plan / deploy / destroy | `bun run iac:plan` / `bun run iac:deploy` / `bun run iac:destroy` |
-| Tests | `bun test` |
-| Integration tests | `RUN_APP_TESTS=true bun test` |
+| Dev server | `deno task dev` |
+| Build | `deno task build` |
+| Deploy (build + wrangler) | `deno task deploy` |
+| Generate migrations | `deno task db:generate` |
+| Apply migrations locally | `deno task db:apply:local` |
+| Apply migrations to prod D1 | `deno task db:apply` |
+| Reset local DB and migrations | `deno task db:reset:local` |
+| Set up secrets | `deno task secrets:setup` |
+| IaC plan / deploy / destroy | `deno task iac:plan` / `deno task iac:deploy` / `deno task iac:destroy` |
+| Tests | `deno task test` |
+| Integration tests | `RUN_APP_TESTS=true deno task test` |
 
 ### Conventions
 
@@ -186,7 +186,7 @@ A single-user ATProto Personal Data Server on Cloudflare Workers, packaged as an
 
 **Adding a table:**
 1. Edit `src/db/schema.ts` (add the table, indexes, and any relations).
-2. `bun run db:generate` — Drizzle writes a new file under `migrations/`.
+2. `deno task db:generate` — Drizzle writes a new file under `migrations/`.
 3. Commit the generated migration alongside the schema change. Do not edit generated migrations after they've been applied to any environment.
 
 **Adding a service:**

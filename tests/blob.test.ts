@@ -9,7 +9,8 @@
  * - Garbage collection
  */
 
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, it as test, beforeEach } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { R2BlobStore } from '../src/services/r2-blob-store';
 import { putBlobRef, setRecordBlobUsage, listOrphanBlobKeys, deleteBlobByKey } from '../src/db/dal';
 
@@ -55,11 +56,9 @@ describe('Blob Storage Tests', () => {
     // Create blob larger than limit (5MB)
     const largeData = new Uint8Array(6 * 1024 * 1024); // 6MB
 
-    await expect(async () => {
-      await store.put(largeData, {
-        contentType: 'image/jpeg',
-      });
-    }).toThrow();
+    await expect(store.put(largeData, {
+      contentType: 'image/jpeg',
+    })).rejects.toThrow();
   });
 
   test('MIME type validation', () => {

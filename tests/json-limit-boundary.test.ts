@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { readJsonBounded } from '../src/lib/util';
 
 describe('JSON size limit boundary', () => {

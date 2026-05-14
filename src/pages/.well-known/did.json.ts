@@ -2,8 +2,7 @@ import type { APIContext } from 'astro';
 import { errorMessage } from '../../lib/errors';
 import { withCache, CACHE_CONFIGS } from '../../lib/cache';
 import { resolveSecret } from '../../lib/secrets';
-import { Secp256k1Keypair } from '@atproto/crypto';
-import { formatMultikey } from '@atproto/crypto/dist/did';
+import { Secp256k1Keypair, formatMultikey } from '@atproto/crypto';
 import {
   canonicalPdsOrigin,
   configuredDid,

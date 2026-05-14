@@ -10,7 +10,7 @@
     "module": "ESNext",
     "target": "ES2022",
     "lib": ["ES2022", "DOM", "WebWorker"],
-    "types": ["@cloudflare/workers-types", "bun"]
+    "types": ["@cloudflare/workers-types"]
   },
   "include": [".astro/types.d.ts", "**/*"],
   "exclude": ["dist", "atproto", "social-app", "atproto-website"]

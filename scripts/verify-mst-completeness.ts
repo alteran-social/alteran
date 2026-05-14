@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S deno run -A
 /**
  * Verifies that all MST node blocks referenced by the current repo root
  * exist in D1 blockstore. Prints any missing CIDs.

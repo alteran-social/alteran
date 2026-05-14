@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S deno run -A
 export {};
 /**
  * Test com.atproto.server.createSession against your PDS.

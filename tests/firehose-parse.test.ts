@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { createCommitFrame, createErrorFrame } from '../src/lib/firehose/frames';
 import { parseFramedFrame } from '../src/lib/firehose/parse';
 import { CID } from 'multiformats/cid';

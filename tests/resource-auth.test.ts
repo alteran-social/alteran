@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { handleResourceAuthError, ResourceAuthError } from '../src/lib/oauth/resource';
 
 describe('resource auth helpers', () => {

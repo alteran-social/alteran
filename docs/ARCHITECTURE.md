@@ -496,7 +496,7 @@ Recommended flow:
 ```
 1. Push to main
    ↓
-2. Run tests (Bun test)
+2. Run tests (Deno test)
    ↓
 3. Build (Astro build)
    ↓

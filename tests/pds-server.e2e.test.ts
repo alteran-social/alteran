@@ -3,7 +3,8 @@
  * Adapted to run against our Astro-powered PDS so we can validate xrpc endpoints end-to-end.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
+import { describe, it, beforeAll, afterAll } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { randomBytes } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import type { AstroTestServer } from './helpers/astro-server';
@@ -11,7 +12,7 @@ import { startAstroDev, stopAstroDev } from './helpers/astro-server';
 
 // E2E suite boots a real `astro dev` process; gate behind RUN_APP_TESTS=true
 // to match tests/app.test.ts. Without the gate, beforeAll times out at 5s
-// before the dev server is ready and pollutes the bun-test output.
+// before the dev server is ready and pollutes the deno-test output.
 const runAppIntegrationTests = process.env.RUN_APP_TESTS === 'true';
 const describeE2E = runAppIntegrationTests ? describe : describe.skip;
 

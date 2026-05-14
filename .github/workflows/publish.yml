@@ -1,0 +1,25 @@
+name: publish-jsr
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - '\d+.\d+.\d+'
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [ published ]
+  workflow_dispatch:
+
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Publish package
+        run: npx jsr publish
+

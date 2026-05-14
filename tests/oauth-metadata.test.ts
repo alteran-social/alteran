@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'bun:test';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { describe, it } from "./helpers/bdd";
+import { expect } from "@std/expect";
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { makeEnv } from './helpers/env';
 import { GET as authServerMetadata } from '../src/pages/.well-known/oauth-authorization-server';
 import { GET as protectedResourceMetadata } from '../src/pages/.well-known/oauth-protected-resource';

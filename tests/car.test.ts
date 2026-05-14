@@ -3,7 +3,8 @@
  * Tests for CAR v1 encoding, decoding, and spec compliance
  */
 
-import { describe, test, expect } from 'bun:test';
+import { describe, it as test } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { CID } from 'multiformats/cid';
 import * as dagCbor from '@ipld/dag-cbor';
 import { sha256 } from 'multiformats/hashes/sha2';

@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S deno run -A
 /**
  * Derive did:key and PLC publicKeyMultibase (Multikey) from a secp256k1 private key (hex).
  * Usage:

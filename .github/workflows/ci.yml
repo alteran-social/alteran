@@ -16,22 +16,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
         with:
-          node-version: 24
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.2.22
-      - name: Install deps
-        run: bun install --frozen-lockfile
+          deno-version: v2.x
+      - name: Install npm deps (via Deno nodeModulesDir)
+        run: deno install --allow-scripts
       - name: Build
-        run: bun run build
+        run: deno task build
       - name: Tests
-        run: bun run test
-      - name: TypeScript check (bunx)
-        run: bunx -y typescript@5.6.3 -v && bunx -y typescript@5.6.3 -p tsconfig.json --noEmit
+        run: deno task test
+      - name: TypeScript check
+        run: deno run -A npm:typescript@5.6.3/bin/tsc -p tsconfig.json --noEmit
 
   publish:
     name: Publish Integration

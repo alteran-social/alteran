@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { parseCursorParam } from '../src/worker/sequencer/upgrade';
 import { InvalidRequest } from '../src/lib/errors';
 

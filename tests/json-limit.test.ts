@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { makeEnv } from './helpers/env';
 import * as Create from '../src/pages/xrpc/com.atproto.repo.createRecord';
 import { issueSessionTokens } from '../src/lib/session-tokens';

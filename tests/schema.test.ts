@@ -1,4 +1,5 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, it as test } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import {
   record,
   blob_usage,
@@ -82,8 +83,8 @@ describe('Schema Tests', () => {
 
 describe('Migration Tests', () => {
   test('migrations directory exists', async () => {
-    const fs = await import('fs/promises');
-    const path = await import('path');
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
 
     const migrationsDir = path.join(process.cwd(), 'migrations');
     const exists = await fs.access(migrationsDir).then(() => true).catch(() => false);
@@ -92,8 +93,8 @@ describe('Migration Tests', () => {
   });
 
   test('migration journal exists', async () => {
-    const fs = await import('fs/promises');
-    const path = await import('path');
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
 
     const journalPath = path.join(process.cwd(), 'migrations', 'meta', '_journal.json');
     const exists = await fs.access(journalPath).then(() => true).catch(() => false);
@@ -102,8 +103,8 @@ describe('Migration Tests', () => {
   });
 
   test('index migrations are present', async () => {
-    const fs = await import('fs/promises');
-    const path = await import('path');
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
 
     const migrationsDir = path.join(process.cwd(), 'migrations');
     const files = await fs.readdir(migrationsDir);

@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S deno run -A
 /**
  * Import CAR file directly into D1 database
  * This bypasses Workers CPU limits by running locally
@@ -13,8 +13,8 @@
 import { parseCarFile } from '../src/lib/car-reader';
 import * as dagCbor from '@ipld/dag-cbor';
 import { CID } from 'multiformats/cid';
-import { readFileSync, writeFileSync } from 'fs';
-import { execSync } from 'child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import * as uint8arrays from 'uint8arrays';
 import { MST } from '../src/lib/mst/mst';
 import { cidForCbor } from '../src/lib/mst/util';

@@ -3,7 +3,8 @@
  * Tests for com.atproto.repo.importRepo endpoint
  */
 
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, it as test, beforeEach } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { CID } from 'multiformats/cid';
 import * as dagCbor from '@ipld/dag-cbor';
 import { sha256 } from 'multiformats/hashes/sha2';

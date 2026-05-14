@@ -1,0 +1,36 @@
+{
+  "nodeModulesDir": "auto",
+  "unstable": ["sloppy-imports"],
+  "imports": {
+    "@std/testing/bdd": "jsr:@std/testing@^1/bdd",
+    "@std/expect": "jsr:@std/expect@^1"
+  },
+  "tasks": {
+    "dev": "deno run -A npm:astro dev",
+    "build": "deno run -A npm:astro build",
+    "preview": "deno run -A npm:astro preview",
+    "deploy": "deno task build && deno run -A npm:wrangler deploy --env production",
+    "test": "deno test -A --no-check tests/",
+    "test:oauth": "deno test -A --no-check tests/oauth-*.test.ts tests/resource-auth.test.ts",
+    "db:generate": "deno run -A npm:drizzle-kit generate",
+    "db:apply": "deno run -A npm:wrangler d1 migrations apply pds",
+    "db:apply:local": "deno run -A npm:wrangler d1 migrations apply pds --local",
+    "db:apply:local:direct": "deno run -A npm:wrangler d1 migrations apply pds --local",
+    "db:reset:local": "rm -rf .wrangler/state && rm -rf migrations && deno task db:generate && deno task db:apply:local",
+    "secrets:setup": "deno run -A scripts/setup-secrets.ts",
+    "relay:request-crawl": "deno run -A scripts/request-crawl.ts",
+    "pds:test-create-session": "deno run -A scripts/test-create-session.ts",
+    "iac:plan": "deno run -A npm:alchemy plan iac/alchemy.run.ts",
+    "iac:deploy": "deno run -A npm:alchemy deploy iac/alchemy.run.ts",
+    "iac:destroy": "deno run -A npm:alchemy destroy iac/alchemy.run.ts"
+  },
+  "exclude": [
+    "dist",
+    "node_modules",
+    ".astro",
+    ".wrangler",
+    "atproto",
+    "social-app",
+    "atproto-website"
+  ]
+}

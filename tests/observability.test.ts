@@ -3,7 +3,8 @@
  * Tests for logging, metrics, tracing, and monitoring
  */
 
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, it as test, beforeEach } from "./helpers/bdd";
+import { expect } from "@std/expect";
 
 describe('Observability', () => {
   describe('Structured Logging', () => {
@@ -202,11 +203,9 @@ describe('Observability', () => {
 
       const tracer = new Tracer();
 
-      await expect(async () => {
-        await tracer.trace('test.error', async () => {
-          throw new Error('Test error');
-        });
-      }).toThrow('Test error');
+      await expect(tracer.trace('test.error', async () => {
+        throw new Error('Test error');
+      })).rejects.toThrow('Test error');
     });
   });
 

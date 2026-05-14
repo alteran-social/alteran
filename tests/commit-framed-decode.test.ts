@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { createCommitFrame, type CommitMessage } from '../src/lib/firehose/frames';
 import * as dagCbor from '@ipld/dag-cbor';
 import { CID } from 'multiformats/cid';

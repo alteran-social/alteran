@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, it } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { lexicons } from '@atproto/api';
 import { enforceRepoWriteLexiconConstraints } from '../src/lib/repo-write-blob-constraints';
 import { validateRawRecord } from '../src/lib/repo-write-data';

@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, it } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { makeEnv } from './helpers/env';
 import { makeDpopKey, signResourceDpop } from './helpers/oauth';
 import { createOAuthSession, storeRefreshToken } from '../src/db/account';

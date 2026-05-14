@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, it } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { makeEnv } from './helpers/env';
 import { issueSessionTokens } from '../src/lib/session-tokens';
 import { GET as catchallGet, POST as catchallPost } from '../src/pages/xrpc/[...nsid]';

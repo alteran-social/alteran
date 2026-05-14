@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { RepoManager } from '../src/services/repo-manager';
 import type { Env } from '../src/env';
 import { makeEnv } from './helpers/env';

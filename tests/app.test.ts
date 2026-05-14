@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
+import { describe, it, beforeAll, afterAll } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import * as dagCbor from '@ipld/dag-cbor';
-import { fork } from 'child_process';
+import { fork } from 'node:child_process';
 import getPort from 'get-port';
 import dotenv from 'dotenv';
 

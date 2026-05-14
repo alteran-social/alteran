@@ -25,29 +25,10 @@
   "publishConfig": {
     "access": "public"
   },
-  "scripts": {
-    "dev": "astro dev",
-    "build": "astro build",
-    "preview": "astro preview",
-    "test": "bun test --timeout 30000",
-    "test:oauth": "bun test tests/oauth-*.test.ts tests/resource-auth.test.ts",
-    "deploy": "astro build && bunx wrangler deploy --env production",
-    "iac:deploy": "bunx alchemy deploy iac/alchemy.run.ts",
-    "iac:destroy": "bunx alchemy destroy iac/alchemy.run.ts",
-    "iac:plan": "bunx alchemy plan iac/alchemy.run.ts",
-    "db:generate": "bunx drizzle-kit generate",
-    "db:apply": "bunx wrangler d1 migrations apply pds",
-    "db:apply:local": "bunx wrangler d1 migrations apply pds --local",
-    "db:apply:local:direct": "wrangler d1 migrations apply pds --local",
-    "db:reset:local": "rm -rf .wrangler/state && rm -rf migrations && bun run db:generate && bun run db:apply:local",
-    "secrets:setup": "bun run scripts/setup-secrets.ts",
-    "relay:request-crawl": "bun run scripts/request-crawl.ts",
-    "pds:test-create-session": "bun run scripts/test-create-session.ts"
-  },
+  "scripts": {},
   "devDependencies": {
     "@astrojs/cloudflare": "^12.6.9",
     "@cloudflare/vite-plugin": "^1.13.8",
-    "@types/bun": "latest",
     "drizzle-kit": "^0.31.5",
     "miniflare": "3",
     "vite": "^6.3.6",

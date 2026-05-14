@@ -26,14 +26,14 @@ must configure instead.
   Or run the bootstrap script to generate everything and print commands:
 
   ```bash
-  bun run scripts/setup-secrets.ts --env production --did did:web:example.com --handle user.example.com
+  deno run -A scripts/setup-secrets.ts --env production --did did:web:example.com --handle user.example.com
   ```
 - Apply D1 migrations:
   - `wrangler d1 migrations apply pds`
 
 2) Build & Deploy
-- `bun install`
-- `bun run deploy`
+- `deno install`
+- `deno task deploy`
 
 3) Quick Smoke
 - `curl https://<your-host>/health`

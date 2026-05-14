@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, it } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { makeEnv } from './helpers/env';
 import * as DebugRecord from '../src/pages/debug/record';
 import * as DebugBlobGc from '../src/pages/debug/gc/blobs';

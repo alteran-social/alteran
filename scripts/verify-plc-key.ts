@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S deno run -A
 /**
  * Verify that a secp256k1 private key corresponds to the current PLC atproto key.
  * Usage:

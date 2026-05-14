@@ -117,15 +117,11 @@ async function responseBody(object: {
   body: unknown;
   arrayBuffer(): Promise<ArrayBuffer>;
 }): Promise<BodyInit> {
-  if ('Bun' in globalThis) {
-    // Direct Miniflare tests expose R2 bodies through a workerd object that
-    // cannot be read as a stream from Bun. Workers production takes the stream
-    // path below.
-    return object.arrayBuffer();
-  }
   try {
     return localReadableStream(object.body as ReadableStream<Uint8Array>);
   } catch (error) {
+    // Miniflare exposes R2 bodies via a workerd object that can't be cloned
+    // across the worker boundary; fall back to a buffered read when that happens.
     if (error instanceof Error && error.message.includes('can not be cloned')) {
       return object.arrayBuffer();
     }

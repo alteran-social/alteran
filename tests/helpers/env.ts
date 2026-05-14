@@ -1,10 +1,10 @@
 import { Miniflare } from "miniflare";
-import { readdirSync, readFileSync } from "fs";
-import { join } from "path";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { D1Database } from "@cloudflare/workers-types";
 import type { Env } from "../../src/env";
 
-const MIGRATIONS_DIR = join(import.meta.dir, "..", "..", "migrations");
+const MIGRATIONS_DIR = join(import.meta.dirname, "..", "..", "migrations");
 
 // Drizzle separates statements with a literal "--> statement-breakpoint"
 // sentinel. D1's exec() accepts a multi-statement string, but the in-memory

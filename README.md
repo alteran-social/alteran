@@ -9,8 +9,8 @@ This repository now ships an Astro integration that turns any Cloudflare Worker-
 
 ```bash
 npm install @alteran/astro
-# or
-bun add @alteran/astro
+# or, in a Deno project
+deno add npm:@alteran/astro
 ```
 
 ```ts
@@ -67,26 +67,26 @@ Helpers like `onRequest`, `seed`, and `validateConfigOrThrow` are also exported 
 To install dependencies:
 
 ```bash
-bun install
+deno install
 ```
 
 Dev server (Vite dev):
 
 ```bash
-bun run dev
+deno task dev
 ```
 
 Cloudflare local dev (optional):
 
 ```bash
-bunx wrangler dev --local
+deno run -A npm:wrangler dev --local
 ```
 
 Build and deploy:
 
 ```bash
-bun run build
-bun run deploy
+deno task build
+deno task deploy
 ```
 
 Health endpoints: `GET /health` and `GET /ready` return `200 ok`.
@@ -105,7 +105,7 @@ Rate limiting & limits
 - JSON body size cap via `PDS_MAX_JSON_BYTES` (default 65536/64 KiB).
 - CORS: allow `*` by default in dev. In production, set `PDS_CORS_ORIGIN` to a CSV of allowed origins (e.g., `https://example.com,https://app.example.com`). Requests with an `Origin` not in this set are denied at the CORS layer (no wildcard fallback).
 
-This project was created using `bun init` in bun v1.2.22 and configured for Cloudflare Workers with Vite and `@cloudflare/vite-plugin`.
+This project targets Cloudflare Workers via Astro with `@cloudflare/vite-plugin`, and is developed with Deno as the task runner / package manager.
 
 ## Database Migrations
 
@@ -114,9 +114,9 @@ This project uses Drizzle Kit for database schema management and migrations.
 ### Migration Workflow
 
 1. **Modify Schema**: Edit [`src/db/schema.ts`](src/db/schema.ts:1) to add/modify tables or indexes
-2. **Generate Migration**: Run `bun run db:generate` to create a new migration file in `migrations/`
+2. **Generate Migration**: Run `deno task db:generate` to create a new migration file in `migrations/`
 3. **Review Migration**: Check the generated SQL in `migrations/XXXX_*.sql`
-4. **Apply Locally**: Run `bun run db:apply:local` to apply to local D1 database
+4. **Apply Locally**: Run `deno task db:apply:local` to apply to local D1 database
 5. **Apply to Production**: Run `wrangler d1 migrations apply pds --remote` after deployment
 
 ### Migration Versioning
@@ -190,7 +190,7 @@ Set these secrets for each environment using `wrangler secret put <NAME> --env <
 ```bash
 # One-shot bootstrap (recommended)
 # Generates all required secrets and prints wrangler commands
-bun run scripts/setup-secrets.ts --env production --did did:web:example.com --handle user.example.com
+deno run -A scripts/setup-secrets.ts --env production --did did:web:example.com --handle user.example.com
 
 # After generation, set secrets (example for production)
 wrangler secret put PDS_DID --env production
@@ -276,8 +276,8 @@ See [`wrangler.jsonc`](wrangler.jsonc:40) for environment-specific configuration
 
 
 Debugging & storage
-- D1 schema/migrations: generated with Drizzle Kit into `drizzle/`. Generate with `bunx drizzle-kit generate`.
-- Apply schema locally: `bunx wrangler d1 migrations apply pds --local` (requires dev DB named `pds`).
+- D1 schema/migrations: generated with Drizzle Kit into `drizzle/`. Generate with `deno run -A npm:drizzle-kit generate`.
+- Apply schema locally: `deno run -A npm:wrangler d1 migrations apply pds --local` (requires dev DB named `pds`).
 - Bootstrap route (alt): `POST /debug/db/bootstrap` creates a minimal `record` table.
 - Insert a test record: `POST /debug/record` with `{ "uri": "at://did:example/app.bsky.feed.post/123", "json": {"msg":"hi"} }`.
 - Get a record: `GET /debug/record?uri=at://did:example/app.bsky.feed.post/123`.
@@ -366,7 +366,7 @@ This PDS now implements full AT Protocol core compliance with:
 ### 1. Generate Secrets
 ```bash
 # Recommended: bootstrap all secrets (prints wrangler commands)
-bun run scripts/setup-secrets.ts --env production --did did:web:example.com --handle user.example.com
+deno run -A scripts/setup-secrets.ts --env production --did did:web:example.com --handle user.example.com
 
 # Alternatively, supply your own secp256k1 key (32‑byte hex/base64)
 ```
@@ -400,8 +400,8 @@ limits, and timeouts.
 
 ### 3. Run Database Migration
 ```bash
-bun run db:generate
-bun run db:apply:local
+deno task db:generate
+deno task db:apply:local
 ```
 
 Upgrade note: migration `0009_oauth_session_state` revokes existing refresh
@@ -412,13 +412,13 @@ flows.
 
 ### 4. Run Tests
 ```bash
-bun test tests/mst.test.ts
-bun test tests/commit.test.ts
+deno test -A tests/mst.test.ts
+deno test -A tests/commit.test.ts
 ```
 
 ### 5. Start Development
 ```bash
-bun run dev
+deno task dev
 ```
 
 ## Testing the Implementation
@@ -624,22 +624,22 @@ PDS_BLOB_QUOTA_BYTES=10737418240  # Default: 10GB
 
 ```bash
 # Performance tests
-bun test tests/performance.test.ts
+deno test -A tests/performance.test.ts
 
 # Memory tests
-bun test tests/memory.test.ts
+deno test -A tests/memory.test.ts
 
 # Blob tests
-bun test tests/blob.test.ts
+deno test -A tests/blob.test.ts
 
 # Identity tests
-bun test tests/identity.test.ts
+deno test -A tests/identity.test.ts
 
 # Federation tests
-bun test tests/federation.test.ts
+deno test -A tests/federation.test.ts
 
 # Compliance tests
-bun test tests/compliance.test.ts
+deno test -A tests/compliance.test.ts
 ```
 
 ### Documentation

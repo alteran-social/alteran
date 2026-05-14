@@ -7,7 +7,8 @@
  * - Protocol version compatibility
  */
 
-import { describe, test, expect } from 'bun:test';
+import { describe, it as test } from "./helpers/bdd";
+import { expect } from "@std/expect";
 
 describe('Lexicon Compliance', () => {
   test('XRPC inputs match lexicon schemas', async () => {

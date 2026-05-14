@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { makeEnv } from './helpers/env';
 import { AuthScope } from '../src/lib/auth-scope';
 import { ResourceAuthError, verifyResourceRequestHybrid } from '../src/lib/oauth/resource';

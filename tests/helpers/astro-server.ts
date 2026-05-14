@@ -1,4 +1,4 @@
-import { fork, ChildProcess } from 'child_process';
+import { fork, ChildProcess } from 'node:child_process';
 import getPort from 'get-port';
 
 export interface AstroTestServer {

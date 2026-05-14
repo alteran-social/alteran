@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, it } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import type { D1Database } from '@cloudflare/workers-types';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   GetBlob,
   WRONG_CID,
@@ -101,7 +102,7 @@ describe('blob usage migration', () => {
 
 async function applyBackfillMigration(database: D1Database): Promise<void> {
   const sql = readFileSync(
-    join(import.meta.dir, '..', 'migrations', '0012_backfill_blob_usage.sql'),
+    join(import.meta.dirname, '..', 'migrations', '0012_backfill_blob_usage.sql'),
     'utf8',
   );
   for (const chunk of sql.split('--> statement-breakpoint')) {

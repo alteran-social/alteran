@@ -4,14 +4,8 @@
     file
     libgccjit
     patchelf
+    deno
   ];
-
-  languages.javascript = {
-    enable = true;
-    bun = {
-      enable = true;
-    };
-  };
 
   enterShell = ''
     export LD_LIBRARY_PATH=${pkgs.libgccjit}/lib:$LD_LIBRARY_PATH
@@ -21,6 +15,6 @@
       ${pkgs.patchelf}/bin/patchelf --set-interpreter ${pkgs.glibc}/lib/ld-linux-x86-64.so.2 "$__patchTarget"
     fi
 
-    bun install
+    deno install
   '';
 }

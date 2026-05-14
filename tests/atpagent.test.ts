@@ -1,8 +1,9 @@
 // This suite imports the Astro-built app via createApp(), which transitively
 // pulls in '@astrojs-manifest' — a virtual module that only exists inside the
-// built worker. Running it under plain `bun test` fails at import time.
+// built worker. Running it under plain `deno test` fails at import time.
 // Gate behind RUN_APP_TESTS=true to match tests/app.test.ts.
-import { describe, it, expect, beforeAll } from 'bun:test';
+import { describe, it, beforeAll } from "./helpers/bdd";
+import { expect } from "@std/expect";
 
 const runAppIntegrationTests = process.env.RUN_APP_TESTS === 'true';
 const describeIntegration = runAppIntegrationTests ? describe : describe.skip;

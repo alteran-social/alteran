@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S deno run -A
 /**
  * Bootstrap secrets for Alteran PDS (Cloudflare Workers)
  *
@@ -12,10 +12,10 @@
  *   bun run scripts/setup-secrets.ts --env staging
  */
 
-import { webcrypto as crypto } from "crypto";
+import { webcrypto as crypto } from "node:crypto";
 import { Secp256k1Keypair } from "@atproto/crypto";
-import { existsSync, writeFileSync, readFileSync } from "fs";
-import path from "path";
+import { existsSync, writeFileSync, readFileSync } from "node:fs";
+import path from "node:path";
 
 function arg(name: string, fallback?: string): string | undefined {
   const i = process.argv.findIndex(

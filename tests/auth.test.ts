@@ -5,7 +5,8 @@
  * `secret` table. CLAUDE.md §6: do not mock the database.
  */
 
-import { describe, test, expect } from "bun:test";
+import { describe, it as test } from "./helpers/bdd";
+import { expect } from "@std/expect";
 import { makeEnv } from "./helpers/env";
 import { signJwt, verifyJwt } from "../src/lib/jwt";
 import { cleanupExpiredTokens, lazyCleanupExpiredTokens } from "../src/lib/token-cleanup";

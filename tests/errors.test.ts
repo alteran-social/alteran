@@ -3,7 +3,8 @@
  * Tests for XRPC error hierarchy and error handling
  */
 
-import { describe, test, expect } from 'bun:test';
+import { describe, it as test } from "./helpers/bdd";
+import { expect } from "@std/expect";
 
 describe('Error Handling', () => {
   describe('XRPCError Base Class', () => {

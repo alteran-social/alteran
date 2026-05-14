@@ -1,4 +1,4 @@
-import { expect } from 'bun:test';
+import { expect } from "@std/expect";
 import { CID } from 'multiformats/cid';
 import { sha256 } from 'multiformats/hashes/sha2';
 import * as dagCbor from '@ipld/dag-cbor';
