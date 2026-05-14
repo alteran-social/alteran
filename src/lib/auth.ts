@@ -27,32 +27,8 @@ function authScheme(request: Request): string | null {
 }
 
 export async function isAuthorized(request: Request, env: Env): Promise<boolean> {
-  try {
-    const auth = await authenticateRequest(request, env);
-    if (auth) return canAccessFullAccount(auth.access);
-  } catch (error) {
-    if (error instanceof AuthTokenExpiredError) {
-      throw error;
-    }
-    throw error;
-  }
-
-  const token = bearerToken(request);
-  if (!token) {
-    return false;
-  }
-
-  // Back-compat local escape hatch if explicitly enabled
-  const allowDev = (env as any).PDS_ALLOW_DEV_TOKEN === '1';
-
-  if (allowDev && token === 'dev-access-token') {
-    return true;
-  }
-  if (allowDev && env.USER_PASSWORD && token === env.USER_PASSWORD) {
-    return true;
-  }
-
-  return false;
+  const auth = await authenticateRequest(request, env);
+  return !!auth && canAccessFullAccount(auth.access);
 }
 
 export function unauthorized() {
