@@ -1,36 +1,40 @@
 import type { APIContext } from 'astro';
 import { getRecord as dalGetRecord } from '../../db/dal';
-import { proxyAppView } from '../../lib/appview';
+import {
+  invalidRequest,
+  optionalCid,
+  requireLocalRepo,
+  requireNsid,
+  requireRecordKey,
+  xrpcError,
+} from '../../lib/local-xrpc';
 
 export const prerender = false;
 
-export async function GET({ locals, request }: APIContext) {
+export async function GET({ locals, url }: APIContext) {
   const { env } = locals.runtime;
-  const url = new URL(request.url);
-  let uri = url.searchParams.get('uri');
-  if (!uri) {
-    const repo = url.searchParams.get('repo') ?? (env.PDS_DID as string);
-    const collection = url.searchParams.get('collection');
-    const rkey = url.searchParams.get('rkey');
-    if (repo && collection && rkey) uri = `at://${repo}/${collection}/${rkey}`;
+  if (url.searchParams.has('uri')) {
+    return invalidRequest('uri is not a parameter for com.atproto.repo.getRecord');
   }
 
-  if (!uri) return new Response(JSON.stringify({ error: 'BadRequest', message: 'query param uri required' }), { status: 400 });
+  const repo = requireLocalRepo(env, url, { notFoundError: 'RecordNotFound' });
+  if (!repo.ok) return repo.response;
 
-  // If the repo is not hosted here, proxy to AppView like upstream PDS does
-  const localDid = env.PDS_DID || '';
-  const repoParam = url.searchParams.get('repo') || '';
-  let repoDid = repoParam;
-  if (!repoDid && uri.startsWith('at://')) {
-    const m = uri.match(/^at:\/\/([^/]+)\//);
-    if (m) repoDid = m[1];
-  }
-  if (repoDid && localDid && repoDid !== localDid) {
-    return proxyAppView({ request, env, lxm: 'com.atproto.repo.getRecord' });
-  }
+  const collection = requireNsid(url);
+  if (!collection.ok) return collection.response;
 
+  const rkey = requireRecordKey(url);
+  if (!rkey.ok) return rkey.response;
+
+  const requestedCid = optionalCid(url);
+  if (!requestedCid.ok) return requestedCid.response;
+
+  const uri = `at://${repo.value}/${collection.value}/${rkey.value}`;
   const row = await dalGetRecord(env, uri);
-  if (!row) return new Response(JSON.stringify({ error: 'NotFound' }), { status: 404 });
+  if (!row) return xrpcError('RecordNotFound', 'Record not found');
+  if (requestedCid.value && requestedCid.value.toString() !== row.cid) {
+    return xrpcError('RecordNotFound', 'Record not found at requested CID');
+  }
 
   return new Response(JSON.stringify({ uri: row.uri, cid: row.cid, value: JSON.parse(row.json) }), {
     headers: { 'Content-Type': 'application/json' },

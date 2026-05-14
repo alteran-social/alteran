@@ -1,5 +1,6 @@
 import type { APIContext } from 'astro';
 import { errorMessage } from '../../lib/errors';
+import { invalidRequest, requireLocalDid } from '../../lib/local-xrpc';
 import { buildRepoCar } from '../../services/car';
 
 export const prerender = false;
@@ -11,12 +12,15 @@ export const prerender = false;
 export async function GET({ locals, request }: APIContext) {
   const { env } = locals.runtime;
   const url = new URL(request.url);
-  const did = url.searchParams.get('did') ?? (env.PDS_DID as string);
-  // Phase 1: accept but ignore since param (diff to be implemented later)
-  const _since = url.searchParams.get('since');
+  const did = requireLocalDid(env, url);
+  if (!did.ok) return did.response;
+
+  if (url.searchParams.has('since')) {
+    return invalidRequest('Incremental getRepo CAR diffs are not supported by this single-user PDS');
+  }
 
   try {
-    const { bytes } = await buildRepoCar(env, did);
+    const { bytes } = await buildRepoCar(env, did.value);
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(bytes);

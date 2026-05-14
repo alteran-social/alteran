@@ -1,5 +1,6 @@
 import type { APIContext } from 'astro';
 import { getRoot } from '../../db/repo';
+import { requireLocalDid, xrpcError } from '../../lib/local-xrpc';
 
 export const prerender = false;
 
@@ -10,16 +11,14 @@ export const prerender = false;
 export async function GET({ locals, url }: APIContext) {
   const { env } = locals.runtime;
 
-  const did = url.searchParams.get('did') || (env.PDS_DID as string);
+  const did = requireLocalDid(env, url);
+  if (!did.ok) return did.response;
 
   try {
     const root = await getRoot(env);
 
     if (!root) {
-      return new Response(
-        JSON.stringify({ error: 'RepoNotFound' }),
-        { status: 404, headers: { 'Content-Type': 'application/json' } }
-      );
+      return xrpcError('RepoNotFound', 'Repo not found');
     }
 
     return new Response(

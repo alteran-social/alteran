@@ -27,6 +27,7 @@ describe('sync.getBlocks (CAR from blockstore)', () => {
     const b = await putBlock(env, { text: 'B' });
 
     const url = new URL('http://localhost/xrpc/com.atproto.sync.getBlocks');
+    url.searchParams.set('did', 'did:example:test');
     url.searchParams.set('cids', [a.cid.toString(), b.cid.toString()].join(','));
 
     const res = await (GetBlocks as any).GET({
@@ -47,4 +48,3 @@ describe('sync.getBlocks (CAR from blockstore)', () => {
     expect(gotCids).toContain(b.cid.toString());
   });
 });
-
