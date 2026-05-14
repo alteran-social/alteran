@@ -25,6 +25,7 @@ const CORE_ROUTES = [
   { pattern: '/xrpc/com.atproto.repo.deleteRecord', entrypoint: './src/pages/xrpc/com.atproto.repo.deleteRecord.ts' },
   { pattern: '/xrpc/com.atproto.repo.describeRepo', entrypoint: './src/pages/xrpc/com.atproto.repo.describeRepo.ts' },
   { pattern: '/xrpc/com.atproto.repo.getRecord', entrypoint: './src/pages/xrpc/com.atproto.repo.getRecord.ts' },
+  { pattern: '/xrpc/com.atproto.repo.importRepo', entrypoint: './src/pages/xrpc/com.atproto.repo.importRepo.ts' },
   { pattern: '/xrpc/com.atproto.repo.listMissingBlobs', entrypoint: './src/pages/xrpc/com.atproto.repo.listMissingBlobs.ts' },
   { pattern: '/xrpc/com.atproto.repo.listRecords', entrypoint: './src/pages/xrpc/com.atproto.repo.listRecords.ts' },
   { pattern: '/xrpc/com.atproto.repo.putRecord', entrypoint: './src/pages/xrpc/com.atproto.repo.putRecord.ts' },

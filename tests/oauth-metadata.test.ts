@@ -78,4 +78,16 @@ describe('OAuth metadata and route injection', () => {
       expect(integration).toContain(`pattern: '${route}'`);
     }
   });
+
+  it('injects core repo routes from the packaged integration', () => {
+    const integration = readFileSync(join(process.cwd(), 'index.js'), 'utf8');
+    for (const route of [
+      '/xrpc/com.atproto.repo.createRecord',
+      '/xrpc/com.atproto.repo.deleteRecord',
+      '/xrpc/com.atproto.repo.importRepo',
+      '/xrpc/com.atproto.repo.listMissingBlobs',
+    ]) {
+      expect(integration).toContain(`pattern: '${route}'`);
+    }
+  });
 });
