@@ -79,7 +79,8 @@ type Role = (typeof Role)[keyof typeof Role];
 
 **Use Deno's native test runner with the std BDD helpers.** `import { describe, it } from "@std/testing/bdd"` and `import { expect } from "@std/expect"`. **Why:** matches the rest of the toolchain and avoids pulling in a third-party runner.
 
-**`deno task <name>` and `deno run -A npm:<tool>`.** Never `npm`, `npx`, `pnpm`, `yarn`, or `bun`. **Why:** one toolchain, one lockfile, one source of truth. Tasks live in `deno.json`.
+**`deno task <name>` and `dx npm:<tool>`.
+** Never `npm`, `npx`, `pnpm`, `yarn`, `bun`, or bare `tsc`.
 
 **Prefer Deno's built-in APIs in scripts where the Workers runtime allows.** `Deno.stdin`, `Deno.stdout`, `Deno.env`, `Deno.args`, `Deno.exit` for local scripts; obviously not inside the Worker bundle. **Why:** fewer dependencies, no Node-compat shim surprises.
 
