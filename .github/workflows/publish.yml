@@ -26,6 +26,15 @@ jobs:
           deno-version: v2.x
       - name: Install npm deps (via Deno nodeModulesDir)
         run: deno install --allow-scripts
+      - name: Verify version parity
+        run: |
+          deno_version=$(jq -r .version deno.json)
+          npm_version=$(jq -r .version package.json)
+          if [ "$deno_version" != "$npm_version" ]; then
+            echo "::error::Version mismatch: deno.json=$deno_version, package.json=$npm_version"
+            exit 1
+          fi
+          echo "Versions in sync: $deno_version"
       - name: Validate JSR package
         run: deno publish --dry-run --allow-slow-types
       - name: Validate npm package
