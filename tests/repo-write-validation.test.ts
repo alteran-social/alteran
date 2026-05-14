@@ -11,6 +11,8 @@ import * as CreateRecord from '../src/pages/xrpc/com.atproto.repo.createRecord';
 import * as PutRecord from '../src/pages/xrpc/com.atproto.repo.putRecord';
 import * as DeleteRecord from '../src/pages/xrpc/com.atproto.repo.deleteRecord';
 import * as ApplyWrites from '../src/pages/xrpc/com.atproto.repo.applyWrites';
+import * as UploadBlob from '../src/pages/xrpc/com.atproto.repo.uploadBlob';
+import * as ListMissingBlobs from '../src/pages/xrpc/com.atproto.repo.listMissingBlobs';
 import * as GetBlob from '../src/pages/xrpc/com.atproto.sync.getBlob';
 import * as ListBlobs from '../src/pages/xrpc/com.atproto.sync.listBlobs';
 import { RepoManager } from '../src/services/repo-manager';
@@ -20,6 +22,7 @@ import { collectMstBlocks, encodeRecordBlock } from '../src/services/repo/blocks
 
 const FIXED_DATE = '2026-05-13T00:00:00.000Z';
 const WRONG_CID = 'bafkreigh2akiscaildc4q7fapfs3krvmxz2s5tapqyqdr6fhyjn4zpd6du';
+const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2, 3]);
 
 function apiContext(env: Awaited<ReturnType<typeof makeEnv>>, request: Request) {
   return { locals: { runtime: { env } }, request } as any;
@@ -131,6 +134,35 @@ async function callGetRoute(
 ) {
   const request = new Request(url, { method: 'GET' });
   return route.GET(apiGetContext(env, request));
+}
+
+async function callAuthedGetRoute(
+  route: { GET: (ctx: any) => Promise<Response> },
+  env: Awaited<ReturnType<typeof makeEnv>>,
+  url: string,
+) {
+  const request = new Request(url, {
+    method: 'GET',
+    headers: await authHeader(env),
+  });
+  return route.GET(apiGetContext(env, request));
+}
+
+async function uploadBlob(
+  env: Awaited<ReturnType<typeof makeEnv>>,
+  bytes: Uint8Array = PNG_BYTES,
+  contentType = 'image/png',
+  headers?: Record<string, string>,
+) {
+  const request = new Request('https://pds.example/xrpc/com.atproto.repo.uploadBlob', {
+    method: 'POST',
+    headers: {
+      'content-type': contentType,
+      ...(headers ?? await authHeader(env)),
+    },
+    body: bytes,
+  });
+  return UploadBlob.POST(apiContext(env, request));
 }
 
 async function readRecordBlock(env: Awaited<ReturnType<typeof makeEnv>>, cid: string) {
@@ -941,6 +973,292 @@ describe('repo write validation', () => {
     expect(zeroSize.status).toBe(200);
   });
 
+  it('uploads temporary blobs, enforces final MIME policy, and promotes committed refs', async () => {
+    const env = await makeEnv();
+
+    const invalidMime = await uploadBlob(
+      env,
+      new TextEncoder().encode('<html></html>'),
+      'text/html',
+    );
+    expect(invalidMime.status).toBe(415);
+    expect((await json(invalidMime)).error).toBe('UnsupportedMediaType');
+
+    const uploadUrl = 'https://pds.example/xrpc/com.atproto.repo.uploadBlob';
+    const jpegOnlyHeaders = await issueOAuthAccess(env, 'atproto blob:image/jpeg', uploadUrl);
+    const rejectedBySniffedMime = await uploadBlob(env, PNG_BYTES, 'image/jpeg', jpegOnlyHeaders);
+    expect(rejectedBySniffedMime.status).toBe(401);
+    expect((await json(rejectedBySniffedMime)).error).toBe('InvalidToken');
+
+    const mismatchedLength = new Request('https://pds.example/xrpc/com.atproto.repo.uploadBlob', {
+      method: 'POST',
+      headers: {
+        'content-type': 'image/png',
+        'content-length': String(PNG_BYTES.byteLength + 1),
+        ...(await authHeader(env)),
+      },
+      body: PNG_BYTES,
+    });
+    const lengthRejected = await UploadBlob.POST(apiContext(env, mismatchedLength));
+    expect(lengthRejected.status).toBe(400);
+    expect((await json(lengthRejected)).error).toBe('InvalidRequest');
+
+    const uploaded = await uploadBlob(env, PNG_BYTES, 'application/octet-stream');
+    expect(uploaded.status).toBe(200);
+    const uploadedBody = await json(uploaded);
+    expect(uploadedBody.blob.mimeType).toBe('image/png');
+    const cid = uploadedBody.blob.ref.$link;
+
+    let quota = await getBlobQuota(env, String(env.PDS_DID));
+    expect(quota.total_bytes).toBe(PNG_BYTES.byteLength);
+    expect(quota.blob_count).toBe(1);
+
+    let blobRow = await env.ALTERAN_DB.prepare(
+      'SELECT state, mime, size FROM blob WHERE did = ? AND cid = ?',
+    ).bind(env.PDS_DID, cid).first<{ state: string; mime: string; size: number }>();
+    expect(blobRow).toEqual({ state: 'temp', mime: 'image/png', size: PNG_BYTES.byteLength });
+
+    const listBefore = await callGetRoute(
+      ListBlobs,
+      env,
+      `https://pds.example/xrpc/com.atproto.sync.listBlobs?did=${env.PDS_DID}`,
+    );
+    expect(await json(listBefore)).toEqual({ cids: [] });
+
+    const getBefore = await callGetRoute(
+      GetBlob,
+      env,
+      `https://pds.example/xrpc/com.atproto.sync.getBlob?did=${env.PDS_DID}&cid=${cid}`,
+    );
+    expect(getBefore.status).toBe(400);
+    expect((await json(getBefore)).error).toBe('BlobNotFound');
+
+    const duplicateTemp = await uploadBlob(env, PNG_BYTES, 'image/png');
+    expect(duplicateTemp.status).toBe(200);
+    quota = await getBlobQuota(env, String(env.PDS_DID));
+    expect(quota.total_bytes).toBe(PNG_BYTES.byteLength);
+    expect(quota.blob_count).toBe(1);
+
+    const created = await callRoute(CreateRecord, env, {
+      repo: env.PDS_DID,
+      collection: 'app.bsky.feed.post',
+      rkey: '3jzfcijpj2z2u',
+      record: postRecord('uploaded blob', {
+        embed: {
+          $type: 'app.bsky.embed.images',
+          images: [{ image: uploadedBody.blob, alt: '' }],
+        },
+      }),
+    });
+    expect(created.status).toBe(200);
+    const createdBody = await json(created);
+
+    blobRow = await env.ALTERAN_DB.prepare(
+      'SELECT state, mime, size FROM blob WHERE did = ? AND cid = ?',
+    ).bind(env.PDS_DID, cid).first<{ state: string; mime: string; size: number }>();
+    expect(blobRow).toEqual({ state: 'permanent', mime: 'image/png', size: PNG_BYTES.byteLength });
+
+    const usage = await env.ALTERAN_DB.prepare(
+      'SELECT record_cid, commit_cid, commit_rev FROM blob_usage WHERE did = ? AND record_uri = ?',
+    ).bind(env.PDS_DID, createdBody.uri).first<{ record_cid: string; commit_cid: string; commit_rev: string }>();
+    expect(usage).toEqual({
+      record_cid: createdBody.cid,
+      commit_cid: createdBody.commit.cid,
+      commit_rev: createdBody.commit.rev,
+    });
+
+    const getCommitted = await callGetRoute(
+      GetBlob,
+      env,
+      `https://pds.example/xrpc/com.atproto.sync.getBlob?did=${env.PDS_DID}&cid=${cid}`,
+    );
+    expect(getCommitted.status).toBe(200);
+    expect(new Uint8Array(await getCommitted.arrayBuffer())).toEqual(PNG_BYTES);
+
+    const duplicatePermanent = await uploadBlob(env, PNG_BYTES, 'image/png');
+    expect(duplicatePermanent.status).toBe(200);
+    expect(await json(duplicatePermanent)).toEqual(uploadedBody);
+    quota = await getBlobQuota(env, String(env.PDS_DID));
+    expect(quota.total_bytes).toBe(PNG_BYTES.byteLength);
+    expect(quota.blob_count).toBe(1);
+  });
+
+  it('lists missing blobs with record context and pair cursor pagination', async () => {
+    const env = await makeEnv();
+    const missing = await rawBlob(new TextEncoder().encode('missing pair'));
+    const uris = [
+      `at://${env.PDS_DID}/app.bsky.feed.post/missing-a`,
+      `at://${env.PDS_DID}/app.bsky.feed.post/missing-b`,
+    ];
+
+    for (const uri of uris) {
+      await env.ALTERAN_DB.prepare(
+        'INSERT INTO record (uri, did, cid, json, created_at) VALUES (?, ?, ?, ?, ?)',
+      ).bind(
+        uri,
+        env.PDS_DID,
+        WRONG_CID,
+        JSON.stringify(postRecord('missing blob', {
+          embed: {
+            $type: 'app.bsky.embed.images',
+            images: [{ image: missing.object, alt: '' }],
+          },
+        })),
+        Date.now(),
+      ).run();
+    }
+
+    const first = await callAuthedGetRoute(
+      ListMissingBlobs,
+      env,
+      'https://pds.example/xrpc/com.atproto.repo.listMissingBlobs?limit=1',
+    );
+    expect(first.status).toBe(200);
+    const firstBody = await json(first);
+    expect(firstBody.blobs).toEqual([{
+      $type: 'com.atproto.repo.listMissingBlobs#recordBlob',
+      cid: missing.cid,
+      recordUri: uris[0],
+    }]);
+    expect(firstBody.cursor).toBeTruthy();
+
+    const second = await callAuthedGetRoute(
+      ListMissingBlobs,
+      env,
+      `https://pds.example/xrpc/com.atproto.repo.listMissingBlobs?limit=1&cursor=${encodeURIComponent(firstBody.cursor)}`,
+    );
+    expect(second.status).toBe(200);
+    const secondBody = await json(second);
+    expect(secondBody.blobs).toEqual([{
+      $type: 'com.atproto.repo.listMissingBlobs#recordBlob',
+      cid: missing.cid,
+      recordUri: uris[1],
+    }]);
+    expect(secondBody.cursor).toBeUndefined();
+  });
+
+  it('lists blob metadata rows as missing when the object is unavailable', async () => {
+    const env = await makeEnv();
+    const missing = await rawBlob(new TextEncoder().encode('missing object'));
+    const key = `blobs/by-cid/${missing.cid}`;
+    const uri = `at://${env.PDS_DID}/app.bsky.feed.post/missing-object`;
+    await putBlobRef(env, String(env.PDS_DID), missing.cid, key, missing.mimeType, missing.size);
+    await env.ALTERAN_DB.prepare(
+      "UPDATE blob SET state = 'permanent' WHERE did = ? AND cid = ?",
+    ).bind(env.PDS_DID, missing.cid).run();
+    await env.ALTERAN_DB.prepare(
+      'INSERT INTO record (uri, did, cid, json, created_at) VALUES (?, ?, ?, ?, ?)',
+    ).bind(
+      uri,
+      env.PDS_DID,
+      WRONG_CID,
+      JSON.stringify(postRecord('missing object', {
+        embed: {
+          $type: 'app.bsky.embed.images',
+          images: [{ image: missing.object, alt: '' }],
+        },
+      })),
+      Date.now(),
+    ).run();
+
+    const listed = await callAuthedGetRoute(
+      ListMissingBlobs,
+      env,
+      'https://pds.example/xrpc/com.atproto.repo.listMissingBlobs',
+    );
+    expect(listed.status).toBe(200);
+    expect(await json(listed)).toEqual({
+      blobs: [{
+        $type: 'com.atproto.repo.listMissingBlobs#recordBlob',
+        cid: missing.cid,
+        recordUri: uri,
+      }],
+    });
+  });
+
+  it('lists committed blobs with rev-based since and CID cursor pagination', async () => {
+    const env = await makeEnv();
+    const firstUpload = await json(await uploadBlob(env, PNG_BYTES));
+    const secondBytes = new Uint8Array([...PNG_BYTES, 4, 5, 6]);
+    const secondUpload = await json(await uploadBlob(env, secondBytes));
+
+    const first = await callRoute(CreateRecord, env, {
+      repo: env.PDS_DID,
+      collection: 'app.bsky.feed.post',
+      rkey: '3jzfcijpj2z2v',
+      record: postRecord('first blob', {
+        embed: {
+          $type: 'app.bsky.embed.images',
+          images: [{ image: firstUpload.blob, alt: '' }],
+        },
+      }),
+    });
+    expect(first.status).toBe(200);
+    const firstBody = await json(first);
+
+    const second = await callRoute(CreateRecord, env, {
+      repo: env.PDS_DID,
+      collection: 'app.bsky.feed.post',
+      rkey: '3jzfcijpj2z2w',
+      record: postRecord('second blob', {
+        embed: {
+          $type: 'app.bsky.embed.images',
+          images: [{ image: secondUpload.blob, alt: '' }],
+        },
+      }),
+    });
+    expect(second.status).toBe(200);
+
+    const sinceFirst = await callGetRoute(
+      ListBlobs,
+      env,
+      `https://pds.example/xrpc/com.atproto.sync.listBlobs?did=${env.PDS_DID}&since=${firstBody.commit.rev}`,
+    );
+    expect(await json(sinceFirst)).toEqual({
+      cids: [secondUpload.blob.ref.$link],
+    });
+
+    const badSince = await callGetRoute(
+      ListBlobs,
+      env,
+      `https://pds.example/xrpc/com.atproto.sync.listBlobs?did=${env.PDS_DID}&since=not-a-tid`,
+    );
+    expect(badSince.status).toBe(400);
+    expect((await json(badSince)).error).toBe('InvalidRequest');
+
+    const missingDidList = await callGetRoute(
+      ListBlobs,
+      env,
+      'https://pds.example/xrpc/com.atproto.sync.listBlobs',
+    );
+    expect(missingDidList.status).toBe(400);
+    expect((await json(missingDidList)).error).toBe('InvalidRequest');
+
+    const missingDidGet = await callGetRoute(
+      GetBlob,
+      env,
+      `https://pds.example/xrpc/com.atproto.sync.getBlob?cid=${firstUpload.blob.ref.$link}`,
+    );
+    expect(missingDidGet.status).toBe(400);
+    expect((await json(missingDidGet)).error).toBe('InvalidRequest');
+
+    const all = [firstUpload.blob.ref.$link, secondUpload.blob.ref.$link].sort();
+    const firstPage = await callGetRoute(
+      ListBlobs,
+      env,
+      `https://pds.example/xrpc/com.atproto.sync.listBlobs?did=${env.PDS_DID}&limit=1`,
+    );
+    const firstPageBody = await json(firstPage);
+    expect(firstPageBody).toEqual({ cids: [all[0]], cursor: all[0] });
+
+    const secondPage = await callGetRoute(
+      ListBlobs,
+      env,
+      `https://pds.example/xrpc/com.atproto.sync.listBlobs?did=${env.PDS_DID}&limit=1&cursor=${firstPageBody.cursor}`,
+    );
+    expect(await json(secondPage)).toEqual({ cids: [all[1]] });
+  });
+
   it('rejects blob writes when metadata disappears between validation and commit', async () => {
     const env = await makeEnv();
     const blobBytes = new TextEncoder().encode('raced blob');
@@ -1035,7 +1353,7 @@ describe('repo write validation', () => {
       env,
       `https://pds.example/xrpc/com.atproto.sync.listBlobs?did=${env.PDS_DID}`,
     );
-    expect(await json(listCommitted)).toEqual({ cids: [blob.cid], cursor: blob.cid });
+    expect(await json(listCommitted)).toEqual({ cids: [blob.cid] });
 
     const getCommitted = await callGetRoute(
       GetBlob,
@@ -1094,6 +1412,7 @@ describe('repo write validation', () => {
       `https://pds.example/xrpc/com.atproto.sync.getBlob?did=${env.PDS_DID}&cid=${blob.cid}`,
     );
     expect(getAfter.status).toBe(400);
+    expect((await json(getAfter)).error).toBe('BlobNotFound');
     expect(await env.ALTERAN_BLOBS.get(key)).not.toBeNull();
     const row = await env.ALTERAN_DB.prepare(
       'SELECT cid FROM blob WHERE did = ? AND key = ? LIMIT 1',
@@ -1102,6 +1421,40 @@ describe('repo write validation', () => {
     const quota = await getBlobQuota(env, String(env.PDS_DID));
     expect(quota.total_bytes).toBe(blob.size);
     expect(quota.blob_count).toBe(1);
+
+    const staleReuse = await callRoute(CreateRecord, env, {
+      repo: env.PDS_DID,
+      collection: 'app.bsky.feed.post',
+      rkey: '3jzfcijpj2z2f',
+      record: postRecord('stale blob reuse', {
+        embed: {
+          $type: 'app.bsky.embed.images',
+          images: [{ image: blob.object, alt: '' }],
+        },
+      }),
+    });
+    expect(staleReuse.status).toBe(400);
+    expect((await json(staleReuse)).error).toBe('BlobNotFound');
+
+    const reuploaded = await uploadBlob(env, blobBytes, blob.mimeType);
+    expect(reuploaded.status).toBe(200);
+    const tempAgain = await env.ALTERAN_DB.prepare(
+      'SELECT state FROM blob WHERE did = ? AND cid = ? LIMIT 1',
+    ).bind(env.PDS_DID, blob.cid).first<{ state: string }>();
+    expect(tempAgain?.state).toBe('temp');
+
+    const recreated = await callRoute(CreateRecord, env, {
+      repo: env.PDS_DID,
+      collection: 'app.bsky.feed.post',
+      rkey: '3jzfcijpj2z2f',
+      record: postRecord('reuploaded blob reuse', {
+        embed: {
+          $type: 'app.bsky.embed.images',
+          images: [{ image: (await json(reuploaded)).blob, alt: '' }],
+        },
+      }),
+    });
+    expect(recreated.status).toBe(200);
   });
 
   it('derives blob usage for direct RepoManager writes', async () => {
@@ -1131,7 +1484,7 @@ describe('repo write validation', () => {
       env,
       `https://pds.example/xrpc/com.atproto.sync.listBlobs?did=${env.PDS_DID}`,
     );
-    expect(await json(list)).toEqual({ cids: [blob.cid], cursor: blob.cid });
+    expect(await json(list)).toEqual({ cids: [blob.cid] });
   });
 
   it('generates omitted rkeys before createRecord validation', async () => {

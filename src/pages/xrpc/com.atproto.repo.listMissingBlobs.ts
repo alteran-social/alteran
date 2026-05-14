@@ -1,4 +1,5 @@
 import type { APIContext } from 'astro';
+import type { Env } from '../../env';
 import { errorMessage } from '../../lib/errors';
 import { authErrorResponse, authenticateRequest, unauthorized } from '../../lib/auth';
 import { canUseAppPasswordLevelAccess } from '../../lib/auth-scope';
@@ -29,8 +30,10 @@ export async function GET({ locals, request, url }: APIContext) {
 
   try {
     const did = String(env.PDS_DID ?? 'did:example:single-user');
-    const limit = parseInt(url.searchParams.get('limit') || '500');
+    const parsedLimit = parseInt(url.searchParams.get('limit') || '500', 10);
+    const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 1000) : 500;
     const cursor = url.searchParams.get('cursor') || '';
+    const cursorKey = decodeCursor(cursor) ?? '';
 
     const db = getDb(env);
 
@@ -48,39 +51,60 @@ export async function GET({ locals, request, url }: APIContext) {
       .where(eq(blob_ref.did, did))
       .all();
 
-    // Create a set of existing blob CIDs
-    const existingBlobCids = new Set(blobs.map(b => b.cid));
+    const blobsByCid = new Map<string, Array<{ key: string; state: string; takedownRef: string | null }>>();
+    for (const blob of blobs) {
+      const rows = blobsByCid.get(blob.cid) ?? [];
+      rows.push({
+        key: blob.key,
+        state: blob.state,
+        takedownRef: blob.takedownRef,
+      });
+      blobsByCid.set(blob.cid, rows);
+    }
 
-    // Extract blob references from records
-    const referencedBlobs = new Set<string>();
+    // Extract blob references from records. Pagination is over record/blob
+    // pairs because one missing CID can be referenced by multiple records.
+    const referencedBlobs: Array<{ cid: string; recordUri: string }> = [];
     for (const rec of records) {
       try {
         const data = JSON.parse(rec.json);
         const refs = extractBlobRefs(data);
-        refs.forEach(ref => referencedBlobs.add(ref));
+        refs.forEach(ref => referencedBlobs.push({ cid: ref, recordUri: rec.uri }));
       } catch {
         // Skip invalid JSON
       }
     }
 
     // Find missing blobs
-    const missingBlobs: string[] = [];
-    for (const cid of referencedBlobs) {
-      if (!existingBlobCids.has(cid)) {
-        if (!cursor || cid > cursor) {
-          missingBlobs.push(cid);
-        }
+    const missingBlobs: Array<{ cid: string; recordUri: string }> = [];
+    const availabilityByCid = new Map<string, boolean>();
+    for (const pair of referencedBlobs) {
+      const pairKey = pairCursorKey(pair);
+      if (cursorKey && pairKey <= cursorKey) continue;
+      const { cid } = pair;
+      let isAvailable = availabilityByCid.get(cid);
+      if (isAvailable === undefined) {
+        isAvailable = await hasAvailableBlobObject(env, blobsByCid.get(cid) ?? []);
+        availabilityByCid.set(cid, isAvailable);
+      }
+      if (!isAvailable) {
+        missingBlobs.push(pair);
       }
     }
 
     // Sort and limit
-    missingBlobs.sort();
-    const page = missingBlobs.slice(0, limit);
-    const nextCursor = page.length === limit ? page[page.length - 1] : undefined;
+    missingBlobs.sort((a, b) => pairCursorKey(a).localeCompare(pairCursorKey(b)));
+    const pagePlusOne = missingBlobs.slice(0, limit + 1);
+    const page = pagePlusOne.slice(0, limit);
+    const nextCursor = pagePlusOne.length > limit ? encodeCursor(page[page.length - 1]) : undefined;
 
     return new Response(
       JSON.stringify({
-        blobs: page.map(cid => ({ cid })),
+        blobs: page.map(({ cid, recordUri }) => ({
+          $type: 'com.atproto.repo.listMissingBlobs#recordBlob',
+          cid,
+          recordUri,
+        })),
         cursor: nextCursor,
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
@@ -93,5 +117,45 @@ export async function GET({ locals, request, url }: APIContext) {
       }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
+  }
+}
+
+async function hasAvailableBlobObject(
+  env: Env,
+  rows: Array<{ key: string; state: string; takedownRef: string | null }>,
+): Promise<boolean> {
+  for (const row of rows) {
+    if (row.state !== 'permanent' || row.takedownRef !== null) continue;
+    const object = typeof (env.ALTERAN_BLOBS as any).head === 'function'
+      ? await (env.ALTERAN_BLOBS as any).head(row.key)
+      : await env.ALTERAN_BLOBS.get(row.key);
+    if (object) return true;
+  }
+  return false;
+}
+
+function pairCursorKey(pair: { cid: string; recordUri: string }): string {
+  return `${pair.cid}\0${pair.recordUri}`;
+}
+
+function encodeCursor(pair: { cid: string; recordUri: string }): string {
+  return btoa(JSON.stringify([pair.cid, pair.recordUri]))
+    .replaceAll('+', '-')
+    .replaceAll('/', '_')
+    .replace(/=+$/, '');
+}
+
+function decodeCursor(cursor: string): string | null {
+  if (!cursor) return null;
+  try {
+    const padded = cursor.replaceAll('-', '+').replaceAll('_', '/')
+      .padEnd(Math.ceil(cursor.length / 4) * 4, '=');
+    const parsed = JSON.parse(atob(padded));
+    if (!Array.isArray(parsed) || typeof parsed[0] !== 'string' || typeof parsed[1] !== 'string') {
+      return null;
+    }
+    return pairCursorKey({ cid: parsed[0], recordUri: parsed[1] });
+  } catch {
+    return null;
   }
 }

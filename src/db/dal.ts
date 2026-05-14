@@ -8,6 +8,7 @@ import { type AccountState, toRow, fromRow } from '../lib/account-state';
 export type CommitGuard = {
   did: string;
   commitCid: string;
+  rev: string;
 };
 
 export type BlobKeyRef = {
@@ -41,20 +42,23 @@ export async function getRecordsByCids(env: Env, cids: string[]) {
 }
 
 export async function putBlobRef(env: Env, did: string, cid: string, key: string, mime: string, size: number) {
-  const db = getDb(env);
   const uploadedAt = Date.now();
-  await db
-    .insert(blob_ref)
-    .values({ did, cid, key, mime, size, uploadedAt })
-    .onConflictDoUpdate({
-      target: [blob_ref.did, blob_ref.cid],
-      set: {
-        key: sql.raw(`excluded.${blob_ref.key.name}`),
-        mime: sql.raw(`excluded.${blob_ref.mime.name}`),
-        size: sql.raw(`excluded.${blob_ref.size.name}`),
-        uploadedAt: sql.raw(`excluded.${blob_ref.uploadedAt.name}`),
-      }
-    });
+  await env.ALTERAN_DB.prepare(
+    `INSERT INTO blob (
+       did, cid, key, mime, size, uploaded_at, created_at, state, temp_key, takedown_ref
+     )
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'temp', ?, NULL)
+     ON CONFLICT(did, cid) DO UPDATE SET
+       key = CASE WHEN blob.state = 'permanent' THEN blob.key ELSE excluded.key END,
+       mime = CASE WHEN blob.state = 'permanent' THEN blob.mime ELSE excluded.mime END,
+       size = CASE WHEN blob.state = 'permanent' THEN blob.size ELSE excluded.size END,
+       uploaded_at = CASE WHEN blob.state = 'permanent' THEN blob.uploaded_at ELSE excluded.uploaded_at END,
+       created_at = CASE WHEN blob.created_at > 0 THEN blob.created_at ELSE excluded.created_at END,
+       state = CASE WHEN blob.state = 'permanent' THEN blob.state ELSE excluded.state END,
+       temp_key = CASE WHEN blob.state = 'permanent' THEN blob.temp_key ELSE excluded.temp_key END`,
+  )
+    .bind(did, cid, key, mime, size, uploadedAt, uploadedAt, key)
+    .run();
 }
 
 export async function setRecordBlobUsage(env: Env, did: string, uri: string, keys: string[]) {
@@ -244,7 +248,9 @@ export function setRecordBlobUsageStatements(
   uri: string,
   keys: string[],
   guard?: CommitGuard,
+  recordCid?: string,
 ): D1PreparedStatement[] {
+  const now = Date.now();
   const statements: D1PreparedStatement[] = [
     guard
       ? env.ALTERAN_DB.prepare(
@@ -261,18 +267,42 @@ export function setRecordBlobUsageStatements(
     if (guard) {
       statements.push(
         env.ALTERAN_DB.prepare(
-          `INSERT OR IGNORE INTO blob_usage (did, record_uri, key)
-           SELECT ?, ?, ?
+          `UPDATE blob
+           SET state = 'permanent'
+           WHERE did = ?
+             AND key = ?
+             AND takedown_ref IS NULL
+             AND EXISTS (
+               SELECT 1 FROM repo_root WHERE did = ? AND commit_cid = ?
+             )`,
+        ).bind(did, key, guard.did, guard.commitCid),
+      );
+      statements.push(
+        env.ALTERAN_DB.prepare(
+          `INSERT OR IGNORE INTO blob_usage (
+             did, record_uri, key, record_cid, commit_cid, commit_rev, created_at
+           )
+           SELECT ?, ?, ?, ?, ?, ?, ?
            WHERE EXISTS (
              SELECT 1 FROM repo_root WHERE did = ? AND commit_cid = ?
            )`,
-        ).bind(did, uri, key, guard.did, guard.commitCid),
+        ).bind(did, uri, key, recordCid ?? null, guard.commitCid, guard.rev, now, guard.did, guard.commitCid),
       );
     } else {
       statements.push(
         env.ALTERAN_DB.prepare(
-          'INSERT INTO blob_usage (did, record_uri, key) VALUES (?, ?, ?)',
-        ).bind(did, uri, key),
+          `UPDATE blob
+           SET state = 'permanent'
+           WHERE did = ? AND key = ? AND takedown_ref IS NULL`,
+        ).bind(did, key),
+      );
+      statements.push(
+        env.ALTERAN_DB.prepare(
+          `INSERT INTO blob_usage (
+             did, record_uri, key, record_cid, commit_cid, commit_rev, created_at
+           )
+           VALUES (?, ?, ?, ?, NULL, NULL, ?)`,
+        ).bind(did, uri, key, recordCid ?? null, now),
       );
     }
   }
