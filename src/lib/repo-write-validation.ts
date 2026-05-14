@@ -6,6 +6,7 @@ import { resolveSecret } from './secrets';
 import { generateTid } from './commit';
 import { RepoManager } from '../services/repo-manager';
 import { cidForRecord } from '../services/repo/blockstore-ops';
+import { RepoWriteLimitError } from './repo-write-limits';
 
 export type ValidationStatus = 'valid' | 'unknown' | undefined;
 export type RepoWriteAction = 'create' | 'update' | 'delete';
@@ -80,6 +81,9 @@ export function handleRepoWriteError(error: unknown): Response {
   }
   if (isRepoCommitConflict(error)) {
     return jsonError('InvalidSwap', 'repo head changed', 400);
+  }
+  if (error instanceof RepoWriteLimitError) {
+    return jsonError('InvalidRequest', error.message, 400);
   }
   throw error;
 }
@@ -280,7 +284,6 @@ export async function prepareApplyWrites(
     }
 
     if (type === 'com.atproto.repo.applyWrites#delete') {
-      if (!exists) throw new RepoWriteError('InvalidRequest', 'record does not exist');
       prepared.push({ action: 'delete', collection, rkey });
       state.set(path, false);
       continue;

@@ -307,7 +307,10 @@ export class RepoManager {
       const uri = `at://${did}/${path}`;
       if (write.action === 'delete') {
         const prev = await mst.get(path);
-        if (!prev) throw new RepoWriteError('InvalidRequest', 'record does not exist');
+        if (!prev) {
+          results.push({ $type: 'com.atproto.repo.applyWrites#deleteResult' });
+          continue;
+        }
         mst = await mst.delete(path);
         ops.push({ action: 'delete', path, cid: null, prev });
         sideEffects.push({ action: 'delete', uri });
@@ -356,6 +359,16 @@ export class RepoManager {
         cid,
         validationStatus: write.validationStatus,
       });
+    }
+
+    if (ops.length === 0 && sideEffects.length === 0) {
+      await assertRepoHead(this.env, did, expectedCommitCid);
+      return {
+        commit: null,
+        ops,
+        results,
+        dereferencedBlobKeys: [],
+      };
     }
 
     const previousBlobKeysByUri = new Map<string, string[]>();
