@@ -690,7 +690,17 @@ Update the repository handle.
 }
 ```
 
-**Response**: `200 OK`
+**Response**: `501 Not Implemented`
+
+Alteran single-user deployments do not support runtime handle changes. This
+endpoint returns:
+
+```json
+{
+  "error": "NotImplemented",
+  "message": "Handle updates require PDS reconfiguration for single-user mode"
+}
+```
 
 ---
 

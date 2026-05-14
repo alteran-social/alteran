@@ -4,6 +4,12 @@ import { withCache, CACHE_CONFIGS } from '../../lib/cache';
 import { resolveSecret } from '../../lib/secrets';
 import { Secp256k1Keypair } from '@atproto/crypto';
 import { formatMultikey } from '@atproto/crypto/dist/did';
+import {
+  canonicalPdsOrigin,
+  configuredDid,
+  configuredHandle,
+  validAtprotoHandle,
+} from '../../lib/public-host';
 
 export const prerender = false;
 
@@ -13,9 +19,10 @@ export async function GET({ locals, request }: APIContext) {
   return withCache(
     request,
     async () => {
-      const did = env.PDS_DID ?? 'did:example:single-user';
-      const handle = env.PDS_HANDLE ?? 'user.example.com';
-      const hostname = env.PDS_HOSTNAME ?? new URL(request.url).hostname;
+      const did = await configuredDid(env);
+      const handle = await configuredHandle(env);
+      const claimedHandle = validAtprotoHandle(handle);
+      const serviceEndpoint = await canonicalPdsOrigin(env);
 
       let publicKeyMultibase: string | undefined;
       let signingKeyError: string | undefined;
@@ -59,13 +66,13 @@ export async function GET({ locals, request }: APIContext) {
           'https://w3id.org/security/multikey/v1',
         ],
         id: did,
-        alsoKnownAs: [`at://${handle}`],
+        alsoKnownAs: claimedHandle ? [`at://${claimedHandle}`] : [],
         verificationMethod: verificationMethods,
         service: [
           {
             id: `${did}#atproto_pds`,
             type: 'AtprotoPersonalDataServer',
-            serviceEndpoint: `https://${hostname}`,
+            serviceEndpoint,
           },
         ],
       };

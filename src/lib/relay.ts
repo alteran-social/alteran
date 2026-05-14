@@ -1,36 +1,17 @@
 import type { Env } from '../env';
+import { canonicalPdsHost, isLocalHostname } from './public-host';
 
 /**
  * Resolve the public hostname for this PDS.
- * Priority: env.PDS_HOSTNAME -> request URL host.
+ * Priority: env.PDS_HOSTNAME -> env.PDS_HANDLE.
  * Ensures the value is a bare hostname (no scheme/port/path).
  */
-export function resolvePdsHostname(env: Env, requestUrl?: string): string | null {
-  let host = (env.PDS_HOSTNAME as string | undefined)?.trim() || '';
-
-  if (!host && requestUrl) {
-    try {
-      const url = new URL(requestUrl);
-      host = url.hostname;
-    } catch {
-      // Malformed request URL: leave host unset so the caller can choose a fallback.
-    }
-  }
-
+export async function resolvePdsHostname(env: Env, requestUrl?: string): Promise<string | null> {
+  void requestUrl;
+  const host = await canonicalPdsHost(env);
   if (!host) return null;
 
-  // Normalize: strip protocol/port if somehow present
-  host = host.replace(/^https?:\/\//i, '').replace(/:\d+$/, '').trim();
-
-  // Skip obvious local hosts to avoid spamming relays from dev
-  const lower = host.toLowerCase();
-  if (
-    lower === 'localhost' ||
-    lower.endsWith('.localhost') ||
-    lower === '127.0.0.1' ||
-    lower === '0.0.0.0' ||
-    lower === '::1'
-  ) {
+  if (isLocalHostname(host)) {
     return null;
   }
 
@@ -81,7 +62,7 @@ export async function notifyRelaysIfNeeded(env: Env, requestUrl?: string): Promi
     return;
   }
 
-  const hostname = resolvePdsHostname(env, requestUrl);
+  const hostname = await resolvePdsHostname(env, requestUrl);
   if (!hostname) return;
 
   const relays = getRelayHosts(env);
@@ -100,4 +81,3 @@ export async function notifyRelaysIfNeeded(env: Env, requestUrl?: string): Promi
     }),
   );
 }
-
