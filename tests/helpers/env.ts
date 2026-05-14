@@ -30,6 +30,13 @@ async function applyMigrations(database: D1Database): Promise<void> {
   }
 }
 
+// Miniflare spawns a workerd subprocess; the bindings returned by
+// getD1Database/getR2Bucket are HTTP-backed proxies. If the Miniflare instance
+// is garbage collected, the subprocess is killed and the bindings start
+// throwing ConnectionRefused mid-test. Retain every instance for the lifetime
+// of the test process to prevent that.
+const retainedMiniflare: Miniflare[] = [];
+
 export async function makeEnv(overrides: Partial<Env> = {}): Promise<Env> {
   const mf = new Miniflare({
     d1Databases: { DB: ":memory:" },
@@ -48,6 +55,8 @@ export async function makeEnv(overrides: Partial<Env> = {}): Promise<Env> {
       PDS_OAUTH_CLIENT_HOSTS: "client.example",
     },
   });
+  retainedMiniflare.push(mf);
+  await mf.ready;
   const ALTERAN_DB = (await mf.getD1Database("DB")) as unknown as D1Database;
   const ALTERAN_BLOBS = await mf.getR2Bucket("BLOBS");
   await applyMigrations(ALTERAN_DB);

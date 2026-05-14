@@ -29,7 +29,7 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "test": "bun test",
+    "test": "bun test --timeout 30000",
     "test:oauth": "bun test tests/oauth-*.test.ts tests/resource-auth.test.ts",
     "deploy": "astro build && bunx wrangler deploy --env production",
     "iac:deploy": "bunx alchemy deploy iac/alchemy.run.ts",
