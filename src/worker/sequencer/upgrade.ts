@@ -1,10 +1,10 @@
 import type { DurableObjectState } from '@cloudflare/workers-types';
-import { encodeInfoFrame } from '../../lib/firehose/frames';
+import { encodeErrorFrame } from '../../lib/firehose/frames';
 import { InvalidRequest } from '../../lib/errors';
 
 export type WebSocketAttachment = {
   id: string;
-  cursor: number;
+  cursor: number | null;
 };
 
 export type HibernatableSocket = WebSocket & {
@@ -27,14 +27,17 @@ export type UpgradeContext = {
   readonly state: HibernatableState;
   readonly nextSeq: number;
   readonly hibernate: boolean;
-  readonly onClient: (id: string, cursor: number, server: HibernatableSocket) => void;
+  readonly onClient: (id: string, cursor: number | null, server: HibernatableSocket) => void;
 };
 
 // Reject NaN / negative / non-integer cursors at the boundary. parseInt('abc')
 // yields NaN, which would silently bypass `cursor > nextSeq - 1` (all NaN
 // comparisons are false) and get persisted into the attachment.
-export function parseCursorParam(raw: string | null): number {
-  if (raw === null || raw === '') return 0;
+export function parseCursorParam(raw: string | null): number | null {
+  if (raw === null) return null;
+  if (raw === '') {
+    throw new InvalidRequest('cursor must be a non-negative integer');
+  }
   const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed < 0) {
     throw new InvalidRequest('cursor must be a non-negative integer');
@@ -47,7 +50,7 @@ export function handleUpgrade(
   url: URL,
   context: UpgradeContext,
 ): Response {
-  let cursor: number;
+  let cursor: number | null;
   try {
     cursor = parseCursorParam(url.searchParams.get('cursor'));
   } catch (error) {
@@ -71,23 +74,23 @@ export function handleUpgrade(
     ? requestedProtoHeader.split(',').map((s) => s.trim()).filter(Boolean)[0] || undefined
     : undefined;
 
-  if (cursor > context.nextSeq - 1) {
-    // Future cursor: send an info frame then 1008-close. Use the standard
+  if (cursor !== null && cursor > context.nextSeq - 1) {
+    // Future cursor: send an error frame then 1008-close. Use the standard
     // WebSocket accept path rather than hibernation for this short-lived case.
     try {
       server.accept?.();
     } catch (acceptError) {
-      console.warn('Sequencer: server.accept failed for OutdatedCursor:', acceptError);
+      console.warn('Sequencer: server.accept failed for FutureCursor:', acceptError);
     }
     try {
-      server.send?.(encodeInfoFrame('OutdatedCursor', 'Cursor is ahead of current sequence'));
+      server.send?.(encodeErrorFrame('FutureCursor', 'Cursor is ahead of current sequence'));
     } catch (sendError) {
-      console.warn('Sequencer: send(info) failed for OutdatedCursor:', sendError);
+      console.warn('Sequencer: send(error) failed for FutureCursor:', sendError);
     }
     try {
-      server.close(1008, 'OutdatedCursor');
+      server.close(1008, 'FutureCursor');
     } catch (closeError) {
-      console.warn('Sequencer: close failed for OutdatedCursor:', closeError);
+      console.warn('Sequencer: close failed for FutureCursor:', closeError);
     }
     return buildUpgradeResponse(client, requestedProtocol);
   }

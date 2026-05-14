@@ -603,8 +603,8 @@ This PDS now includes optimization for Cloudflare Workers and interoperability f
 - ✅ **Edge caching** for identity documents
 
 ### Interoperability Testing
-- ✅ **Federation test stubs** for PDS-to-PDS sync
-- ✅ **Compliance test stubs** for AT Protocol
+- ✅ **Federation tests** for local sync, CAR, blob, and subscribeRepos surfaces
+- ✅ **Compliance tests** for AT Protocol lexicons, auth flows, and XRPC errors
 - ✅ **Protocol version** documentation
 - ✅ **Lexicon validation** framework
 
