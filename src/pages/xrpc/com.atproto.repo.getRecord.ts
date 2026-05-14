@@ -30,7 +30,12 @@ export async function GET({ locals, request }: APIContext) {
   }
 
   const row = await dalGetRecord(env, uri);
-  if (!row) return new Response(JSON.stringify({ error: 'NotFound' }), { status: 404 });
+  if (!row) {
+    return new Response(
+      JSON.stringify({ error: 'RecordNotFound', message: `Could not locate record: ${uri}` }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } },
+    );
+  }
 
   return new Response(JSON.stringify({ uri: row.uri, cid: row.cid, value: JSON.parse(row.json) }), {
     headers: { 'Content-Type': 'application/json' },
