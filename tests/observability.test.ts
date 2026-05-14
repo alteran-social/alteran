@@ -4,6 +4,80 @@
  */
 
 import { describe, test, expect, beforeEach } from 'bun:test';
+import type { APIContext, MiddlewareNext } from 'astro';
+import type { Env } from '../src/env';
+import { onRequest } from '../src/middleware';
+import { GET as health } from '../src/pages/health';
+import { GET as ready } from '../src/pages/ready';
+import { makeEnv } from './helpers/env';
+
+function apiContext(env: Env): APIContext {
+  return {
+    locals: {
+      runtime: {
+        env,
+        ctx: { waitUntil: () => {}, passThroughOnException: () => {} },
+        request: new Request('https://pds.example/health'),
+      },
+    },
+  } as unknown as APIContext;
+}
+
+async function captureConsoleLogs<T>(fn: () => T | Promise<T>): Promise<{ result: T; logs: string[] }> {
+  const original = console.log;
+  const logs: string[] = [];
+  console.log = (...args: unknown[]) => {
+    logs.push(args.map(String).join(' '));
+  };
+
+  try {
+    return { result: await fn(), logs };
+  } finally {
+    console.log = original;
+  }
+}
+
+function parseJsonLogs(logs: string[]): any[] {
+  return logs.map(log => JSON.parse(log));
+}
+
+function failingDb(message = 'database down'): Env['ALTERAN_DB'] {
+  return {
+    prepare: () => ({
+      first: async () => {
+        throw new Error(message);
+      },
+    }),
+  } as unknown as Env['ALTERAN_DB'];
+}
+
+function failingBucket(message = 'storage down'): Env['ALTERAN_BLOBS'] {
+  return {
+    list: async () => {
+      throw new Error(message);
+    },
+  } as unknown as Env['ALTERAN_BLOBS'];
+}
+
+async function runMiddleware(request: Request, next: MiddlewareNext): Promise<Response> {
+  const env = await makeEnv();
+  const result = await onRequest({
+    locals: {
+      runtime: {
+        env,
+        ctx: { waitUntil: () => {}, passThroughOnException: () => {} },
+        request,
+      },
+    },
+    request,
+  } as any, next);
+
+  if (!(result instanceof Response)) {
+    throw new Error('middleware did not return a response');
+  }
+
+  return result;
+}
 
 describe('Observability', () => {
   describe('Structured Logging', () => {
@@ -19,13 +93,22 @@ describe('Observability', () => {
 
       const logger = new Logger();
 
-      // These should not throw
-      logger.debug('Debug message');
-      logger.info('Info message');
-      logger.warn('Warning message');
-      logger.error('Error message');
+      const { logs } = await captureConsoleLogs(() => {
+        logger.debug('Debug message');
+        logger.info('Info message');
+        logger.warn('Warning message');
+        logger.error('Error message', new Error('boom'));
+      });
 
-      expect(true).toBe(true);
+      const entries = parseJsonLogs(logs);
+      expect(entries.map(entry => entry.level)).toEqual(['debug', 'info', 'warn', 'error']);
+      expect(entries.map(entry => entry.message)).toEqual([
+        'Debug message',
+        'Info message',
+        'Warning message',
+        'Error message',
+      ]);
+      expect(entries[3].error).toBe('boom');
     });
 
     test('should create child logger with inherited context', async () => {
@@ -141,13 +224,19 @@ describe('Observability', () => {
     test('should start and end trace span', async () => {
       const { Tracer } = await import('../src/lib/tracing');
 
+      const originalNow = Date.now;
+      let now = 1_000;
+      Date.now = () => now;
       const tracer = new Tracer();
-      const spanId = tracer.start('test.operation');
+      try {
+        const spanId = tracer.start('test.operation');
+        now += 12;
 
-      await new Promise(resolve => setTimeout(resolve, 10));
-
-      const duration = tracer.end(spanId);
-      expect(duration).toBeGreaterThanOrEqual(10);
+        const duration = tracer.end(spanId);
+        expect(duration).toBe(12);
+      } finally {
+        Date.now = originalNow;
+      }
     });
 
     test('should trace async function', async () => {
@@ -211,22 +300,62 @@ describe('Observability', () => {
   });
 
   describe('Health Checks', () => {
-    test('should check database connectivity', () => {
-      // This would require mocking D1 database
-      // Placeholder for integration test
-      expect(true).toBe(true);
+    test('should check database and storage connectivity', async () => {
+      const env = await makeEnv();
+      const res = await health(apiContext(env));
+      const body = await res.json() as any;
+
+      expect(res.status).toBe(200);
+      expect(body.status).toBe('healthy');
+      expect(body.checks.database.status).toBe('ok');
+      expect(body.checks.storage.status).toBe('ok');
     });
 
-    test('should check storage connectivity', () => {
-      // This would require mocking R2 bucket
-      // Placeholder for integration test
-      expect(true).toBe(true);
+    test('should return 503 when the database is missing', async () => {
+      const env = await makeEnv({ ALTERAN_DB: undefined as unknown as Env['ALTERAN_DB'] });
+      const res = await health(apiContext(env));
+      const body = await res.json() as any;
+
+      expect(res.status).toBe(503);
+      expect(body.status).toBe('unhealthy');
+      expect(body.checks.database).toEqual({
+        status: 'error',
+        message: 'Database not configured',
+      });
+      expect(body.checks.storage.status).toBe('ok');
     });
 
-    test('should return 503 on unhealthy dependencies', () => {
-      // This would require mocking failed dependencies
-      // Placeholder for integration test
-      expect(true).toBe(true);
+    test('should return 503 on unhealthy dependencies', async () => {
+      const env = await makeEnv({ ALTERAN_DB: failingDb(), ALTERAN_BLOBS: failingBucket() });
+      const res = await health(apiContext(env));
+      const body = await res.json() as any;
+
+      expect(res.status).toBe(503);
+      expect(body.status).toBe('unhealthy');
+      expect(body.checks.database).toEqual({ status: 'error', message: 'database down' });
+      expect(body.checks.storage).toEqual({ status: 'error', message: 'storage down' });
+    });
+
+    test('should make readiness fail closed for missing storage', async () => {
+      const env = await makeEnv({ ALTERAN_BLOBS: undefined as unknown as Env['ALTERAN_BLOBS'] });
+      const res = await ready(apiContext(env));
+      const body = await res.json() as any;
+
+      expect(res.status).toBe(503);
+      expect(body.status).toBe('unhealthy');
+      expect(body.checks.database.status).toBe('ok');
+      expect(body.checks.storage).toEqual({
+        status: 'error',
+        message: 'Storage not configured',
+      });
+    });
+
+    test('should return ready only when database and storage are reachable', async () => {
+      const env = await makeEnv();
+      const res = await ready(apiContext(env));
+
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('ok');
     });
   });
 
@@ -239,16 +368,33 @@ describe('Observability', () => {
       expect(id1).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     });
 
-    test('should include request ID in response headers', () => {
-      // This would require mocking middleware
-      // Placeholder for integration test
-      expect(true).toBe(true);
+    test('should include request ID in response headers', async () => {
+      const { result: res } = await captureConsoleLogs(() => runMiddleware(
+        new Request('https://pds.example/xrpc/com.atproto.server.describeServer'),
+        async () => new Response('ok'),
+      ));
+
+      const requestId = res.headers.get('X-Request-ID');
+      expect(requestId).toBeTruthy();
+      expect(requestId).toMatch(/^[0-9a-f-]{36}$/);
     });
 
-    test('should include request ID in logs', () => {
-      // This would require capturing log output
-      // Placeholder for integration test
-      expect(true).toBe(true);
+    test('should include request ID in logs', async () => {
+      const { result: res, logs } = await captureConsoleLogs(() => runMiddleware(
+        new Request('https://pds.example/xrpc/com.atproto.server.describeServer'),
+        async () => new Response('ok', { status: 202 }),
+      ));
+      const requestId = res.headers.get('X-Request-ID');
+      const requestLog = parseJsonLogs(logs).find(entry => entry.type === 'request');
+
+      expect(requestLog).toMatchObject({
+        level: 'info',
+        type: 'request',
+        method: 'GET',
+        path: '/xrpc/com.atproto.server.describeServer',
+        status: 202,
+        requestId,
+      });
     });
   });
 
@@ -278,15 +424,26 @@ describe('Observability', () => {
     test('should detect slow operations', async () => {
       const { Tracer } = await import('../src/lib/tracing');
 
+      const originalNow = Date.now;
+      let now = 5_000;
+      Date.now = () => now;
       const tracer = new Tracer();
+      try {
+        const { logs } = await captureConsoleLogs(() => {
+          const spanId = tracer.start('test.slow', { operation: 'test' });
+          now += 1_001;
+          expect(tracer.end(spanId)).toBe(1_001);
+        });
 
-      // This should trigger slow operation warning (> 1s)
-      await tracer.trace('test.slow', async () => {
-        await new Promise(resolve => setTimeout(resolve, 1100));
-      });
-
-      // If we had log capture, we'd verify the warning was logged
-      expect(true).toBe(true);
+        expect(parseJsonLogs(logs)).toContainEqual(expect.objectContaining({
+          level: 'warn',
+          message: 'Slow operation detected: test.slow',
+          duration: 1_001,
+          operation: 'test',
+        }));
+      } finally {
+        Date.now = originalNow;
+      }
     });
   });
 });
