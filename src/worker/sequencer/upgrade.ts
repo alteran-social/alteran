@@ -30,6 +30,8 @@ export type UpgradeContext = {
   readonly onClient: (id: string, cursor: number, server: HibernatableSocket) => void;
 };
 
+type WebSocketResponseInit = ResponseInit & { readonly webSocket: WebSocket };
+
 // Reject NaN / negative / non-integer cursors at the boundary. parseInt('abc')
 // yields NaN, which would silently bypass `cursor > nextSeq - 1` (all NaN
 // comparisons are false) and get persisted into the attachment.
@@ -137,5 +139,6 @@ export function handleUpgrade(
 function buildUpgradeResponse(client: WebSocket, requestedProtocol: string | undefined): Response {
   const headers = new Headers();
   if (requestedProtocol) headers.set('Sec-WebSocket-Protocol', requestedProtocol);
-  return new Response(null, { status: 101, webSocket: client, headers });
+  const init: WebSocketResponseInit = { status: 101, webSocket: client, headers };
+  return new Response(null, init);
 }

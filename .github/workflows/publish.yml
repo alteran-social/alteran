@@ -1,25 +1,48 @@
-name: publish-jsr
+name: jsr
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     tags:
-      - '\d+.\d+.\d+'
+      - "*.*.*"
   pull_request:
-    branches: [ main ]
+    branches: [main]
   release:
-    types: [ published ]
+    types: [published]
   workflow_dispatch:
 
-
 jobs:
-  publish:
+  validate:
+    name: Validate package
     runs-on: ubuntu-latest
+    if: github.event_name != 'release'
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v6
-      - name: Publish package
-        run: npx jsr publish
-
+      - uses: actions/checkout@v4
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Install npm deps (via Deno nodeModulesDir)
+        run: deno install --allow-scripts
+      - name: Validate JSR package
+        run: deno publish --dry-run
+  publish:
+    name: Publish package
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Install npm deps (via Deno nodeModulesDir)
+        run: deno install --allow-scripts
+      - name: Publish JSR package
+        run: deno publish

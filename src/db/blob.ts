@@ -111,7 +111,7 @@ export async function getRecordBlobKeys(env: Env, did: string, uri: string): Pro
     .bind(did, uri)
     .all<{ key: string }>();
 
-  return result.results?.map((row) => row.key) ?? [];
+  return result.results?.map((row: { key: string }) => row.key) ?? [];
 }
 
 export async function blobKeyHasUsage(env: Env, did: string, key: string): Promise<boolean> {

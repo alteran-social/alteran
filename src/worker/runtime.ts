@@ -166,7 +166,7 @@ export function normalizePdsRequestForAstro(request: WorkersRequest): WorkersReq
   }
 
   const headerRecord: Record<string, string> = {};
-  request.headers.forEach((value, key) => {
+  request.headers.forEach((value: string, key: string) => {
     headerRecord[key] = value;
   });
   headerRecord.origin = url.origin;

@@ -1,4 +1,22 @@
 {
+  "name": "@alteran-social/alteran",
+  "version": "0.8.1",
+  "exports": "./mod.ts",
+  "publish": {
+    "include": [
+      "deno.json",
+      "index.d.ts",
+      "index.js",
+      "LICENSE",
+      "migrations/**/*.json",
+      "migrations/**/*.sql",
+      "mod.ts",
+      "README.md",
+      "src/**/*.d.ts",
+      "src/**/*.ts",
+      "types/**/*.d.ts"
+    ]
+  },
   "nodeModulesDir": "auto",
   "unstable": ["sloppy-imports"],
   "imports": {
@@ -12,6 +30,7 @@
     "deploy": "deno task build && deno run -A npm:wrangler deploy --env production",
     "test": "deno test -A --no-check tests/",
     "test:oauth": "deno test -A --no-check tests/oauth-*.test.ts tests/resource-auth.test.ts",
+    "check": "deno check index.d.ts mod.ts src/_worker.ts src/worker/index.ts",
     "db:generate": "deno run -A npm:drizzle-kit generate",
     "db:apply": "deno run -A npm:wrangler d1 migrations apply pds",
     "db:apply:local": "deno run -A npm:wrangler d1 migrations apply pds --local",

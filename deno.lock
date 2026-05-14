@@ -11,7 +11,7 @@
     "npm:@atproto/api@~0.17.7": "0.17.7",
     "npm:@atproto/crypto@~0.4.5": "0.4.5",
     "npm:@atproto/syntax@~0.4.3": "0.4.3",
-    "npm:@cloudflare/vite-plugin@^1.37.0": "1.37.0_vite@6.4.2_wrangler@4.91.0__@cloudflare+workers-types@4.20260511.1_@cloudflare+workers-types@4.20260511.1",
+    "npm:@cloudflare/vite-plugin@^1.37.0": "1.37.0_vite@6.4.2_wrangler@4.91.0__@cloudflare+workers-types@4.20260511.1",
     "npm:@cloudflare/workers-types@^4.20260511.1": "4.20260511.1",
     "npm:@did-plc/lib@^0.0.4": "0.0.4",
     "npm:@iconify-json/simple-icons@^1.2.82": "1.2.82",
@@ -19,6 +19,7 @@
     "npm:@ipld/dag-cbor@^9.2.7": "9.2.7",
     "npm:@noble/hashes@^2.2.0": "2.2.0",
     "npm:astro-icon@^1.1.5": "1.1.5",
+    "npm:astro@*": "6.3.3",
     "npm:astro@^6.3.3": "6.3.3",
     "npm:dotenv@^17.4.2": "17.4.2",
     "npm:drizzle-kit@~0.31.10": "0.31.10",
@@ -316,7 +317,7 @@
         "workerd@1.20260511.1"
       ]
     },
-    "@cloudflare/vite-plugin@1.37.0_vite@6.4.2_wrangler@4.91.0__@cloudflare+workers-types@4.20260511.1_@cloudflare+workers-types@4.20260511.1": {
+    "@cloudflare/vite-plugin@1.37.0_vite@6.4.2_wrangler@4.91.0__@cloudflare+workers-types@4.20260511.1": {
       "integrity": "sha512-3A7TEe3j5PBJ99WeS7efnoc/IZRimpDeheNscd4icu2dFlOxci1ztb22LYONx62LVobqRffQ5WRtR1Z9dpCmTA==",
       "dependencies": [
         "@cloudflare/unenv-preset@2.16.1_unenv@2.0.0-rc.24_workerd@1.20260511.1",

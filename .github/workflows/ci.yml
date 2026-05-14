@@ -2,13 +2,13 @@ name: ci
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     tags:
-      - '\d+.\d+.\d+'
+      - "*.*.*"
   pull_request:
-    branches: [ main ]
+    branches: [main]
   release:
-    types: [ published ]
+    types: [published]
   workflow_dispatch:
 
 jobs:
@@ -26,8 +26,8 @@ jobs:
         run: deno task build
       - name: Tests
         run: deno task test
-      - name: TypeScript check
-        run: deno run -A npm:typescript@5.6.3/bin/tsc -p tsconfig.json --noEmit
+      - name: Typecheck
+        run: deno task check
 
   publish:
     name: Publish Integration
