@@ -111,6 +111,24 @@ export const commit_log = sqliteTable('commit_log', {
   seqIdx: index('commit_log_seq_idx').on(table.seq),
 }));
 
+// Single durable sequence allocator for com.atproto.sync.subscribeRepos.
+export const firehose_sequence = sqliteTable('firehose_sequence', {
+  id: text('id').primaryKey().notNull(),
+  nextSeq: integer('next_seq').notNull(),
+});
+
+// Durable event payloads for subscribeRepos backfill.
+export const firehose_event = sqliteTable('firehose_event', {
+  seq: integer('seq').primaryKey(),
+  eventType: text('event_type').notNull(),
+  did: text('did'),
+  eventPayload: text('event_payload').notNull(), // base64 CBOR(header)||CBOR(payload)
+  createdAt: integer('created_at').notNull(),
+}, (table) => ({
+  eventTypeIdx: index('firehose_event_type_idx').on(table.eventType),
+  createdAtIdx: index('firehose_event_created_at_idx').on(table.createdAt),
+}));
+
 // Blockstore stores MST nodes (Merkle Search Tree blocks)
 // Each MST node is stored as a CBOR-encoded block identified by its CID
 // GC policy: Remove blocks not referenced by recent commits (keep blocks from last N commits)

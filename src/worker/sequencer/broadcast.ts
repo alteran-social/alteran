@@ -3,7 +3,6 @@ import {
   encodeAccountFrame,
   encodeCommitFrame,
   encodeIdentityFrame,
-  encodeSyncFrame,
 } from '../../lib/firehose/frames';
 import type { Env } from '../../env';
 import { toWireStatus } from '../../lib/account-state';
@@ -15,9 +14,9 @@ export async function broadcastCommit(
   db: D1Database,
   targets: WebSocket[],
   event: CommitEvent,
+  frameBytes?: Uint8Array,
 ): Promise<void> {
-  const message = await createCommitPayload(env, db, event);
-  const bytes = encodeCommitFrame(message);
+  const bytes = frameBytes ?? encodeCommitFrame(await createCommitPayload(env, db, event));
 
   console.log(
     JSON.stringify({
@@ -51,8 +50,12 @@ export async function broadcastCommit(
   );
 }
 
-export function broadcastIdentity(targets: WebSocket[], event: IdentityEvent): void {
-  const bytes = encodeIdentityFrame({
+export function broadcastIdentity(
+  targets: WebSocket[],
+  event: IdentityEvent,
+  frameBytes?: Uint8Array,
+): void {
+  const bytes = frameBytes ?? encodeIdentityFrame({
     seq: event.seq,
     did: event.did,
     time: new Date(event.ts).toISOString(),
@@ -67,25 +70,24 @@ export function broadcastIdentity(targets: WebSocket[], event: IdentityEvent): v
   }
 }
 
-export function broadcastAccount(targets: WebSocket[], event: AccountEvent): void {
+export function broadcastAccount(
+  targets: WebSocket[],
+  event: AccountEvent,
+  frameBytes?: Uint8Array,
+): void {
   const time = new Date(event.ts).toISOString();
   const wire = toWireStatus(event.state);
   // dag-cbor refuses to encode `undefined`, so build the payload conditionally
   // rather than passing { status: undefined } when the FSM is active.
   const base = { seq: event.seq, did: event.did, time, active: wire.active };
-  const accountBytes = encodeAccountFrame(
-    wire.status ? { ...base, status: wire.status } : base,
-  );
-  // Compatibility #sync emission for clients on the legacy topic.
-  const syncBytes = encodeSyncFrame(
+  const accountBytes = frameBytes ?? encodeAccountFrame(
     wire.status ? { ...base, status: wire.status } : base,
   );
   for (const ws of targets) {
     try {
       ws.send(accountBytes);
-      ws.send(syncBytes);
     } catch (sendError) {
-      console.warn('Sequencer: account/sync send failed:', sendError);
+      console.warn('Sequencer: account send failed:', sendError);
     }
   }
 }

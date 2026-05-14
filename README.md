@@ -310,10 +310,9 @@ Sync (CAR v1)
 
 Firehose (WebSocket)
 - `GET /xrpc/com.atproto.sync.subscribeRepos` upgrades to WebSocket.
-- On writes, the worker POSTs a small commit frame to the `Sequencer` Durable Object, which broadcasts to all subscribers.
-- Frames (subject to change):
-  - `{"type":"hello","now":<ms>}` once on connect
-  - `{"type":"commit","did":"...","commitCid":"...","rev":<n>,"ts":<ms>}` on each write
+- The worker POSTs repo, identity, and account events to the `Sequencer` Durable Object, which persists each encoded event before broadcasting it.
+- Replay uses the durable event log first, then the in-memory rollback buffer, so live and replayed frames have the same binary `CBOR(header) || CBOR(payload)` shape.
+- Alteran emits `#commit`, `#identity`, and `#account` events. It does not emit `#sync` unless a future repo-reset flow can provide the spec-required `blocks` and `rev` fields.
 
 Blob storage
 - Keys are content-addressed: `blobs/by-cid/<sha256-b64url>`; upload response `$link` equals this key.

@@ -5,6 +5,7 @@ export interface Client {
   webSocket: WebSocket;
   id: string;
   cursor: number;
+  replay: boolean;
 }
 
 export interface CommitEvent {
@@ -17,6 +18,12 @@ export interface CommitEvent {
   ts: number;
   ops?: RepoOp[];
   blocks?: Uint8Array;
+}
+
+export interface BufferedFirehoseEvent {
+  seq: number;
+  eventType: 'commit' | 'identity' | 'account' | string;
+  bytes: Uint8Array;
 }
 
 export interface IdentityEvent {

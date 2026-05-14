@@ -8,6 +8,7 @@ import { CID } from 'multiformats/cid';
 import { resolveSecret } from '../lib/secrets';
 import { encodeBlocksForCommit } from '../services/car';
 import { ServerMisconfigured } from '../lib/errors';
+import { allocateFirehoseSeq } from './firehose';
 
 export async function getRoot(env: Env) {
   const db = drizzle(env.ALTERAN_DB);
@@ -106,13 +107,15 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
   return { commitCid: cidString, rev, ops, mstRoot: mstRootCid, commitData, sig: sigBase64, blocks: blocksBase64 };
 }
 
-export async function appendCommit(env: Env, cid: string, rev: string, data: string, sig: string) {
+export async function appendCommit(env: Env, cid: string, rev: string, data: string, sig: string): Promise<number> {
   const db = drizzle(env.ALTERAN_DB);
+  const seq = await allocateFirehoseSeq(env);
   const ts = Date.now();
 
   await db
     .insert(commit_log)
     .values({
+      seq,
       cid,
       rev,
       data,
@@ -120,6 +123,8 @@ export async function appendCommit(env: Env, cid: string, rev: string, data: str
       ts,
     })
     .run();
+
+  return seq;
 }
 
 // Cache for dev-mode ephemeral signing key (hex string)

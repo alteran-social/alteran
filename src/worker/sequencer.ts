@@ -1,17 +1,26 @@
 import type { DurableObjectState, D1Database } from '@cloudflare/workers-types';
 import { drizzle } from 'drizzle-orm/d1';
-import { commit_log } from '../db/schema';
+import { commit_log, firehose_event } from '../db/schema';
 import { gt, eq, desc } from 'drizzle-orm';
-import { encodeInfoFrame, encodeCommitFrame } from '../lib/firehose/frames';
+import {
+  encodeAccountFrame,
+  encodeCommitFrame,
+  encodeIdentityFrame,
+  encodeInfoFrame,
+} from '../lib/firehose/frames';
 import type { Env } from '../env';
-import { fromWireStatus } from '../lib/account-state';
+import { fromWireStatus, toWireStatus } from '../lib/account-state';
+import { allocateFirehoseSeq } from '../db/firehose';
+import { RepoManager } from '../services/repo-manager';
+import { CID } from 'multiformats/cid';
 import type {
   AccountEvent,
+  BufferedFirehoseEvent,
   Client,
   CommitEvent,
   IdentityEvent,
 } from './sequencer/types';
-import { reviveOps, base64ToBytes } from './sequencer/cid-helpers';
+import { reviveOps, base64ToBytes, bytesToBase64 } from './sequencer/cid-helpers';
 import { createCommitPayload } from './sequencer/payload';
 import {
   handleUpgrade,
@@ -27,6 +36,7 @@ import {
 
 export type {
   AccountEvent,
+  BufferedFirehoseEvent,
   Client,
   CommitEvent,
   IdentityEvent,
@@ -37,7 +47,7 @@ export class Sequencer {
   private readonly state: HibernatableState;
   private readonly env: Env;
   private readonly clients = new Map<string, Client>();
-  private buffer: CommitEvent[] = [];
+  private buffer: BufferedFirehoseEvent[] = [];
   private readonly db: D1Database;
   private maxWindow: number;
   private nextSeq = 1;
@@ -60,16 +70,22 @@ export class Sequencer {
       }
       try {
         const db = drizzle(this.db);
-        const last = await db
+        const lastCommit = await db
           .select({ seq: commit_log.seq })
           .from(commit_log)
           .orderBy(desc(commit_log.seq))
           .limit(1)
           .get();
-        const dbNext = last?.seq ? Number(last.seq) + 1 : 1;
+        const lastEvent = await db
+          .select({ seq: firehose_event.seq })
+          .from(firehose_event)
+          .orderBy(desc(firehose_event.seq))
+          .limit(1)
+          .get();
+        const dbNext = Math.max(Number(lastCommit?.seq ?? 0), Number(lastEvent?.seq ?? 0)) + 1;
         if (!base || dbNext > base) base = dbNext;
       } catch (dbError) {
-        console.warn('Sequencer: commit_log max(seq) failed:', dbError);
+        console.warn('Sequencer: firehose seq reconciliation failed:', dbError);
       }
       this.nextSeq = base > 0 ? base : 1;
       try {
@@ -143,8 +159,7 @@ export class Sequencer {
       }
 
       if (seqForEvent == null) {
-        seqForEvent = this.nextSeq++;
-        await this.state.storage.put('nextSeq', this.nextSeq);
+        seqForEvent = await allocateFirehoseSeq(this.env);
         try {
           await db
             .insert(commit_log)
@@ -160,18 +175,21 @@ export class Sequencer {
         } catch (insertError) {
           console.warn('commit_log insert failed:', insertError);
         }
-      } else if (seqForEvent >= this.nextSeq) {
-        this.nextSeq = seqForEvent + 1;
-        try {
-          await this.state.storage.put('nextSeq', this.nextSeq);
-        } catch (putError) {
-          console.warn('Sequencer: storage.put(nextSeq) failed:', putError);
-        }
       }
+      await this.advanceNextSeq(seqForEvent);
+
+      const commitDid = (() => {
+        try {
+          const parsed = JSON.parse(body.data) as { did?: unknown };
+          return typeof parsed.did === 'string' ? parsed.did : body.did;
+        } catch {
+          return body.did;
+        }
+      })();
 
       const event: CommitEvent = {
         seq: seqForEvent,
-        did: body.did,
+        did: commitDid,
         commitCid: body.commitCid,
         rev: body.rev,
         data: body.data,
@@ -181,8 +199,11 @@ export class Sequencer {
         blocks: body.blocks ? base64ToBytes(body.blocks) : undefined,
       };
 
-      this.appendCommit(event);
-      await this.broadcastCommit(event);
+      const message = await createCommitPayload(this.env, this.db, event);
+      const frameBytes = encodeCommitFrame(message);
+      await this.persistFirehoseEvent('commit', event.seq, event.did, frameBytes, event.ts);
+      this.appendEvent({ seq: event.seq, eventType: 'commit', bytes: frameBytes });
+      await this.broadcastCommit(event, frameBytes);
 
       return new Response('ok');
     } catch (error) {
@@ -194,18 +215,18 @@ export class Sequencer {
   private async handleIdentityNotification(request: Request): Promise<Response> {
     try {
       const body = (await request.json()) as { did: string; handle?: string };
+      const seq = await allocateFirehoseSeq(this.env);
       const event: IdentityEvent = {
-        seq: this.nextSeq++,
+        seq,
         did: body.did,
         handle: body.handle,
         ts: Date.now(),
       };
-      try {
-        await this.state.storage.put('nextSeq', this.nextSeq);
-      } catch (putError) {
-        console.warn('Sequencer: storage.put(nextSeq) failed:', putError);
-      }
-      await this.broadcastIdentity(event);
+      await this.advanceNextSeq(event.seq);
+      const frameBytes = this.encodeIdentityEvent(event);
+      await this.persistFirehoseEvent('identity', event.seq, event.did, frameBytes, event.ts);
+      this.appendEvent({ seq: event.seq, eventType: 'identity', bytes: frameBytes });
+      await this.broadcastIdentity(event, frameBytes);
       return new Response('ok');
     } catch (error) {
       console.error('Failed to handle identity notification:', error);
@@ -216,18 +237,18 @@ export class Sequencer {
   private async handleAccountNotification(request: Request): Promise<Response> {
     try {
       const body = (await request.json()) as { did: string; active: boolean; status?: string };
+      const seq = await allocateFirehoseSeq(this.env);
       const event: AccountEvent = {
-        seq: this.nextSeq++,
+        seq,
         did: body.did,
         state: fromWireStatus({ active: body.active, status: body.status }),
         ts: Date.now(),
       };
-      try {
-        await this.state.storage.put('nextSeq', this.nextSeq);
-      } catch (putError) {
-        console.warn('Sequencer: storage.put(nextSeq) failed:', putError);
-      }
-      await this.broadcastAccount(event);
+      await this.advanceNextSeq(event.seq);
+      const frameBytes = this.encodeAccountEvent(event);
+      await this.persistFirehoseEvent('account', event.seq, event.did, frameBytes, event.ts);
+      this.appendEvent({ seq: event.seq, eventType: 'account', bytes: frameBytes });
+      await this.broadcastAccount(event, frameBytes);
       return new Response('ok');
     } catch (error) {
       console.error('Failed to handle account notification:', error);
@@ -241,58 +262,127 @@ export class Sequencer {
       state: this.state,
       nextSeq: this.nextSeq,
       hibernate,
-      onClient: (id, cursor, server) => {
-        this.clients.set(id, { webSocket: server, id, cursor });
+      onClient: (id, cursor, replay, server) => {
+        this.clients.set(id, { webSocket: server, id, cursor, replay });
       },
     });
   }
 
   private async replayFromCursor(ws: WebSocket, cursor: number): Promise<void> {
-    const bufferedEvents = this.buffer.filter((e) => e.seq > cursor);
-
-    if (bufferedEvents.length > 0) {
-      for (const event of bufferedEvents) {
-        try {
-          const message = await createCommitPayload(this.env, this.db, event);
-          ws.send(encodeCommitFrame(message));
-        } catch (error) {
-          console.error('Failed to send buffered event:', error);
-        }
-      }
-      return;
-    }
+    let lastSentSeq = cursor;
 
     try {
       const db = drizzle(this.db);
-      const events = await db
+      const replayEvents: BufferedFirehoseEvent[] = [];
+      const storedEvents = await db
+        .select()
+        .from(firehose_event)
+        .where(gt(firehose_event.seq, cursor))
+        .orderBy(firehose_event.seq)
+        .limit(this.maxWindow)
+        .all();
+      const storedSeqs = new Set<number>();
+
+      for (const event of storedEvents) {
+        try {
+          if (event.seq == null) continue;
+          storedSeqs.add(event.seq);
+          replayEvents.push({
+            seq: event.seq,
+            eventType: event.eventType,
+            bytes: base64ToBytes(event.eventPayload),
+          });
+        } catch (error) {
+          console.error('Failed to decode stored firehose event:', error);
+        }
+      }
+
+      const legacyCommits = await db
         .select()
         .from(commit_log)
         .where(gt(commit_log.seq, cursor))
         .orderBy(commit_log.seq)
-        .limit(100)
+        .limit(this.maxWindow)
         .all();
 
-      for (const event of events) {
+      for (const event of legacyCommits) {
+        if (event.seq == null || storedSeqs.has(event.seq)) continue;
         try {
-          if (event.seq == null) continue;
-          const commitEvent: CommitEvent = {
-            seq: event.seq,
-            did: JSON.parse(event.data).did,
-            commitCid: event.cid,
-            rev: event.rev,
-            data: event.data,
-            sig: event.sig,
-            ts: event.ts,
-          };
-          const message = await createCommitPayload(this.env, this.db, commitEvent);
-          ws.send(encodeCommitFrame(message));
+          const fallback = await this.reconstructLegacyCommit(event);
+          if (fallback) replayEvents.push(fallback);
         } catch (error) {
-          console.error('Failed to send database event:', error);
+          console.error('Failed to reconstruct legacy commit event:', error);
+        }
+      }
+
+      replayEvents.sort((a, b) => a.seq - b.seq);
+      for (const event of replayEvents.slice(0, this.maxWindow)) {
+        try {
+          ws.send(event.bytes);
+          lastSentSeq = Math.max(lastSentSeq, event.seq);
+        } catch (error) {
+          console.error('Failed to send persisted event:', error);
         }
       }
     } catch (error) {
       console.error('Failed to fetch events from database:', error);
     }
+
+    const bufferedEvents = this.buffer
+      .filter((e) => e.seq > lastSentSeq)
+      .sort((a, b) => a.seq - b.seq);
+
+    for (const event of bufferedEvents) {
+      try {
+        ws.send(event.bytes);
+      } catch (error) {
+        console.error('Failed to send buffered event:', error);
+      }
+    }
+  }
+
+  private async reconstructLegacyCommit(
+    row: typeof commit_log.$inferSelect,
+  ): Promise<BufferedFirehoseEvent | null> {
+    if (row.seq == null) return null;
+    const commitData = JSON.parse(row.data) as { did?: string; data?: string; prev?: string | null };
+    if (!commitData.did || !commitData.data) return null;
+
+    const repoManager = new RepoManager(this.env);
+    const newRoot = CID.parse(String(commitData.data));
+    let prevRoot: CID | null = null;
+    if (commitData.prev) {
+      const previous = await drizzle(this.db)
+        .select()
+        .from(commit_log)
+        .where(eq(commit_log.cid, String(commitData.prev)))
+        .limit(1)
+        .get();
+      if (!previous?.data) return null;
+      const previousData = JSON.parse(previous.data) as { data?: string };
+      if (!previousData.data) return null;
+      prevRoot = CID.parse(String(previousData.data));
+    }
+
+    const ops = await repoManager.extractOps(prevRoot, newRoot);
+    const commitEvent: CommitEvent = {
+      seq: row.seq,
+      did: commitData.did,
+      commitCid: row.cid,
+      rev: row.rev,
+      data: row.data,
+      sig: row.sig,
+      ts: row.ts,
+      ops,
+    };
+    const message = await createCommitPayload(this.env, this.db, commitEvent);
+    if (message.blocks.byteLength === 0) return null;
+    if (commitData.prev && !message.prevData) return null;
+    return {
+      seq: row.seq,
+      eventType: 'commit',
+      bytes: encodeCommitFrame(message),
+    };
   }
 
   private getSocketTargets(): WebSocket[] {
@@ -309,19 +399,67 @@ export class Sequencer {
       : Array.from(this.clients.values()).map((c) => c.webSocket);
   }
 
-  private broadcastCommit(event: CommitEvent): Promise<void> {
-    return broadcastCommit(this.env, this.db, this.getSocketTargets(), event);
+  private async advanceNextSeq(seq: number): Promise<void> {
+    if (seq >= this.nextSeq) {
+      this.nextSeq = seq + 1;
+      try {
+        await this.state.storage.put('nextSeq', this.nextSeq);
+      } catch (putError) {
+        console.warn('Sequencer: storage.put(nextSeq) failed:', putError);
+      }
+    }
   }
 
-  private broadcastIdentity(event: IdentityEvent): void {
-    broadcastIdentity(this.getSocketTargets(), event);
+  private async persistFirehoseEvent(
+    eventType: string,
+    seq: number,
+    did: string,
+    frameBytes: Uint8Array,
+    createdAt: number,
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO firehose_event (seq, event_type, did, event_payload, created_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(seq) DO UPDATE SET
+           event_type = excluded.event_type,
+           did = excluded.did,
+           event_payload = excluded.event_payload,
+           created_at = excluded.created_at`,
+      )
+      .bind(seq, eventType, did, bytesToBase64(frameBytes), createdAt)
+      .run();
   }
 
-  private broadcastAccount(event: AccountEvent): void {
-    broadcastAccount(this.getSocketTargets(), event);
+  private encodeIdentityEvent(event: IdentityEvent): Uint8Array {
+    return encodeIdentityFrame({
+      seq: event.seq,
+      did: event.did,
+      time: new Date(event.ts).toISOString(),
+      handle: event.handle,
+    });
   }
 
-  private appendCommit(event: CommitEvent): void {
+  private encodeAccountEvent(event: AccountEvent): Uint8Array {
+    const time = new Date(event.ts).toISOString();
+    const wire = toWireStatus(event.state);
+    const base = { seq: event.seq, did: event.did, time, active: wire.active };
+    return encodeAccountFrame(wire.status ? { ...base, status: wire.status } : base);
+  }
+
+  private broadcastCommit(event: CommitEvent, frameBytes: Uint8Array): Promise<void> {
+    return broadcastCommit(this.env, this.db, this.getSocketTargets(), event, frameBytes);
+  }
+
+  private broadcastIdentity(event: IdentityEvent, frameBytes: Uint8Array): void {
+    broadcastIdentity(this.getSocketTargets(), event, frameBytes);
+  }
+
+  private broadcastAccount(event: AccountEvent, frameBytes: Uint8Array): void {
+    broadcastAccount(this.getSocketTargets(), event, frameBytes);
+  }
+
+  private appendEvent(event: BufferedFirehoseEvent): void {
     this.buffer.push(event);
 
     if (this.buffer.length > this.maxWindow) {
@@ -411,17 +549,24 @@ export class Sequencer {
     console.log(JSON.stringify({ level: 'info', type: 'ws_open', ts: new Date().toISOString() }));
 
     let cursor: number | undefined;
+    let replay = false;
     try {
       const attachment = (ws as HibernatableSocket).deserializeAttachment?.();
-      if (attachment && typeof attachment.cursor === 'number') cursor = attachment.cursor;
+      if (attachment && typeof attachment.cursor === 'number') {
+        cursor = attachment.cursor;
+        replay = attachment.replay === true;
+      }
     } catch (attachError) {
       console.warn('Sequencer: deserializeAttachment failed on open:', attachError);
     }
     if (cursor == null) {
       const client = Array.from(this.clients.values()).find((c) => c.webSocket === ws);
-      if (client) cursor = client.cursor;
+      if (client) {
+        cursor = client.cursor;
+        replay = client.replay;
+      }
     }
-    if (cursor && cursor > 0) {
+    if (replay && cursor != null) {
       await this.replayFromCursor(ws, cursor);
     }
   }

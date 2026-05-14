@@ -197,8 +197,7 @@ describe('broadcastAccount', () => {
   it('emits an #account frame derived from AccountState (active)', () => {
     const client = fakeSocket();
     broadcastAccount([client.socket], makeEvent({ tag: 'active' }));
-    // Two frames per call: #account + legacy #sync.
-    expect(client.sent.length).toBe(2);
+    expect(client.sent.length).toBe(1);
     const account = decodeFrame(client.sent[0]);
     expect(account.header).toEqual({ op: FrameType.Message, t: '#account' });
     expect((account.body as AccountMessage).active).toBe(true);
@@ -227,9 +226,9 @@ describe('broadcastAccount', () => {
       [good1.socket, bad.socket, good2.socket],
       makeEvent({ tag: 'takendown' }),
     );
-    expect(good1.sent.length).toBe(2);
+    expect(good1.sent.length).toBe(1);
     expect(bad.sent.length).toBe(0);
-    expect(good2.sent.length).toBe(2);
+    expect(good2.sent.length).toBe(1);
   });
 });
 
