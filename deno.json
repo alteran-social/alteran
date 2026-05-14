@@ -1,5 +1,5 @@
 {
-  "name": "@alteran-social/alteran",
+  "name": "@alteran-social/astro",
   "version": "0.8.1",
   "exports": "./mod.ts",
   "publish": {

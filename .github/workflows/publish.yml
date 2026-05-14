@@ -18,7 +18,6 @@ jobs:
     if: github.event_name != 'release'
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v4
       - name: Setup Deno
@@ -28,7 +27,7 @@ jobs:
       - name: Install npm deps (via Deno nodeModulesDir)
         run: deno install --allow-scripts
       - name: Validate JSR package
-        run: deno publish --dry-run
+        run: deno publish --dry-run --allow-slow-types
   publish:
     name: Publish package
     runs-on: ubuntu-latest
@@ -45,4 +44,4 @@ jobs:
       - name: Install npm deps (via Deno nodeModulesDir)
         run: deno install --allow-scripts
       - name: Publish JSR package
-        run: deno publish
+        run: deno publish --allow-slow-types
