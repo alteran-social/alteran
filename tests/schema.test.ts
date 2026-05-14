@@ -7,6 +7,8 @@ import {
   refresh_token_store,
   account,
   secret,
+  firehose_event,
+  firehose_sequence,
 } from '../src/db/schema';
 
 // Structural tests for the Drizzle schema. They verify the table definitions
@@ -46,6 +48,11 @@ describe('Schema Tests', () => {
     test('blockstore table has primary key on cid', () => {
       expect(blockstore.cid.primary).toBe(true);
     });
+
+    test('firehose event and sequence tables have primary keys', () => {
+      expect(firehose_event.seq.primary).toBe(true);
+      expect(firehose_sequence.id.primary).toBe(true);
+    });
   });
 
   describe('Data Types', () => {
@@ -63,6 +70,10 @@ describe('Schema Tests', () => {
 
     test('secret.updatedAt is integer', () => {
       expect(secret.updatedAt.dataType).toBe('number');
+    });
+
+    test('firehose_event.createdAt is integer', () => {
+      expect(firehose_event.createdAt.dataType).toBe('number');
     });
   });
 

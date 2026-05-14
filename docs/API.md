@@ -602,12 +602,20 @@ Subscribe to repository events via WebSocket.
 
 **WebSocket Frames**:
 
-1. **Info Frame** (on connect):
+Frames are binary WebSocket messages containing a DAG-CBOR header followed by a
+DAG-CBOR payload. The sequencer durably stores the encoded event before live
+broadcast, and cursor replay sends those same bytes back to subscribers.
+
+Alteran currently emits and replays `#commit`, `#identity`, and `#account`
+events. It does not emit `#sync`; that event is reserved for repository reset
+state and requires `blocks` and `rev`.
+
+1. **Info Frame** (too-old cursor):
 ```json
 {
   "op": 1,
   "t": "#info",
-  "name": "OutOfDate",
+  "name": "OutdatedCursor",
   "message": "Consumer is too far behind"
 }
 ```

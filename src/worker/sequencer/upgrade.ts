@@ -5,6 +5,7 @@ import { InvalidRequest } from '../../lib/errors';
 export type WebSocketAttachment = {
   id: string;
   cursor: number;
+  replay: boolean;
 };
 
 export type HibernatableSocket = WebSocket & {
@@ -27,7 +28,7 @@ export type UpgradeContext = {
   readonly state: HibernatableState;
   readonly nextSeq: number;
   readonly hibernate: boolean;
-  readonly onClient: (id: string, cursor: number, server: HibernatableSocket) => void;
+  readonly onClient: (id: string, cursor: number, replay: boolean, server: HibernatableSocket) => void;
 };
 
 // Reject NaN / negative / non-integer cursors at the boundary. parseInt('abc')
@@ -48,8 +49,10 @@ export function handleUpgrade(
   context: UpgradeContext,
 ): Response {
   let cursor: number;
+  const rawCursor = url.searchParams.get('cursor');
+  const replay = rawCursor !== null;
   try {
-    cursor = parseCursorParam(url.searchParams.get('cursor'));
+    cursor = parseCursorParam(rawCursor);
   } catch (error) {
     if (error instanceof InvalidRequest) {
       return new Response(
@@ -95,7 +98,7 @@ export function handleUpgrade(
   if (context.hibernate) {
     context.state.acceptWebSocket?.(server);
     try {
-      server.serializeAttachment?.({ id, cursor });
+      server.serializeAttachment?.({ id, cursor, replay });
     } catch (attachError) {
       console.warn('Sequencer: serializeAttachment failed:', attachError);
     }
@@ -124,12 +127,13 @@ export function handleUpgrade(
       id,
       path: url.pathname,
       cursor,
+      replay,
       protocol: requestedProtocol || null,
       timestamp: new Date().toISOString(),
     }),
   );
 
-  context.onClient(id, cursor, server);
+  context.onClient(id, cursor, replay, server);
 
   return buildUpgradeResponse(client, requestedProtocol);
 }

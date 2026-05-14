@@ -1,7 +1,7 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import { drizzle } from 'drizzle-orm/d1';
 import { commit_log } from '../../db/schema';
-import { eq, gt, desc } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { CID } from 'multiformats/cid';
 import type { CommitMessage } from '../../lib/firehose/frames';
 import { encodeBlocksForCommit } from '../../services/car';
@@ -52,15 +52,6 @@ export async function createCommitPayload(
           // Older rows may have a different shape; leave prevDataCid null.
         }
       }
-    } else {
-      const row = await drizzleDb
-        .select()
-        .from(commit_log)
-        .where(gt(commit_log.seq, 0))
-        .orderBy(desc(commit_log.seq))
-        .limit(1)
-        .get();
-      since = row?.rev ?? null;
     }
   } catch (error) {
     console.warn('createCommitPayload: failed to resolve since/prev:', error);
