@@ -216,6 +216,10 @@ export function encodeInfoFrame(name: string, message?: string): Uint8Array {
   return createInfoFrame(name, message).toBytes();
 }
 
+export function encodeErrorFrame(error: string, message?: string): Uint8Array {
+  return createErrorFrame(error, message).toBytes();
+}
+
 export function encodeCommitFrame(data: CommitMessage): Uint8Array {
   return createCommitFrame(data).toBytes();
 }

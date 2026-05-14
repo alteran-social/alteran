@@ -1,7 +1,7 @@
 import type { DurableObjectState, D1Database } from '@cloudflare/workers-types';
 import { drizzle } from 'drizzle-orm/d1';
 import { commit_log } from '../db/schema';
-import { gt, eq, desc } from 'drizzle-orm';
+import { gte, eq, desc } from 'drizzle-orm';
 import { encodeInfoFrame, encodeCommitFrame } from '../lib/firehose/frames';
 import type { Env } from '../env';
 import { fromWireStatus } from '../lib/account-state';
@@ -248,26 +248,23 @@ export class Sequencer {
   }
 
   private async replayFromCursor(ws: WebSocket, cursor: number): Promise<void> {
-    const bufferedEvents = this.buffer.filter((e) => e.seq > cursor);
-
-    if (bufferedEvents.length > 0) {
-      for (const event of bufferedEvents) {
-        try {
-          const message = await createCommitPayload(this.env, this.db, event);
-          ws.send(encodeCommitFrame(message));
-        } catch (error) {
-          console.error('Failed to send buffered event:', error);
-        }
+    const sentSeqs = new Set<number>();
+    const sendCommitEvent = async (event: CommitEvent, source: string) => {
+      try {
+        const message = await createCommitPayload(this.env, this.db, event);
+        ws.send(encodeCommitFrame(message));
+        sentSeqs.add(event.seq);
+      } catch (error) {
+        console.error(`Failed to send ${source} event:`, error);
       }
-      return;
-    }
+    };
 
     try {
       const db = drizzle(this.db);
       const events = await db
         .select()
         .from(commit_log)
-        .where(gt(commit_log.seq, cursor))
+        .where(gte(commit_log.seq, cursor))
         .orderBy(commit_log.seq)
         .limit(100)
         .all();
@@ -284,14 +281,18 @@ export class Sequencer {
             sig: event.sig,
             ts: event.ts,
           };
-          const message = await createCommitPayload(this.env, this.db, commitEvent);
-          ws.send(encodeCommitFrame(message));
+          await sendCommitEvent(commitEvent, 'database');
         } catch (error) {
           console.error('Failed to send database event:', error);
         }
       }
     } catch (error) {
       console.error('Failed to fetch events from database:', error);
+    }
+
+    const bufferedEvents = this.buffer.filter((e) => e.seq >= cursor && !sentSeqs.has(e.seq));
+    for (const event of bufferedEvents) {
+      await sendCommitEvent(event, 'buffered');
     }
   }
 
@@ -410,10 +411,12 @@ export class Sequencer {
   async webSocketOpen(ws: WebSocket): Promise<void> {
     console.log(JSON.stringify({ level: 'info', type: 'ws_open', ts: new Date().toISOString() }));
 
-    let cursor: number | undefined;
+    let cursor: number | null | undefined;
     try {
       const attachment = (ws as HibernatableSocket).deserializeAttachment?.();
-      if (attachment && typeof attachment.cursor === 'number') cursor = attachment.cursor;
+      if (attachment && (typeof attachment.cursor === 'number' || attachment.cursor === null)) {
+        cursor = attachment.cursor;
+      }
     } catch (attachError) {
       console.warn('Sequencer: deserializeAttachment failed on open:', attachError);
     }
@@ -421,7 +424,7 @@ export class Sequencer {
       const client = Array.from(this.clients.values()).find((c) => c.webSocket === ws);
       if (client) cursor = client.cursor;
     }
-    if (cursor && cursor > 0) {
+    if (typeof cursor === 'number') {
       await this.replayFromCursor(ws, cursor);
     }
   }
