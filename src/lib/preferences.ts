@@ -2,14 +2,10 @@ import type { Env } from '../env';
 import { resolveSecret } from './secrets';
 import { ServerMisconfigured } from './errors';
 
-let tableEnsured = false;
-
 async function ensureTable(env: Env) {
-  if (tableEnsured) return;
   await env.ALTERAN_DB.exec(
     'CREATE TABLE IF NOT EXISTS actor_preferences (did TEXT PRIMARY KEY, json TEXT NOT NULL, updated_at INTEGER NOT NULL)'
   );
-  tableEnsured = true;
 }
 
 // No defaults — return empty when nothing stored to avoid local fallbacks
