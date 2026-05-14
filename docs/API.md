@@ -66,6 +66,12 @@ The unsupported set includes:
 - `com.atproto.temp.requestPhoneVerification`
 - `com.atproto.temp.revokeAccountCredentials`
 
+This stable 501 contract applies only to the explicit unsupported route set
+above. Other single-user non-goals, including hosted moderation/report triage,
+public account-recovery queues, and ToS-acceptance workflows, are documented in
+[`SINGLE_USER_BOUNDARIES.md`](SINGLE_USER_BOUNDARIES.md) as operator or
+external-service responsibilities.
+
 ---
 
 ## Server Endpoints
