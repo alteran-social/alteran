@@ -4,11 +4,21 @@ import { authenticateRequest } from '../../lib/auth';
 import { canAccessFullAccount } from '../../lib/auth-scope';
 import { hashPassword } from '../../lib/password';
 import { generateAppPasswordSecret } from '../../lib/app-password';
-import { createAppPasswordRow, findAppPasswordByName } from '../../db/app-password';
+import { createAppPasswordRow } from '../../db/app-password';
 
 export const prerender = false;
 
 const MAX_NAME_LEN = 64;
+
+function isUniqueConstraintViolation(error: unknown): boolean {
+  const messages: string[] = [];
+  let current: unknown = error;
+  while (current instanceof Error) {
+    messages.push(current.message);
+    current = (current as { cause?: unknown }).cause;
+  }
+  return messages.some((message) => /UNIQUE constraint failed/i.test(message));
+}
 
 export async function POST({ locals, request }: APIContext) {
   const { env } = locals.runtime;
@@ -30,19 +40,27 @@ export async function POST({ locals, request }: APIContext) {
   }
 
   const did = auth.claims.sub;
-  if (await findAppPasswordByName(env, did, name)) {
-    return new Response(JSON.stringify({ error: 'InvalidRequest', message: 'app password with this name already exists' }), {
-      status: 400, headers: { 'Content-Type': 'application/json' },
-    });
-  }
-
   const secret = generateAppPasswordSecret();
-  const created = await createAppPasswordRow(env, {
-    did,
-    name,
-    passwordScrypt: await hashPassword(secret),
-    privileged,
-  });
+  let created: Awaited<ReturnType<typeof createAppPasswordRow>>;
+  try {
+    created = await createAppPasswordRow(env, {
+      did,
+      name,
+      passwordScrypt: await hashPassword(secret),
+      privileged,
+    });
+  } catch (error) {
+    // D1 surfaces the (did, name) primary-key violation as a UNIQUE constraint
+    // error; collapse it to the same InvalidRequest a pre-check would have
+    // returned, and avoid the TOCTOU between check and insert. Drizzle wraps
+    // the underlying D1 error in `error.cause`.
+    if (isUniqueConstraintViolation(error)) {
+      return new Response(JSON.stringify({ error: 'InvalidRequest', message: 'app password with this name already exists' }), {
+        status: 400, headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    throw error;
+  }
 
   return new Response(JSON.stringify({
     name: created.name,
