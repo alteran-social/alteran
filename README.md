@@ -288,7 +288,7 @@ XRPC surface
 - `GET /xrpc/com.atproto.server.describeServer`
 - `POST /xrpc/com.atproto.server.createSession` (returns JWTs)
 - `POST /xrpc/com.atproto.server.refreshSession`
-- `GET /xrpc/com.atproto.repo.getRecord?uri=...` (reads from D1 `record` table) or `repo+collection+rkey`
+- `GET /xrpc/com.atproto.repo.getRecord?repo=<did-or-handle>&collection=<nsid>&rkey=<rkey>` (reads local D1 `record` rows only)
 - `POST /xrpc/com.atproto.repo.createRecord` (auth required)
 - `POST /xrpc/com.atproto.repo.putRecord` (auth required)
 - `POST /xrpc/com.atproto.repo.deleteRecord` (auth required)
@@ -296,17 +296,14 @@ XRPC surface
   - Stores blob metadata in `blob` table (`cid`=sha256 b64url, `mime`, `size`)
   - Blob references inside records tracked by R2 key; deleting a record drops usage and GC can reclaim orphaned objects
 
-Sync (minimal JSON variants)
-- `GET /xrpc/com.atproto.sync.getHead` → `{ root, rev }`
-- `GET /xrpc/com.atproto.sync.getRepo.json?did=<did>` → `{ did, head, rev, records: [{uri,cid,value}] }`
-- `GET /xrpc/com.atproto.sync.getCheckout.json?did=<did>` → same as above
-- `GET /xrpc/com.atproto.sync.getBlocks.json?cids=<cid1,cid2>` → `{ blocks: [{cid,value}] }`
-
 Sync (CAR v1)
+- `GET /xrpc/com.atproto.sync.getHead?did=<did>` → `{ root }`
 - `GET /xrpc/com.atproto.sync.getRepo?did=<did>` → `application/vnd.ipld.car` snapshot
+  - `since` is rejected until Alteran can serve real commit/MST/record diff CARs
 - `GET /xrpc/com.atproto.sync.getCheckout?did=<did>` → same as above
-- `GET /xrpc/com.atproto.sync.getBlocks?cids=<cid1,cid2>` → `application/vnd.ipld.car` with requested blocks
+- `GET /xrpc/com.atproto.sync.getBlocks?did=<did>&cids=<cid1>&cids=<cid2>` → `application/vnd.ipld.car` with requested blocks
   - Blocks are DAG-CBOR encoded; CIDs are CIDv1 (dag-cbor + sha2-256)
+- Non-standard sync JSON/range helpers under public `/xrpc/com.atproto.sync.*` return 404.
 
 Firehose (WebSocket)
 - `GET /xrpc/com.atproto.sync.subscribeRepos` upgrades to WebSocket.

@@ -1,5 +1,5 @@
 import type { APIContext } from 'astro';
-import { RepoManager } from '../../services/repo-manager';
+import { requireLocalDid, requireNsid, requireRecordKey } from '../../lib/local-xrpc';
 import { buildRecordProofCar } from '../../services/car';
 
 export const prerender = false;
@@ -11,19 +11,17 @@ export const prerender = false;
 export async function GET({ locals, url }: APIContext) {
   const { env } = locals.runtime;
 
-  const did = url.searchParams.get('did') || (env.PDS_DID as string);
-  const collection = url.searchParams.get('collection');
-  const rkey = url.searchParams.get('rkey');
+  const did = requireLocalDid(env, url);
+  if (!did.ok) return did.response;
 
-  if (!collection || !rkey) {
-    return new Response(
-      JSON.stringify({ error: 'InvalidRequest', message: 'collection and rkey required' }),
-      { status: 400, headers: { 'Content-Type': 'application/json' } }
-    );
-  }
+  const collection = requireNsid(url);
+  if (!collection.ok) return collection.response;
+
+  const rkey = requireRecordKey(url);
+  if (!rkey.ok) return rkey.response;
 
   try {
-    const { bytes } = await buildRecordProofCar(env as any, did, collection, rkey);
+    const { bytes } = await buildRecordProofCar(env as any, did.value, collection.value, rkey.value);
     return new Response(bytes as any, {
       status: 200,
       headers: {

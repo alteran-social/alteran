@@ -514,7 +514,7 @@ Get the latest commit.
 
 ### com.atproto.sync.getRepo
 
-Export entire repository as CAR file.
+Export the local repository as a CAR file.
 
 **Method**: `GET`
 **Auth**: Not required
@@ -522,6 +522,7 @@ Export entire repository as CAR file.
 
 **Query Parameters**:
 - `did` (required): Repository DID
+- `since` (unsupported): Alteran rejects this parameter until it can produce real commit/MST/record diff CARs
 
 **Response**: Binary CAR file
 
@@ -543,7 +544,7 @@ Get specific blocks from the repository.
 
 **Query Parameters**:
 - `did` (required): Repository DID
-- `cids` (required): Comma-separated CIDs
+- `cids` (required): Repeat the query parameter once per CID, for example `?cids=<cid1>&cids=<cid2>`
 
 **Response**: Binary CAR file with requested blocks
 
@@ -558,13 +559,22 @@ List all blobs in the repository.
 
 **Query Parameters**:
 - `did` (required): Repository DID
+- `limit` (optional): Page size, 1-1000, default 500
+- `cursor` (optional): Opaque cursor from the previous response
+- `since` (unsupported): Alteran rejects revision-based blob deltas until it can serve real revision-aware results
 
 **Response**:
 ```json
 {
-  "cids": ["bafyrei...", "bafyrei..."]
+  "cids": ["bafyrei...", "bafyrei..."],
+  "cursor": "bafyrei..."
 }
 ```
+
+Non-standard public sync helper routes such as `com.atproto.sync.getRepo.json`,
+`com.atproto.sync.getCheckout.json`, `com.atproto.sync.getBlocks.json`, and
+`com.atproto.sync.getRepo.range` are not part of the AT Protocol lexicons and
+return 404.
 
 ---
 

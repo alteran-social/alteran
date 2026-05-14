@@ -1,5 +1,5 @@
 import type { APIContext } from 'astro';
-import { getRoot } from '../../db/repo';
+import { configuredHandle, requireLocalRepo } from '../../lib/local-xrpc';
 
 export const prerender = false;
 
@@ -10,12 +10,11 @@ export const prerender = false;
 export async function GET({ locals, url }: APIContext) {
   const { env } = locals.runtime;
 
-  const repo = url.searchParams.get('repo') || (env.PDS_DID as string);
-  const did = env.PDS_DID as string;
-  const handle = env.PDS_HANDLE || 'user.example.com';
+  const repo = requireLocalRepo(env, url);
+  if (!repo.ok) return repo.response;
 
-  // Get repo root to check if repo exists
-  const root = await getRoot(env);
+  const did = repo.value;
+  const handle = configuredHandle(env) || 'user.example.com';
 
   return new Response(
     JSON.stringify({

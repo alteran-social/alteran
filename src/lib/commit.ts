@@ -127,6 +127,12 @@ const SORTABLE_BASE32_CHARS = '234567abcdefghijklmnopqrstuvwxyz';
 let lastTidTimestamp = 0;
 let tidClockId: number | undefined;
 
+/** @internal Test-only reset for deterministic TID edge-case coverage. */
+export function resetTidStateForTests(): void {
+  lastTidTimestamp = 0;
+  tidClockId = undefined;
+}
+
 function sortableBase32Encode(value: number): string {
   let encoded = '';
   let remaining = value;

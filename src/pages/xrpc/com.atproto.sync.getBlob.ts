@@ -1,11 +1,9 @@
 import type { APIContext } from 'astro';
 import { getDb } from '../../db/client';
 import { blob_ref } from '../../db/schema';
-import { eq } from 'drizzle-orm';
-import { CID } from 'multiformats/cid';
-import { sha256 } from 'multiformats/hashes/sha2';
-import { putBlobRef } from '../../db/dal';
+import { and, eq } from 'drizzle-orm';
 import { isAccountActive } from '../../db/dal';
+import { requireCid, requireLocalDid, xrpcError } from '../../lib/local-xrpc';
 
 export const prerender = false;
 
@@ -16,32 +14,23 @@ export const prerender = false;
  * from the old PDS to the new PDS.
  *
  * Query params:
- * - did: The DID of the account (optional, defaults to configured PDS_DID)
+ * - did: The DID of the account (required)
  * - cid: The CID of the blob to retrieve (required)
  */
 export async function GET({ locals, url }: APIContext) {
   const { env } = locals.runtime;
 
   try {
-    const configuredDid = typeof env.PDS_DID === 'string' ? env.PDS_DID : undefined;
-    const did = url.searchParams.get('did') ?? configuredDid;
-    const cid = url.searchParams.get('cid');
-    if (!did || !cid) {
-      return new Response(
-        JSON.stringify({
-          error: 'InvalidRequest',
-          message: 'did and cid parameters are required'
-        }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
+    const did = requireLocalDid(env, url);
+    if (!did.ok) return did.response;
 
-    const active = await isAccountActive(env, did);
+    const cidParam = requireCid(url);
+    if (!cidParam.ok) return cidParam.response;
+    const cid = cidParam.value.toString();
+
+    const active = await isAccountActive(env, did.value);
     if (!active) {
-      return new Response(
-        JSON.stringify({ error: 'AccountInactive', message: 'Account is not active' }),
-        { status: 403, headers: { 'Content-Type': 'application/json' } }
-      );
+      return xrpcError('RepoDeactivated', 'Repo is not active');
     }
 
     const db = getDb(env);
@@ -50,67 +39,25 @@ export async function GET({ locals, url }: APIContext) {
     let blobMeta = await db
       .select()
       .from(blob_ref)
-      .where(eq(blob_ref.cid, cid))
+      .where(and(eq(blob_ref.did, did.value), eq(blob_ref.cid, cid)))
       .get();
 
-    let key: string | null = blobMeta?.key ?? null;
-    let mime: string = blobMeta?.mime ?? 'application/octet-stream';
-    let size: number | null = blobMeta?.size ?? null;
-
-    // Fallback for older uploads: derive R2 key from CID (raw/sha256) if DB row missing
-    if (!key) {
-      try {
-        const link = CID.parse(cid);
-        // blob CIDs are raw (0x55) with sha256 multihash
-        if (link.multihash.code !== sha256.code) {
-          return new Response(
-            JSON.stringify({ error: 'InvalidRequest', message: 'Unsupported multihash' }),
-            { status: 400, headers: { 'Content-Type': 'application/json' } }
-          );
-        }
-        // Recreate legacy R2 key scheme used by store.put()
-        const digest = link.multihash.digest; // Uint8Array
-        // base64url encode
-        let s = '';
-        for (const b of digest) s += String.fromCharCode(b);
-        const b64url = btoa(s).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
-        key = `blobs/by-cid/${b64url}`;
-      } catch {
-        key = null;
-      }
+    if (!blobMeta) {
+      return xrpcError('BlobNotFound', 'Blob not found');
     }
 
-    if (!key) {
-      return new Response(
-        JSON.stringify({ error: 'InvalidRequest', message: 'Blob not found' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
+    const { key, mime, size } = blobMeta;
 
     // Fetch blob from R2
     const r2 = env.ALTERAN_BLOBS;
     const object = await r2.get(key);
 
     if (!object) {
-      return new Response(
-        JSON.stringify({ error: 'InvalidRequest', message: 'Blob not found' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return xrpcError('BlobNotFound', 'Blob not found');
     }
 
-    if (!blobMeta) {
-      try {
-        size = object.size ?? size ?? 0;
-        await putBlobRef(env, did, cid, key, mime, Number(size ?? 0));
-      } catch (backfillError) {
-        // Backfill is opportunistic; serving the blob is the priority.
-        console.warn('getBlob backfill failed:', backfillError);
-      }
-    }
-
-    // workers-types' ReadableStream lacks the DOM-types readMany member; the
-    // shapes are wire-compatible at runtime, so widen through unknown.
-    return new Response(object.body as unknown as ReadableStream<Uint8Array>, {
+    const body = await object.arrayBuffer();
+    return new Response(body, {
       status: 200,
       headers: {
         'Content-Type': mime,

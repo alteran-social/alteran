@@ -2,6 +2,7 @@ import type { APIContext } from 'astro';
 import { getRoot as getRepoRoot } from '../../db/repo';
 import { getAccountState } from '../../db/dal';
 import { toWireStatus } from '../../lib/account-state';
+import { requireLocalDid } from '../../lib/local-xrpc';
 
 export const prerender = false;
 
@@ -12,8 +13,8 @@ export const prerender = false;
 export async function GET({ locals, request }: APIContext) {
   const { env } = locals.runtime;
   const url = new URL(request.url);
-  const configuredDid = typeof env.PDS_DID === 'string' ? env.PDS_DID : '';
-  const did = url.searchParams.get('did') ?? configuredDid;
+  const did = requireLocalDid(env, url);
+  if (!did.ok) return did.response;
 
   try {
     // Best-effort FSM lookup: an unmigrated row or a transient DB error both
@@ -21,7 +22,7 @@ export async function GET({ locals, request }: APIContext) {
     let active = true;
     let status: string | undefined;
     try {
-      const state = await getAccountState(env, did);
+      const state = await getAccountState(env, did.value);
       if (state) {
         const wire = toWireStatus(state);
         active = wire.active;
@@ -38,7 +39,7 @@ export async function GET({ locals, request }: APIContext) {
     }
 
     return new Response(
-      JSON.stringify({ did, active, ...(status ? { status } : {}), ...(rev ? { rev } : {}) }),
+      JSON.stringify({ did: did.value, active, ...(status ? { status } : {}), ...(rev ? { rev } : {}) }),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
     );
   } catch (error) {
@@ -55,4 +56,3 @@ export async function GET({ locals, request }: APIContext) {
     });
   }
 }
-
