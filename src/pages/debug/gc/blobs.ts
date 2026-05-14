@@ -1,10 +1,13 @@
 import type { APIContext } from 'astro';
 import { listOrphanBlobKeys, deleteBlobByKey } from '../../../db/dal';
+import { debugNotFound, isDebugRouteAllowed } from '../../../lib/debug-routes';
 
 export const prerender = false;
 
-export async function POST({ locals }: APIContext) {
+export async function POST({ locals, request }: APIContext) {
   const { env } = locals.runtime;
+  if (!isDebugRouteAllowed(env, request)) return debugNotFound();
+
   const keys = await listOrphanBlobKeys(env);
   let deleted = 0;
   for (const key of keys) {

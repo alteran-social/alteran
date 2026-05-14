@@ -1,4 +1,5 @@
 import { defineMiddleware, sequence } from 'astro/middleware';
+import { applyCorsHeaders, corsPreflightResponse } from './lib/cors';
 
 // Response.redirect() (and a few other constructors) returns a Response whose
 // headers are immutable. Re-wrap into a fresh Response so downstream middleware
@@ -9,38 +10,14 @@ function ensureMutableResponse(response: Response): Response {
 }
 
 const cors = defineMiddleware(async ({ locals, request }, next) => {
-  // Match atproto CORS implementation: use wildcard for public endpoints
-  // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin
-  // For requests without credentials, "*" can be specified as a wildcard
-  // This is safer than reflecting the request origin and matches atproto standard
+  const env = locals.runtime?.env;
 
   if (request.method === 'OPTIONS') {
-    // CORS preflight - match atproto PDS implementation
-    const headers = new Headers({
-      'Access-Control-Allow-Origin': '*',
-      // Use wildcard for methods (atproto standard)
-      'Access-Control-Allow-Methods': '*',
-      // Use wildcard for headers to allow atproto-accept-labelers and other custom headers
-      'Access-Control-Allow-Headers': '*',
-      // Match atproto: 1 day max-age for CORS preflight cache
-      'Access-Control-Max-Age': '86400',
-    });
-    return new Response(null, { status: 204, headers });
+    return corsPreflightResponse(env, request);
   }
 
   const response = ensureMutableResponse(await next());
-
-  // Set CORS headers on all responses (atproto standard)
-  response.headers.set('Access-Control-Allow-Origin', '*');
-
-  // Expose DPoP-Nonce header for OAuth clients (atproto standard)
-  // This allows clients to read the DPoP-Nonce header from responses
-  const dpopNonce = response.headers.get('DPoP-Nonce');
-  if (dpopNonce) {
-    response.headers.set('Access-Control-Expose-Headers', 'DPoP-Nonce');
-  }
-
-  return response;
+  return applyCorsHeaders(response, env, request);
 });
 
 const logger = defineMiddleware(async ({ request, locals }, next) => {
@@ -90,7 +67,6 @@ const logger = defineMiddleware(async ({ request, locals }, next) => {
       path: url.pathname,
       duration: dur,
       error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
       timestamp: new Date().toISOString(),
     }));
 

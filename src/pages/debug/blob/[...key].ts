@@ -1,9 +1,12 @@
 import type { APIContext } from 'astro';
+import { debugNotFound, isDebugRouteAllowed } from '../../../lib/debug-routes';
 
 export const prerender = false;
 
-export async function GET({ locals, params }: APIContext) {
+export async function GET({ locals, params, request }: APIContext) {
   const { env } = locals.runtime;
+  if (!isDebugRouteAllowed(env, request)) return debugNotFound();
+
   const key = params.key;
   if (!key) return new Response('missing key', { status: 400 });
 
@@ -18,6 +21,8 @@ export async function GET({ locals, params }: APIContext) {
 
 export async function PUT({ locals, request, params }: APIContext) {
   const { env } = locals.runtime;
+  if (!isDebugRouteAllowed(env, request)) return debugNotFound();
+
   const key = params.key;
   if (!key) return new Response('missing key', { status: 400 });
 

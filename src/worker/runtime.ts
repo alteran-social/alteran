@@ -1,5 +1,7 @@
 import { seed } from '../db/seed';
 import { validateConfigOrThrow } from '../lib/config';
+import { applyCorsHeaders, corsPreflightResponse } from '../lib/cors';
+import { isDebugRouteAllowed } from '../lib/debug-routes';
 import { resolveEnvSecrets } from '../lib/secrets';
 import { notifyRelaysIfNeeded } from '../lib/relay';
 import type { Env } from '../env';
@@ -66,13 +68,7 @@ export function createPdsFetchHandler(options?: CreatePdsFetchHandlerOptions): P
     // Short-circuit CORS preflight at the worker entrypoint to avoid
     // adapter/method routing mismatches causing 500s on OPTIONS.
     if (request.method === 'OPTIONS') {
-      const headers = new Headers({
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': '*',
-        'Access-Control-Allow-Headers': '*',
-        'Access-Control-Max-Age': '86400',
-      });
-      return new Response(null, { status: 204, headers }) as unknown as WorkersResponse;
+      return corsPreflightResponse(resolvedEnv as any, request as unknown as Request) as unknown as WorkersResponse;
     }
 
     await seed(resolvedEnv.ALTERAN_DB, resolvedEnv.PDS_DID as string);
@@ -86,7 +82,7 @@ export function createPdsFetchHandler(options?: CreatePdsFetchHandlerOptions): P
       const isRelayPath =
         pathname === '/xrpc/com.atproto.server.describeServer' ||
         pathname === '/xrpc/com.atproto.sync.subscribeRepos';
-      if (!isRelayPath) {
+      if (!isRelayPath && !pathname.startsWith('/debug/')) {
         ctx.waitUntil(notifyRelaysIfNeeded(resolvedEnv as any, request.url));
       }
     } catch (error) {
@@ -97,6 +93,9 @@ export function createPdsFetchHandler(options?: CreatePdsFetchHandlerOptions): P
 
     // Lightweight debug endpoint for Sequencer metrics
     if (url.pathname === '/debug/sequencer' && request.method === 'GET') {
+      if (!isDebugRouteAllowed(resolvedEnv as any, request as unknown as Request)) {
+        return new Response('Not Found', { status: 404 }) as unknown as WorkersResponse;
+      }
       try {
         if (!('ALTERAN_SEQUENCER' in resolvedEnv) || !resolvedEnv.ALTERAN_SEQUENCER) {
           return new Response('Sequencer not configured', { status: 503 }) as unknown as WorkersResponse;
@@ -141,7 +140,12 @@ export function createPdsFetchHandler(options?: CreatePdsFetchHandlerOptions): P
 
     const astroFetch = await getAstroFetch(options);
     const response = await astroFetch(normalizePdsRequestForAstro(request), resolvedEnv as any, ctx);
-    return response as unknown as WorkersResponse;
+    const webResponse = response as unknown as Response;
+    return applyCorsHeaders(
+      new Response(webResponse.body, webResponse),
+      resolvedEnv as any,
+      request as unknown as Request,
+    ) as unknown as WorkersResponse;
   };
 }
 

@@ -28,7 +28,7 @@ export async function verifyPassword(password: string, stored: string | null): P
   const [saltHex, hashHex] = stored.split(':');
   if (!saltHex || !hashHex) return false;
   const candidate = await derive(password, saltHex);
-  return candidate === hashHex;
+  return constantTimeHexEquals(candidate, hashHex);
 }
 
 export async function rehashIfNeeded(password: string, stored: string | null): Promise<string | null> {
@@ -37,4 +37,22 @@ export async function rehashIfNeeded(password: string, stored: string | null): P
   if (!saltHex) return null;
   // Currently no adaptive parameters; placeholder for future upgrades.
   return null;
+}
+
+function constantTimeHexEquals(leftHex: string, rightHex: string): boolean {
+  let left: Uint8Array;
+  let right: Uint8Array;
+  try {
+    left = hexToBytes(leftHex);
+    right = hexToBytes(rightHex);
+  } catch {
+    return false;
+  }
+
+  let diff = left.length ^ right.length;
+  const length = Math.max(left.length, right.length);
+  for (let i = 0; i < length; i++) {
+    diff |= (left[i] ?? 0) ^ (right[i] ?? 0);
+  }
+  return diff === 0;
 }

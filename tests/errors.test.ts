@@ -193,13 +193,15 @@ describe('Error Handling', () => {
       expect(converted.status).toBe(500);
     });
 
-    test('should preserve stack trace', async () => {
+    test('should not expose stack details in converted public errors', async () => {
       const { toXRPCError } = await import('../src/lib/errors');
 
       const original = new Error('Test error');
       const converted = toXRPCError(original);
 
-      expect(converted.details?.stack).toBeDefined();
+      expect(converted.details).toBeUndefined();
+      const body = converted.toJSON();
+      expect('details' in body).toBe(false);
     });
   });
 

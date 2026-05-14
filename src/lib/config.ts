@@ -1,4 +1,5 @@
 import type { Env } from '../env';
+import { isProductionCorsWildcard } from './cors';
 import { logger } from './logger';
 
 /**
@@ -172,6 +173,15 @@ export function validateConfigOrThrow(env: Env): void {
     );
     logger.error('config_validation', {
       message: 'Startup failed due to invalid configuration',
+      error: error.message,
+    });
+    throw error;
+  }
+
+  if (isProductionCorsWildcard(env)) {
+    const error = new Error('PDS_CORS_ORIGIN cannot be wildcard (*) in production');
+    logger.error('config_validation', {
+      message: 'Startup failed due to insecure CORS configuration',
       error: error.message,
     });
     throw error;

@@ -1,16 +1,12 @@
 import type { APIContext } from 'astro';
+import { debugNotFound, isDebugRouteAllowed } from '../../../lib/debug-routes';
 
 export const prerender = false;
 
-export async function POST({ locals }: APIContext) {
+export async function POST({ locals, request }: APIContext) {
   const { env } = locals.runtime;
-  // Gate to development by default. In production, require local hostname explicitly.
-  const envName = (env as any).ENVIRONMENT as string | undefined;
-  const host = env.PDS_HOSTNAME as string | undefined;
-  const isLocal = envName !== 'production' && (!host || host.includes('localhost') || host.startsWith('127.') || host === '::1');
-  if (!isLocal) {
-    return new Response('Not Found', { status: 404 });
-  }
+  if (!isDebugRouteAllowed(env, request)) return debugNotFound();
+
   const db = env.ALTERAN_DB;
   await db.exec("CREATE TABLE IF NOT EXISTS record (uri TEXT PRIMARY KEY, cid TEXT NOT NULL, json TEXT NOT NULL, created_at INTEGER DEFAULT (strftime('%s','now')));");
   await db.exec("CREATE TABLE IF NOT EXISTS blob (cid TEXT PRIMARY KEY, key TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL);");

@@ -1,6 +1,6 @@
 import type { Env } from '../env';
 
-// Rate limiting (best-effort, D1 based)
+// Rate limiting (D1 based). Fail closed if the limiter cannot verify quota.
 export async function checkRate(env: Env, request: Request, bucket: 'writes' | 'blob'): Promise<Response | null> {
   try {
     const limit = Number((env.PDS_RATE_LIMIT_PER_MIN as string | undefined) ?? (bucket === 'blob' ? 30 : 60));
@@ -25,10 +25,13 @@ export async function checkRate(env: Env, request: Request, bucket: 'writes' | '
 
     return null;
   } catch {
-    return null; // fail-open
+    return rateLimited();
   }
 }
 
 function rateLimited() {
-  return new Response(JSON.stringify({ error: 'RateLimited' }), { status: 429 });
+  return new Response(JSON.stringify({ error: 'RateLimited' }), {
+    status: 429,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
