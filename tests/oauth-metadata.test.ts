@@ -1,10 +1,11 @@
 import { describe, it } from "./helpers/bdd";
 import { expect } from "@std/expect";
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeEnv } from './helpers/env';
-import { GET as authServerMetadata } from '../src/pages/.well-known/oauth-authorization-server';
-import { GET as protectedResourceMetadata } from '../src/pages/.well-known/oauth-protected-resource';
+import { GET as authServerMetadata } from '../src/entrypoints/well-known/oauth-authorization-server';
+import { GET as protectedResourceMetadata } from '../src/entrypoints/well-known/oauth-protected-resource';
+import { GET as authServerRedirect } from '../src/pages/well-known/oauth-authorization-server';
 import { GET as jwks } from '../src/pages/oauth/jwks';
 
 describe('OAuth metadata and route injection', () => {
@@ -31,6 +32,16 @@ describe('OAuth metadata and route injection', () => {
     expect(body.resource).toBe('https://pds.example');
     expect(body.authorization_servers).toEqual(['https://pds.example']);
     expect(body.bearer_methods_supported).toEqual(['header']);
+  });
+
+  it('redirects non-dotted well-known aliases to spec paths', async () => {
+    const res = await authServerRedirect({
+      locals: { runtime: { env: {} } },
+      request: new Request('https://pds.example/well-known/oauth-authorization-server?client=1'),
+    } as any);
+
+    expect(res.status).toBe(308);
+    expect(res.headers.get('location')).toBe('https://pds.example/.well-known/oauth-authorization-server?client=1');
   });
 
   it('uses configured public PDS hostname instead of reflecting alternate request hosts', async () => {
@@ -69,6 +80,8 @@ describe('OAuth metadata and route injection', () => {
     for (const route of [
       '/.well-known/oauth-authorization-server',
       '/.well-known/oauth-protected-resource',
+      '/well-known/oauth-authorization-server',
+      '/well-known/oauth-protected-resource',
       '/oauth/par',
       '/oauth/authorize',
       '/oauth/consent',
@@ -77,6 +90,31 @@ describe('OAuth metadata and route injection', () => {
       '/oauth/revoke',
     ]) {
       expect(integration).toContain(`pattern: '${route}'`);
+    }
+  });
+
+  it('injects packaged route entrypoints from non-hidden paths', () => {
+    const integration = readFileSync(join(process.cwd(), 'index.js'), 'utf8');
+    const entrypoints = [...integration.matchAll(/entrypoint: '(\.\/[^']+)'/g)]
+      .map((match) => match[1])
+      .sort();
+
+    for (const entrypoint of [
+      './src/entrypoints/well-known/atproto-did.ts',
+      './src/entrypoints/well-known/did.json.ts',
+      './src/entrypoints/well-known/oauth-authorization-server.ts',
+      './src/entrypoints/well-known/oauth-protected-resource.ts',
+      './src/pages/well-known/atproto-did.ts',
+      './src/pages/well-known/did.json.ts',
+      './src/pages/well-known/oauth-authorization-server.ts',
+      './src/pages/well-known/oauth-protected-resource.ts',
+    ]) {
+      expect(entrypoints).toContain(entrypoint);
+    }
+
+    for (const entrypoint of entrypoints) {
+      expect(entrypoint).not.toContain('/.');
+      expect(existsSync(join(process.cwd(), entrypoint))).toBe(true);
     }
   });
 });

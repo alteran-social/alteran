@@ -1,8 +1,8 @@
 import { describe, it } from "./helpers/bdd";
 import { expect } from "@std/expect";
 import { makeEnv } from './helpers/env';
-import { GET as atprotoDid } from '../src/pages/.well-known/atproto-did';
-import { GET as didJson } from '../src/pages/.well-known/did.json.ts';
+import { GET as atprotoDid } from '../src/entrypoints/well-known/atproto-did';
+import { GET as didJson } from '../src/entrypoints/well-known/did.json.ts';
 import { GET as describeRepo } from '../src/pages/xrpc/com.atproto.repo.describeRepo';
 import { POST as createSession } from '../src/pages/xrpc/com.atproto.server.createSession';
 import { GET as getSession } from '../src/pages/xrpc/com.atproto.server.getSession';

@@ -3,10 +3,14 @@ import { isAbsolute, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const CORE_ROUTES = [
-  { pattern: '/.well-known/atproto-did', entrypoint: './src/pages/.well-known/atproto-did.ts' },
-  { pattern: '/.well-known/did.json', entrypoint: './src/pages/.well-known/did.json.ts' },
-  { pattern: '/.well-known/oauth-authorization-server', entrypoint: './src/pages/.well-known/oauth-authorization-server.ts' },
-  { pattern: '/.well-known/oauth-protected-resource', entrypoint: './src/pages/.well-known/oauth-protected-resource.ts' },
+  { pattern: '/.well-known/atproto-did', entrypoint: './src/entrypoints/well-known/atproto-did.ts' },
+  { pattern: '/.well-known/did.json', entrypoint: './src/entrypoints/well-known/did.json.ts' },
+  { pattern: '/.well-known/oauth-authorization-server', entrypoint: './src/entrypoints/well-known/oauth-authorization-server.ts' },
+  { pattern: '/.well-known/oauth-protected-resource', entrypoint: './src/entrypoints/well-known/oauth-protected-resource.ts' },
+  { pattern: '/well-known/atproto-did', entrypoint: './src/pages/well-known/atproto-did.ts' },
+  { pattern: '/well-known/did.json', entrypoint: './src/pages/well-known/did.json.ts' },
+  { pattern: '/well-known/oauth-authorization-server', entrypoint: './src/pages/well-known/oauth-authorization-server.ts' },
+  { pattern: '/well-known/oauth-protected-resource', entrypoint: './src/pages/well-known/oauth-protected-resource.ts' },
   { pattern: '/health', entrypoint: './src/pages/health.ts' },
   { pattern: '/oauth/authorize', entrypoint: './src/pages/oauth/authorize.ts' },
   { pattern: '/oauth/consent', entrypoint: './src/pages/oauth/consent.ts' },
