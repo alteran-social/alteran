@@ -7,11 +7,12 @@ import { eq, sql } from 'drizzle-orm';
 import type { RepoOp } from '../lib/firehose/frames';
 import {
   putRecordStatements,
+  repairRecordBlobUsageForCurrentRecord,
   setRecordBlobUsageStatements,
   getRecordBlobKeys,
   type BlobKeyRef,
 } from '../db/dal';
-import { assertRepoHead, bumpRoot } from '../db/repo';
+import { assertRepoHead, bumpRoot, RepoBlobNotFoundError, RepoCommitConflictError } from '../db/repo';
 import { generateTid } from '../lib/commit';
 import { resolveSecret } from '../lib/secrets';
 import {
@@ -239,7 +240,20 @@ export class RepoManager {
     const uri = `at://${did}/${collection}/${rkey}`;
     const commitGuard = expectedCommitCid === undefined ? rootCommitCid : expectedCommitCid;
     if (existingCid?.toString() === recordCid.toString()) {
-      await assertRepoHead(this.env, did, commitGuard);
+      if (typeof commitGuard !== 'string') {
+        await assertRepoHead(this.env, did, commitGuard);
+      } else {
+        const repairResult = await repairRecordBlobUsageForCurrentRecord(
+          this.env,
+          did,
+          uri,
+          recordCid.toString(),
+          effectiveBlobKeys,
+          commitGuard,
+        );
+        if (repairResult.tag === 'blobNotFound') throw new RepoBlobNotFoundError();
+        if (repairResult.tag === 'conflict') throw new RepoCommitConflictError();
+      }
       return { uri, cid: recordCid.toString(), ops: [] };
     }
 

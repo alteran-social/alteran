@@ -142,6 +142,27 @@ describe('repo write blobs', () => {
     expect(rows.results).toHaveLength(0);
   });
 
+  it('rejects unsupported compressed uploads before storing metadata', async () => {
+    const env = await makeEnv();
+    const response = await UploadBlob.POST(apiContext(env, new Request(
+      'https://pds.example/xrpc/com.atproto.repo.uploadBlob',
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'image/png',
+          'content-encoding': 'br',
+          ...(await authHeader(env)),
+        },
+        body: blobBody(new TextEncoder().encode('not actually brotli')),
+      },
+    )));
+
+    expect(response.status).toBe(400);
+    expect((await json(response)).error).toBe('InvalidRequest');
+    const rows = await env.ALTERAN_DB.prepare('SELECT cid FROM blob').all();
+    expect(rows.results).toHaveLength(0);
+  });
+
   it('validates blob refs and tracks valid blob usage', async () => {
     const env = await makeEnv();
     const blob = await rawBlob();

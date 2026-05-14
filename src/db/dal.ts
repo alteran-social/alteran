@@ -57,6 +57,66 @@ export async function setRecordBlobUsage(env: Env, did: string, uri: string, key
   await env.ALTERAN_DB.batch(setRecordBlobUsageStatements(env, did, uri, keys));
 }
 
+export async function repairRecordBlobUsageForCurrentRecord(
+  env: Env,
+  did: string,
+  uri: string,
+  cid: string,
+  keys: string[],
+  expectedCommitCid: string,
+): Promise<RecordBlobUsageRepairResult> {
+  const uniqueKeys = Array.from(new Set(keys));
+  const blobPrecondition = blobKeyPreconditionSql(uniqueKeys, did);
+  const statements: D1PreparedStatement[] = [
+    env.ALTERAN_DB.prepare(
+      `UPDATE repo_root
+       SET commit_cid = commit_cid
+       WHERE did = ?
+         AND commit_cid = ?
+         AND EXISTS (
+           SELECT 1 FROM record
+           WHERE uri = ? AND did = ? AND cid = ?
+         )${blobPrecondition.clause}`,
+    ).bind(did, expectedCommitCid, uri, did, cid, ...blobPrecondition.binds),
+    env.ALTERAN_DB.prepare(
+      `DELETE FROM blob_usage
+       WHERE did = ?
+         AND record_uri = ?
+         AND EXISTS (
+           SELECT 1 FROM repo_root WHERE did = ? AND commit_cid = ?
+         )
+         AND EXISTS (
+           SELECT 1 FROM record WHERE uri = ? AND did = ? AND cid = ?
+         )${blobPrecondition.clause}`,
+    ).bind(did, uri, did, expectedCommitCid, uri, did, cid, ...blobPrecondition.binds),
+  ];
+  for (const key of uniqueKeys) {
+    statements.push(
+      env.ALTERAN_DB.prepare(
+        `INSERT OR IGNORE INTO blob_usage (did, record_uri, key, cid, repo_rev)
+         SELECT ?, ?, ?, b.cid, root.rev
+         FROM blob b
+         INNER JOIN repo_root root
+           ON root.did = ? AND root.commit_cid = ?
+         INNER JOIN record current_record
+           ON current_record.uri = ? AND current_record.did = ? AND current_record.cid = ?
+         WHERE b.did = ? AND b.key = ?${blobPrecondition.clause}`,
+      ).bind(did, uri, key, did, expectedCommitCid, uri, did, cid, did, key, ...blobPrecondition.binds),
+    );
+  }
+  const results = await env.ALTERAN_DB.batch(statements);
+  if (changedRows(results[0]) === 1) return { tag: 'repaired' };
+  if (uniqueKeys.length > 0 && await hasMissingBlobKey(env, did, uniqueKeys)) {
+    return { tag: 'blobNotFound' };
+  }
+  return { tag: 'conflict' };
+}
+
+export type RecordBlobUsageRepairResult =
+  | { tag: 'repaired' }
+  | { tag: 'blobNotFound' }
+  | { tag: 'conflict' };
+
 export function putRecordStatements(
   env: Env,
   row: NewRecordRow,
@@ -176,6 +236,33 @@ export function setRecordBlobUsageStatements(
     }
   }
   return statements;
+}
+
+function changedRows(result: unknown): number {
+  const meta = (result as { meta?: Record<string, unknown> } | undefined)?.meta;
+  const changes = meta?.changes ?? meta?.rows_written ?? meta?.rowsWritten;
+  return typeof changes === 'number' ? changes : 0;
+}
+
+function blobKeyPreconditionSql(keys: string[], did: string): { sql: string; clause: string; binds: Array<string | number> } {
+  if (keys.length === 0) return { sql: '1 = 1', clause: '', binds: [] };
+  const placeholders = keys.map(() => '?').join(', ');
+  const sql = `(SELECT COUNT(DISTINCT key) FROM blob WHERE did = ? AND key IN (${placeholders})) = ?`;
+  return {
+    sql,
+    clause: ` AND ${sql}`,
+    binds: [did, ...keys, keys.length],
+  };
+}
+
+async function hasMissingBlobKey(env: Env, did: string, keys: string[]): Promise<boolean> {
+  const precondition = blobKeyPreconditionSql(keys, did);
+  const row = await env.ALTERAN_DB.prepare(
+    `SELECT ${precondition.sql} AS ok`,
+  )
+    .bind(...precondition.binds)
+    .first<{ ok: number }>();
+  return row?.ok !== 1;
 }
 
 // Account state management for migration support. Reads/writes route through

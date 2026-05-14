@@ -58,10 +58,13 @@ export async function POST({ locals, request }: APIContext) {
   const rateLimitResponse = await checkRate(env, request, 'blob', { key: did });
   if (rateLimitResponse) return rateLimitResponse;
 
-  const enc = uploadEncoding(request);
+  const encoding = uploadEncoding(request);
+  if (!isSupportedUploadEncoding(encoding)) {
+    return jsonError('InvalidRequest', `unsupported content-encoding: ${encoding}`, 400);
+  }
   let bytes: Uint8Array;
   try {
-    bytes = await readUploadBytes(request, maxBlobBytes(env), enc);
+    bytes = await readUploadBytes(request, maxBlobBytes(env), encoding);
   } catch (error) {
     if (error instanceof PayloadTooLarge) {
       return jsonError('PayloadTooLarge', 'blob exceeds maximum size', 413);
@@ -122,7 +125,7 @@ export async function POST({ locals, request }: APIContext) {
     // Debug-only headers (safe for clients to ignore)
     headers['x-sniffed-mime'] = sniffed || '';
     headers['x-header-mime'] = headerMime;
-    if (enc) headers['x-upload-encoding'] = enc;
+    if (encoding) headers['x-upload-encoding'] = encoding;
 
     return new Response(JSON.stringify(body), { headers });
   } catch (error) {
@@ -174,7 +177,11 @@ function uploadEncoding(request: Request): string {
 }
 
 function isCompressedEncoding(encoding: string): boolean {
-  return encoding === 'gzip' || encoding === 'br' || encoding === 'deflate';
+  return encoding === 'gzip' || encoding === 'deflate' || encoding === 'deflate-raw';
+}
+
+function isSupportedUploadEncoding(encoding: string): boolean {
+  return encoding === '' || isCompressedEncoding(encoding);
 }
 
 function resolveUploadMime(headerMime: string, sniffed: string | null): string {
