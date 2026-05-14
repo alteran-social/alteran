@@ -37,7 +37,7 @@ async function getServiceDid(env: Env): Promise<string> {
 export type IssueSessionTokenOptions = {
   jti?: string;
   accessJti?: string;
-  scope?: string;
+  accessScope?: string;
   clientId?: string;
   dpopJkt?: string;
   oauthSessionId?: string;
@@ -47,7 +47,9 @@ export async function issueSessionTokens(env: Env, did: string, opts: IssueSessi
   const jwtKey = await getJwtKey(env);
   const serviceDid = await getServiceDid(env);
   const now = Math.floor(Date.now() / 1000);
-  const accessScope = opts.dpopJkt ? (opts.scope ?? 'atproto') : (opts.scope ?? AuthScope.Access);
+  const accessScope = opts.dpopJkt
+    ? (opts.accessScope ?? 'atproto')
+    : (opts.accessScope ?? AuthScope.Access);
   if (opts.dpopJkt) {
     if (!isOAuthScope(accessScope)) {
       throw new InvalidToken('Invalid OAuth access token scope');

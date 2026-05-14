@@ -39,7 +39,7 @@ async function issueOauthAccess(env: any, key: Awaited<ReturnType<typeof makeDpo
     env,
     did,
     {
-      scope: 'atproto transition:generic',
+      accessScope: 'atproto transition:generic',
       clientId,
       dpopJkt: key.jkt,
       oauthSessionId: sessionId,
@@ -119,7 +119,7 @@ describe('Actor preference app-password policy', () => {
   it('filters restricted preferences for app-password reads', async () => {
     const env = await makeEnv();
     await setActorPreferences(env, [savedFeedsPref, personalDetailsPref, appStatePref]);
-    const { accessJwt } = await issueSessionTokens(env, did, { scope: AuthScope.AppPass });
+    const { accessJwt } = await issueSessionTokens(env, did, { accessScope: AuthScope.AppPass });
 
     const response = await getPreferences(apiContext(
       env,
@@ -135,7 +135,7 @@ describe('Actor preference app-password policy', () => {
   it('rejects app-password writes that include restricted preferences without persisting', async () => {
     const env = await makeEnv();
     await setActorPreferences(env, [savedFeedsPref]);
-    const { accessJwt } = await issueSessionTokens(env, did, { scope: AuthScope.AppPass });
+    const { accessJwt } = await issueSessionTokens(env, did, { accessScope: AuthScope.AppPass });
 
     const response = await putPreferences(apiContext(
       env,
@@ -156,7 +156,7 @@ describe('Actor preference app-password policy', () => {
 
   it('allows app-password writes for ordinary saved-feed preferences', async () => {
     const env = await makeEnv();
-    const { accessJwt } = await issueSessionTokens(env, did, { scope: AuthScope.AppPass });
+    const { accessJwt } = await issueSessionTokens(env, did, { accessScope: AuthScope.AppPass });
 
     const response = await putPreferences(apiContext(
       env,
@@ -177,7 +177,7 @@ describe('Actor preference app-password policy', () => {
   it('preserves existing restricted preferences when app-password writes omit them', async () => {
     const env = await makeEnv();
     await setActorPreferences(env, [savedFeedsPref, personalDetailsPref, appStatePref]);
-    const { accessJwt } = await issueSessionTokens(env, did, { scope: AuthScope.AppPass });
+    const { accessJwt } = await issueSessionTokens(env, did, { accessScope: AuthScope.AppPass });
     const updatedSavedFeeds = {
       $type: 'app.bsky.actor.defs#savedFeedsPref',
       saved: ['at://did:example:test/app.bsky.feed.generator/abc'],

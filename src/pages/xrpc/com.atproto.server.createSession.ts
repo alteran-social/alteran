@@ -6,6 +6,7 @@ import { eq } from 'drizzle-orm';
 import { createAccount, getAccountByIdentifier, storeRefreshToken } from '../../db/account';
 import { hashPassword, verifyPassword } from '../../lib/password';
 import { issueSessionTokens } from '../../lib/session-tokens';
+import { AuthScope } from '../../lib/auth-scope';
 import { getRuntimeString } from '../../lib/secrets';
 import { buildDidDocument } from '../../lib/did-document';
 
@@ -111,7 +112,9 @@ export async function POST({ locals, request }: APIContext) {
   const did = (account?.did ?? (await getRuntimeString(env, 'PDS_DID', 'did:example:single-user')) ?? 'did:example:single-user');
   const handle = (account?.handle ?? (await getRuntimeString(env, 'PDS_HANDLE', identifier ?? 'user.example')) ?? (identifier ?? 'user.example'));
 
-  const { accessJwt, refreshJwt, refreshPayload, refreshExpiry } = await issueSessionTokens(env, did);
+  const { accessJwt, refreshJwt, refreshPayload, refreshExpiry } = await issueSessionTokens(env, did, {
+    accessScope: AuthScope.Access,
+  });
 
   await storeRefreshToken(env, {
     id: refreshPayload.jti,

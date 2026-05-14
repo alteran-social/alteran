@@ -52,7 +52,7 @@ async function issueOAuthAccess(
     env,
     String(env.PDS_DID),
     {
-      scope,
+      accessScope: scope,
       clientId: 'https://client.example/metadata',
       dpopJkt: key.jkt,
       oauthSessionId: sessionId,
