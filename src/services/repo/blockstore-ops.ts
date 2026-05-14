@@ -3,6 +3,7 @@ import * as dagCbor from '@ipld/dag-cbor';
 import { fromString as bytesFromString } from 'uint8arrays/from-string';
 import { cidForCbor } from '../../lib/mst/util';
 import type { D1Blockstore, MST, BlockMap } from '../../lib/mst';
+import { assertRecordBlockSize } from '../../lib/repo-write-limits';
 
 export function recordToIpld(record: unknown): unknown {
   if (Array.isArray(record)) {
@@ -32,7 +33,10 @@ export function recordToIpld(record: unknown): unknown {
 }
 
 export async function cidForRecord(record: unknown): Promise<CID> {
-  return cidForCbor(recordToIpld(record));
+  const ipldRecord = recordToIpld(record);
+  const bytes = dagCbor.encode(ipldRecord);
+  assertRecordBlockSize(bytes.byteLength);
+  return cidForCbor(ipldRecord);
 }
 
 export async function storeRecord(
@@ -41,6 +45,7 @@ export async function storeRecord(
 ): Promise<CID> {
   const ipldRecord = recordToIpld(record);
   const bytes = dagCbor.encode(ipldRecord);
+  assertRecordBlockSize(bytes.byteLength);
   const cid = await cidForCbor(ipldRecord);
   await blockstore.put(cid, bytes);
   return cid;

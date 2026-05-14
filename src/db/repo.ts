@@ -10,6 +10,7 @@ import { CID } from 'multiformats/cid';
 import { resolveSecret } from '../lib/secrets';
 import { encodeBlocksForCommit } from '../services/car';
 import { ServerMisconfigured } from '../lib/errors';
+import { assertCommitEventLimits } from '../lib/repo-write-limits';
 
 export class RepoCommitConflictError extends Error {
   constructor(message = 'repo head changed') {
@@ -129,6 +130,7 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
     opts?.newMstBlocks,
     commitBytes,
   );
+  assertCommitEventLimits(ops.length, blocksBytes.byteLength);
   // Encode to base64 (workers-safe)
   let blocksBase64 = '';
   for (const b of blocksBytes) blocksBase64 += String.fromCharCode(b);

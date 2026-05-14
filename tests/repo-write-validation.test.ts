@@ -707,6 +707,24 @@ describe('repo write validation', () => {
     expect(after.results).toHaveLength(before.results.length);
   });
 
+  it('omits commits for missing deleteRecord no-ops', async () => {
+    const env = await makeEnv();
+    await createPost(env, { rkey: '3m2biurz7cl27' });
+    const before = await env.ALTERAN_DB.prepare('SELECT cid FROM commit_log').all();
+
+    const missing = await callRoute(DeleteRecord, env, {
+      repo: env.PDS_DID,
+      collection: 'app.bsky.feed.post',
+      rkey: 'missing-record',
+    });
+    expect(missing.status).toBe(200);
+    expect(await json(missing)).toEqual({});
+    expect(await listRecords(env)).toHaveLength(1);
+
+    const after = await env.ALTERAN_DB.prepare('SELECT cid FROM commit_log').all();
+    expect(after.results).toHaveLength(before.results.length);
+  });
+
   it('atomically rechecks explicit swapCommit for no-op writes', async () => {
     const env = await makeEnv();
     const created = await createPost(env, { rkey: '3m2biurz7cl27' });
@@ -1116,7 +1134,7 @@ describe('repo write validation', () => {
     expect(commits.results).toHaveLength(1);
   });
 
-  it('rejects oversized and missing-record applyWrites batches before mutation', async () => {
+  it('rejects oversized and missing-update applyWrites batches before mutation', async () => {
     const env = await makeEnv();
     const tooMany = await callRoute(ApplyWrites, env, {
       repo: env.PDS_DID,
@@ -1130,7 +1148,24 @@ describe('repo write validation', () => {
     expect((await json(tooMany)).error).toBe('InvalidRequest');
     expect(await listRecords(env)).toHaveLength(0);
 
-    const missingDelete = await callRoute(ApplyWrites, env, {
+    const missingUpdate = await callRoute(ApplyWrites, env, {
+      repo: env.PDS_DID,
+      writes: [{
+        $type: 'com.atproto.repo.applyWrites#update',
+        collection: 'com.example.record',
+        rkey: 'missing',
+        value: { $type: 'com.example.record', value: 'x' },
+      }],
+    });
+    expect(missingUpdate.status).toBe(400);
+    expect((await json(missingUpdate)).error).toBe('InvalidRequest');
+    expect(await listRecords(env)).toHaveLength(0);
+  });
+
+  it('no-ops missing applyWrites deletes while preserving result order', async () => {
+    const env = await makeEnv();
+
+    const missingOnly = await callRoute(ApplyWrites, env, {
       repo: env.PDS_DID,
       writes: [{
         $type: 'com.atproto.repo.applyWrites#delete',
@@ -1138,8 +1173,122 @@ describe('repo write validation', () => {
         rkey: 'missing',
       }],
     });
-    expect(missingDelete.status).toBe(400);
-    expect((await json(missingDelete)).error).toBe('InvalidRequest');
+    expect(missingOnly.status).toBe(200);
+    const missingOnlyBody = await json(missingOnly);
+    expect(missingOnlyBody).toEqual({
+      results: [{ $type: 'com.atproto.repo.applyWrites#deleteResult' }],
+    });
     expect(await listRecords(env)).toHaveLength(0);
+    let commits = await env.ALTERAN_DB.prepare('SELECT cid FROM commit_log').all();
+    expect(commits.results).toHaveLength(0);
+
+    const mixed = await callRoute(ApplyWrites, env, {
+      repo: env.PDS_DID,
+      validate: false,
+      writes: [
+        {
+          $type: 'com.atproto.repo.applyWrites#delete',
+          collection: 'com.example.record',
+          rkey: 'still-missing',
+        },
+        {
+          $type: 'com.atproto.repo.applyWrites#create',
+          collection: 'com.example.record',
+          rkey: 'created',
+          value: { $type: 'com.example.record', value: 'created' },
+        },
+      ],
+    });
+    expect(mixed.status).toBe(200);
+    const mixedBody = await json(mixed);
+    expect(typeof mixedBody.commit.cid).toBe('string');
+    expect(mixedBody.results).toEqual([
+      { $type: 'com.atproto.repo.applyWrites#deleteResult' },
+      {
+        $type: 'com.atproto.repo.applyWrites#createResult',
+        uri: 'at://did:example:test/com.example.record/created',
+        cid: mixedBody.results[1].cid,
+      },
+    ]);
+    expect(await listRecords(env)).toHaveLength(1);
+    commits = await env.ALTERAN_DB.prepare('SELECT cid FROM commit_log').all();
+    expect(commits.results).toHaveLength(1);
+  });
+
+  it('enforces swapCommit on no-op-only applyWrites batches', async () => {
+    const env = await makeEnv();
+    const created = await createPost(env, { rkey: '3m2biurz7cl27' });
+
+    const ok = await callRoute(ApplyWrites, env, {
+      repo: env.PDS_DID,
+      swapCommit: created.commit.cid,
+      writes: [{
+        $type: 'com.atproto.repo.applyWrites#delete',
+        collection: 'app.bsky.feed.post',
+        rkey: 'missing-record',
+      }],
+    });
+    expect(ok.status).toBe(200);
+    expect(await json(ok)).toEqual({
+      results: [{ $type: 'com.atproto.repo.applyWrites#deleteResult' }],
+    });
+
+    const stale = await callRoute(ApplyWrites, env, {
+      repo: env.PDS_DID,
+      swapCommit: WRONG_CID,
+      writes: [{
+        $type: 'com.atproto.repo.applyWrites#delete',
+        collection: 'app.bsky.feed.post',
+        rkey: 'missing-record',
+      }],
+    });
+    expect(stale.status).toBe(400);
+    expect((await json(stale)).error).toBe('InvalidSwap');
+  });
+
+  it('enforces encoded commit event size limits before visible mutation', async () => {
+    const recordEnv = await makeEnv({
+      PDS_MAX_JSON_BYTES: '1250000',
+    });
+    const oversizedRecord = await callRoute(CreateRecord, recordEnv, {
+      repo: 'did:example:test',
+      collection: 'com.example.large',
+      rkey: 'oversized-record',
+      validate: false,
+      record: {
+        $type: 'com.example.large',
+        payload: 'x'.repeat(1_000_050),
+      },
+    });
+    expect(oversizedRecord.status).toBe(400);
+    let body = await json(oversizedRecord);
+    expect(body.error).toBe('InvalidRequest');
+    expect(body.message).toContain('record block exceeds');
+    expect(await listRecords(recordEnv)).toHaveLength(0);
+    let commits = await recordEnv.ALTERAN_DB.prepare('SELECT cid FROM commit_log').all();
+    expect(commits.results).toHaveLength(0);
+
+    const env = await makeEnv({ PDS_MAX_JSON_BYTES: '3200000' });
+    const largePayload = 'x'.repeat(700_000);
+    const oversizedCommit = await callRoute(ApplyWrites, env, {
+      repo: env.PDS_DID,
+      validate: false,
+      writes: [0, 1, 2].map((index) => ({
+        $type: 'com.atproto.repo.applyWrites#create',
+        collection: 'com.example.large',
+        rkey: `large-${index}`,
+        value: {
+          $type: 'com.example.large',
+          payload: `${index}:${largePayload}`,
+        },
+      })),
+    });
+    expect(oversizedCommit.status).toBe(400);
+    body = await json(oversizedCommit);
+    expect(body.error).toBe('InvalidRequest');
+    expect(body.message).toContain('commit blocks exceed');
+    expect(await listRecords(env)).toHaveLength(0);
+    commits = await env.ALTERAN_DB.prepare('SELECT cid FROM commit_log').all();
+    expect(commits.results).toHaveLength(0);
   });
 });
