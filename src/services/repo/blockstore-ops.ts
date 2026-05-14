@@ -2,11 +2,17 @@ import { CID } from 'multiformats/cid';
 import * as dagCbor from '@ipld/dag-cbor';
 import { fromString as bytesFromString } from 'uint8arrays/from-string';
 import { cidForCbor } from '../../lib/mst/util';
-import type { D1Blockstore, MST, BlockMap } from '../../lib/mst';
+import type { MST, BlockMap } from '../../lib/mst';
+import { RepoWriteError } from '../../lib/repo-write-error';
 
-export function recordToIpld(record: unknown): unknown {
+export type EncodedBlock = readonly [CID, Uint8Array];
+
+export function recordToIpld(record: unknown, depth = 0): unknown {
+  if (depth > 100) {
+    throw new RepoWriteError('InvalidRequest', 'record is too deeply nested');
+  }
   if (Array.isArray(record)) {
-    return record.map((item) => recordToIpld(item));
+    return record.map((item) => recordToIpld(item, depth + 1));
   }
   if (!record || typeof record !== 'object') {
     return record;
@@ -24,39 +30,42 @@ export function recordToIpld(record: unknown): unknown {
     return bytesFromString(obj.$bytes, 'base64');
   }
 
-  const converted: Record<string, unknown> = {};
+  const converted: Record<string, unknown> = Object.create(null);
   for (const [key, value] of Object.entries(obj)) {
-    converted[key] = recordToIpld(value);
+    if (key === '__proto__') {
+      throw new RepoWriteError('InvalidRequest', 'record contains a forbidden object key');
+    }
+    converted[key] = recordToIpld(value, depth + 1);
   }
   return converted;
 }
 
 export async function cidForRecord(record: unknown): Promise<CID> {
-  return cidForCbor(recordToIpld(record));
+  try {
+    return cidForCbor(recordToIpld(record));
+  } catch (error) {
+    if (error instanceof RepoWriteError) throw error;
+    throw new RepoWriteError('InvalidRequest', 'record is not dag-cbor encodable');
+  }
 }
 
-export async function storeRecord(
-  blockstore: D1Blockstore,
+export async function encodeRecordBlock(
   record: unknown,
-): Promise<CID> {
-  const ipldRecord = recordToIpld(record);
-  const bytes = dagCbor.encode(ipldRecord);
-  const cid = await cidForCbor(ipldRecord);
-  await blockstore.put(cid, bytes);
-  return cid;
+): Promise<EncodedBlock> {
+  try {
+    const ipldRecord = recordToIpld(record);
+    const bytes = dagCbor.encode(ipldRecord);
+    const cid = await cidForCbor(ipldRecord);
+    return [cid, bytes] as const;
+  } catch (error) {
+    if (error instanceof RepoWriteError) throw error;
+    throw new RepoWriteError('InvalidRequest', 'record is not dag-cbor encodable');
+  }
 }
 
-export async function storeMstBlocks(
-  blockstore: D1Blockstore,
+export async function collectUnstoredMstBlocks(
   mst: MST,
 ): Promise<BlockMap> {
   const diff = await mst.getUnstoredBlocks();
-  for (const [cid, bytes] of diff.blocks) {
-    console.log(
-      `[RepoManager] Storing new MST block: ${cid.toString()}, size: ${bytes.length}`,
-    );
-    await blockstore.put(cid, bytes);
-  }
-  console.log(`[RepoManager] Stored ${diff.blocks.size} new MST blocks`);
   return diff.blocks;
 }

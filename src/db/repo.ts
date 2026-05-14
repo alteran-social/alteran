@@ -58,6 +58,7 @@ export async function assertRepoHead(
 export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID, opts?: {
   ops?: import('../lib/firehose/frames').RepoOp[];
   newMstBlocks?: Array<[CID, Uint8Array]>;
+  newRecordBlocks?: Array<readonly [CID, Uint8Array]>;
   sideEffectStatements?: (guard: CommitGuard) => D1PreparedStatement[];
   expectedCommitCid?: string | null;
   requiredBlobKeys?: string[];
@@ -128,6 +129,7 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
     ops,
     opts?.newMstBlocks,
     commitBytes,
+    opts?.newRecordBlocks,
   );
   // Encode to base64 (workers-safe)
   let blocksBase64 = '';
@@ -138,8 +140,13 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
   const guard = { did, commitCid: cidString, rev };
   const requiredBlobKeys = Array.from(new Set(opts?.requiredBlobKeys ?? []));
   const rootStatement = rootMutationStatement(env, did, cidString, rev, expectedCommitCid, requiredBlobKeys);
+  const blockStatements = blockstoreStatements(env, did, cidString, [
+    ...(opts?.newRecordBlocks ?? []),
+    ...(opts?.newMstBlocks ?? []),
+  ]);
   const statements = [
     rootStatement,
+    ...blockStatements,
     ...(opts?.sideEffectStatements?.(guard) ?? []),
     env.ALTERAN_DB.prepare(
       `INSERT INTO commit_log (cid, rev, data, sig, ts)
@@ -159,6 +166,40 @@ export async function bumpRoot(env: Env, prevMstRoot?: CID, currentMstRoot?: CID
   }
 
   return { commitCid: cidString, rev, ops, mstRoot: mstRootCid, commitData, sig: sigBase64, blocks: blocksBase64 };
+}
+
+function blockstoreStatements(
+  env: Env,
+  did: string,
+  commitCid: string,
+  blocks: Array<readonly [CID, Uint8Array]>,
+): D1PreparedStatement[] {
+  const seen = new Set<string>();
+  const statements: D1PreparedStatement[] = [];
+  for (const [cid, bytes] of blocks) {
+    const cidString = cid.toString();
+    if (seen.has(cidString)) continue;
+    seen.add(cidString);
+    statements.push(
+      env.ALTERAN_DB.prepare(
+        `INSERT OR REPLACE INTO blockstore (cid, bytes)
+         SELECT ?, ?
+         WHERE EXISTS (
+           SELECT 1 FROM repo_root WHERE did = ? AND commit_cid = ?
+         )`,
+      ).bind(cidString, bytesToBase64(bytes), did, commitCid),
+    );
+  }
+  return statements;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
 }
 
 function rootMutationStatement(

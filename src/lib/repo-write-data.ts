@@ -11,7 +11,10 @@ export function validateRawRecord(collection: string, value: unknown): Record<st
   if (!isPlainObject(value)) {
     throw new RepoWriteError('InvalidRequest', 'record must be an object');
   }
-  const record = { ...value };
+  const record: Record<string, unknown> = Object.create(null);
+  for (const [key, child] of Object.entries(value)) {
+    record[key] = child;
+  }
   if (record.$type === undefined) {
     record.$type = collection;
   } else if (record.$type !== collection) {
@@ -77,6 +80,9 @@ function validateRawValue(value: unknown, path: string): void {
   for (const [key, child] of Object.entries(value)) {
     if (key.length === 0) {
       throw new RepoWriteError('InvalidRequest', `${path} contains an empty object key`);
+    }
+    if (key === '__proto__') {
+      throw new RepoWriteError('InvalidRequest', `${path} contains a forbidden object key`);
     }
     if (key === '$type' && typeof child !== 'string') {
       throw new RepoWriteError('InvalidRequest', `${path} $type must be a string`);

@@ -1,3 +1,5 @@
+import { mimeMatches } from './mime';
+
 export const AuthScope = {
   Access: 'com.atproto.access',
   Refresh: 'com.atproto.refresh',
@@ -390,16 +392,6 @@ function oauthPermissionAllowsRpc(scope: string, lxm: string, aud: string): bool
   const lxmAllowed = parsed.lxms.includes('*') || parsed.lxms.includes(lxm);
   const audAllowed = parsed.aud === '*' || parsed.aud === aud;
   return lxmAllowed && audAllowed;
-}
-
-function mimeMatches(accept: string, mimeType: string): boolean {
-  const normalizedAccept = accept.toLowerCase();
-  const normalizedMime = mimeType.toLowerCase();
-  if (normalizedAccept === '*/*') return true;
-  if (normalizedAccept.endsWith('/*')) {
-    return normalizedMime.startsWith(`${normalizedAccept.slice(0, -1)}`);
-  }
-  return normalizedAccept === normalizedMime;
 }
 
 function isChatRpc(lxm: string | null | undefined): boolean {

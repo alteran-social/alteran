@@ -12,6 +12,7 @@ import {
   callGetRoute,
   callRoute,
   getBlobQuota,
+  issueOAuthAccess,
   json,
   listRecords,
   makeEnv,
@@ -59,6 +60,86 @@ describe('repo write blobs', () => {
     const quota = await getBlobQuota(env, String(env.PDS_DID));
     expect(quota.total_bytes).toBe(bytes.byteLength);
     expect(quota.blob_count).toBe(1);
+  });
+
+  it('rejects blob uploads from non-owner bearer tokens', async () => {
+    const env = await makeEnv();
+    const res = await UploadBlob.POST(apiContext(env, new Request(
+      'https://pds.example/xrpc/com.atproto.repo.uploadBlob',
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'image/png',
+          ...(await authHeader(env, 'did:example:other')),
+        },
+        body: blobBody(new TextEncoder().encode('not owner')),
+      },
+    )));
+
+    expect(res.status).toBe(400);
+    expect((await json(res)).error).toBe('InvalidRequest');
+    const rows = await env.ALTERAN_DB.prepare('SELECT cid FROM blob').all();
+    expect(rows.results).toHaveLength(0);
+  });
+
+  it('checks OAuth blob scope against sniffed MIME type', async () => {
+    const env = await makeEnv();
+    const url = 'https://pds.example/xrpc/com.atproto.repo.uploadBlob';
+    const headers = await issueOAuthAccess(env, 'atproto blob:image/png', url);
+    const jpegBytes = new Uint8Array([0xff, 0xd8, 0xff, 0x00]);
+
+    const res = await UploadBlob.POST(apiContext(env, new Request(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'image/png',
+        ...headers,
+      },
+      body: blobBody(jpegBytes),
+    })));
+
+    expect(res.status).toBe(401);
+    expect((await json(res)).error).toBe('InvalidToken');
+    const rows = await env.ALTERAN_DB.prepare('SELECT cid FROM blob').all();
+    expect(rows.results).toHaveLength(0);
+  });
+
+  it('allows OAuth blob scope for ambiguous WebM audio uploads', async () => {
+    const env = await makeEnv();
+    const url = 'https://pds.example/xrpc/com.atproto.repo.uploadBlob';
+    const headers = await issueOAuthAccess(env, 'atproto blob:audio/webm', url);
+    const ebmlBytes = new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0x00]);
+
+    const res = await UploadBlob.POST(apiContext(env, new Request(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'audio/webm',
+        ...headers,
+      },
+      body: blobBody(ebmlBytes),
+    })));
+
+    expect(res.status).toBe(200);
+    expect((await json(res)).blob.mimeType).toBe('audio/webm');
+  });
+
+  it('rejects oversized blob uploads before storing metadata', async () => {
+    const env = await makeEnv({ PDS_MAX_BLOB_SIZE: '4' });
+    const res = await UploadBlob.POST(apiContext(env, new Request(
+      'https://pds.example/xrpc/com.atproto.repo.uploadBlob',
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/octet-stream',
+          ...(await authHeader(env)),
+        },
+        body: blobBody(new Uint8Array([1, 2, 3, 4, 5])),
+      },
+    )));
+
+    expect(res.status).toBe(413);
+    expect((await json(res)).error).toBe('PayloadTooLarge');
+    const rows = await env.ALTERAN_DB.prepare('SELECT cid FROM blob').all();
+    expect(rows.results).toHaveLength(0);
   });
 
   it('validates blob refs and tracks valid blob usage', async () => {
@@ -182,6 +263,8 @@ describe('repo write blobs', () => {
       expect(usage.results).toHaveLength(0);
       const commits = await env.ALTERAN_DB.prepare('SELECT cid FROM commit_log').all();
       expect(commits.results).toHaveLength(0);
+      const blocks = await env.ALTERAN_DB.prepare('SELECT cid FROM blockstore').all();
+      expect(blocks.results).toHaveLength(0);
     } finally {
       (env as any).ALTERAN_DB = originalDb;
     }

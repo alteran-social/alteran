@@ -175,10 +175,14 @@ export async function encodeBlocksForCommit(
   ops: Array<{ path: string; cid: CID | null }>,
   newMstBlocks?: Array<[CID, Uint8Array]>,
   commitBlock?: Uint8Array,
+  newRecordBlocks?: Array<readonly [CID, Uint8Array]>,
 ): Promise<Uint8Array> {
   const blockstore = new D1Blockstore(env);
   const blocks: { cid: CID; bytes: Uint8Array }[] = [];
   const seen = new Set<string>();
+  const stagedRecordBlocks = new Map(
+    (newRecordBlocks ?? []).map(([cid, bytes]) => [cid.toString(), bytes]),
+  );
 
   // Helper to add block if not already seen
   const addBlock = async (cid: CID) => {
@@ -186,6 +190,9 @@ export async function encodeBlocksForCommit(
     if (seen.has(cidStr)) return;
     seen.add(cidStr);
     let bytes = await blockstore.get(cid);
+    if (!bytes) {
+      bytes = stagedRecordBlocks.get(cidStr) ?? null;
+    }
     if (!bytes) {
       if (cidStr === commitCid.toString() && commitBlock) {
         bytes = commitBlock;

@@ -150,6 +150,58 @@ describe('repo write swap and retry', () => {
     }
   });
 
+  it('does not leak blocks or side effects when explicit swap fails during commit', async () => {
+    const env = await makeEnv();
+    const first = await createPost(env, { rkey: '3m2biurz7cl21' });
+    const second = await createPost(env, { rkey: '3m2biurz7cl22' });
+    const beforeBlocks = await env.ALTERAN_DB.prepare('SELECT cid FROM blockstore').all();
+    const beforeCommits = await env.ALTERAN_DB.prepare('SELECT cid FROM commit_log').all();
+
+    const originalDb = env.ALTERAN_DB;
+    const originalBatch = originalDb.batch.bind(originalDb);
+    const wrappedDb = Object.create(originalDb);
+    let movedHead = false;
+
+    wrappedDb.batch = async (statements: unknown[]) => {
+      if (statements.length > 2 && !movedHead) {
+        movedHead = true;
+        await originalDb.prepare(
+          'UPDATE repo_root SET commit_cid = ?, rev = ? WHERE did = ?',
+        ).bind(first.commit.cid, first.commit.rev, env.PDS_DID).run();
+      }
+      return originalBatch(statements as any);
+    };
+    (env as any).ALTERAN_DB = wrappedDb;
+
+    try {
+      const failed = await callRoute(CreateRecord, env, {
+        repo: env.PDS_DID,
+        collection: 'app.bsky.feed.post',
+        rkey: '3m2biurz7cl23',
+        swapCommit: second.commit.cid,
+        record: postRecord('should not land'),
+      });
+      expect(failed.status).toBe(400);
+      expect((await json(failed)).error).toBe('InvalidSwap');
+
+      const afterBlocks = await env.ALTERAN_DB.prepare('SELECT cid FROM blockstore').all();
+      const afterCommits = await env.ALTERAN_DB.prepare('SELECT cid FROM commit_log').all();
+      const leakedRecord = await env.ALTERAN_DB.prepare(
+        'SELECT uri FROM record WHERE uri LIKE ?',
+      ).bind('%/3m2biurz7cl23').first();
+      const leakedUsage = await env.ALTERAN_DB.prepare(
+        'SELECT key FROM blob_usage WHERE record_uri LIKE ?',
+      ).bind('%/3m2biurz7cl23').all();
+
+      expect(afterBlocks.results).toHaveLength(beforeBlocks.results.length);
+      expect(afterCommits.results).toHaveLength(beforeCommits.results.length);
+      expect(leakedRecord).toBeNull();
+      expect(leakedUsage.results).toHaveLength(0);
+    } finally {
+      (env as any).ALTERAN_DB = originalDb;
+    }
+  });
+
   it('blocks deactivated accounts on single-record write routes', async () => {
     const env = await makeEnv();
     await createPost(env, { rkey: '3m2biurz7cl27' });

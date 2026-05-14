@@ -48,7 +48,22 @@ export async function registerBlobRefWithQuota(
   size: number,
 ): Promise<BlobRegistrationResult> {
   const existing = await getBlobRef(env, did, cid);
-  if (existing) return { tag: 'alreadyExists', blob: existing };
+  if (existing) {
+    const uploadedAt = Date.now();
+    await env.ALTERAN_DB.batch([
+      env.ALTERAN_DB.prepare(
+        `UPDATE blob
+         SET uploaded_at = ?
+         WHERE did = ? AND cid = ?`,
+      ).bind(uploadedAt, did, cid),
+      env.ALTERAN_DB.prepare(
+        `UPDATE blob_quota
+         SET updated_at = ?
+         WHERE did = ?`,
+      ).bind(uploadedAt, did),
+    ]);
+    return { tag: 'alreadyExists', blob: { ...existing, uploadedAt } };
+  }
 
   const quotaBytes = parseInt(env.PDS_BLOB_QUOTA_BYTES || '10737418240', 10);
   const maxBytes = Number.isFinite(quotaBytes) && quotaBytes > 0 ? quotaBytes : 10737418240;
@@ -140,7 +155,8 @@ export async function deleteUnreferencedBlobKeys(
     ]);
     if (changedRows(deletion) !== 1) continue;
 
-    await deleteR2ObjectIfAgedAndUnreferenced(env, key, cutoff);
+    // R2 deletes cannot share D1's commit guard. Metadata is the visibility
+    // gate; object cleanup needs a separate lease/tombstone flow.
     deleted++;
   }
 
@@ -294,23 +310,6 @@ async function getBlobRef(env: Env, did: string, cid: string): Promise<BlobRefMe
      LIMIT 1`,
   ).bind(did, cid).first<BlobRefMetadata>();
   return row ?? null;
-}
-
-async function deleteR2ObjectIfAgedAndUnreferenced(env: Env, key: string, cutoff: number): Promise<void> {
-  const stillStored = await env.ALTERAN_DB.prepare(
-    'SELECT 1 FROM blob WHERE key = ? LIMIT 1',
-  ).bind(key).first();
-  if (stillStored) return;
-
-  const object = await env.ALTERAN_BLOBS.head(key);
-  if (!object || !uploadedBeforeCutoff(object, cutoff)) return;
-
-  try {
-    await env.ALTERAN_BLOBS.delete(key);
-  } catch {
-    // Metadata is the visibility gate. Failed object deletes should not
-    // resurrect dereferenced blobs.
-  }
 }
 
 function uploadedBeforeCutoff(object: { uploaded?: Date | string | number }, cutoff: number): boolean {

@@ -14,7 +14,12 @@ import {
 import { assertRepoHead, bumpRoot } from '../db/repo';
 import { generateTid } from '../lib/commit';
 import { resolveSecret } from '../lib/secrets';
-import { storeRecord, storeMstBlocks, cidForRecord } from './repo/blockstore-ops';
+import {
+  collectUnstoredMstBlocks,
+  encodeRecordBlock,
+  cidForRecord,
+  type EncodedBlock,
+} from './repo/blockstore-ops';
 import { extractOps as extractOpsImpl } from './repo/operations';
 import { ServerMisconfigured } from '../lib/errors';
 import { RepoWriteError } from '../lib/repo-write-error';
@@ -28,7 +33,9 @@ import {
 interface RecordMutation {
   mst: MST;
   recordCid: CID;
+  recordBlock: EncodedBlock;
   prevMstRoot: CID | null;
+  expectedCommitCid: string | null;
   newMstBlocks: BlockMap;
 }
 
@@ -71,7 +78,7 @@ export class RepoManager {
     return did;
   }
 
-  async getRoot(): Promise<MST | null> {
+  private async getRootSnapshot(): Promise<{ mst: MST; commitCid: string } | null> {
     const db = drizzle(this.env.ALTERAN_DB);
     const did = await this.getDid();
 
@@ -101,23 +108,31 @@ export class RepoManager {
       `[RepoManager] Loading MST root: ${mstRoot.toString()} from commit: ${row.commitCid}`,
     );
 
-    return MST.load(this.blockstore, mstRoot);
+    return { mst: await MST.load(this.blockstore, mstRoot), commitCid: row.commitCid };
   }
 
-  async getOrCreateRoot(): Promise<MST> {
-    const existing = await this.getRoot();
+  async getRoot(): Promise<MST | null> {
+    return (await this.getRootSnapshot())?.mst ?? null;
+  }
+
+  private async getOrCreateRootSnapshot(): Promise<{ mst: MST; commitCid: string | null }> {
+    const existing = await this.getRootSnapshot();
     if (existing) {
-      const pointer = await existing.getPointer();
+      const pointer = await existing.mst.getPointer();
       console.log(`[RepoManager] Loaded existing MST root: ${pointer.toString()}`);
       return existing;
     }
 
     console.log('[RepoManager] Creating new empty MST');
     const mst = await MST.create(this.blockstore, []);
-    await storeMstBlocks(this.blockstore, mst);
     const pointer = await mst.getPointer();
     console.log(`[RepoManager] Created new MST root: ${pointer.toString()}`);
-    return mst;
+    return { mst, commitCid: null };
+  }
+
+  async getOrCreateRoot(): Promise<MST> {
+    const snapshot = await this.getOrCreateRootSnapshot();
+    return snapshot.mst;
   }
 
   async addRecord(
@@ -126,12 +141,13 @@ export class RepoManager {
     record: unknown,
   ): Promise<RecordMutation> {
     const key = `${collection}/${rkey}`;
-    const currentMst = await this.getOrCreateRoot();
-    const prevMstRoot = await currentMst.getPointer();
-    const recordCid = await storeRecord(this.blockstore, record);
+    const { mst: currentMst, commitCid: expectedCommitCid } = await this.getOrCreateRootSnapshot();
+    const prevMstRoot = expectedCommitCid === null ? null : await currentMst.getPointer();
+    const recordBlock = await encodeRecordBlock(record);
+    const [recordCid] = recordBlock;
     const newMst = await currentMst.add(key, recordCid);
-    const newMstBlocks = await storeMstBlocks(this.blockstore, newMst);
-    return { mst: newMst, recordCid, prevMstRoot, newMstBlocks };
+    const newMstBlocks = await collectUnstoredMstBlocks(newMst);
+    return { mst: newMst, recordCid, recordBlock, prevMstRoot, expectedCommitCid, newMstBlocks };
   }
 
   async createRecord(
@@ -142,7 +158,7 @@ export class RepoManager {
     expectedCommitCid?: string | null,
   ): Promise<CommitResult> {
     const key = rkey ?? generateTid();
-    const { mst, recordCid, prevMstRoot, newMstBlocks } = await this.addRecord(
+    const { mst, recordCid, recordBlock, prevMstRoot, expectedCommitCid: rootCommitCid, newMstBlocks } = await this.addRecord(
       collection,
       key,
       record,
@@ -153,14 +169,18 @@ export class RepoManager {
     const uri = `at://${did}/${collection}/${key}`;
 
     const currentRoot = await mst.getPointer();
+    const commitGuard = expectedCommitCid === undefined ? rootCommitCid : expectedCommitCid;
+    const opsForCommit: RepoOp[] = [{ action: 'create', path: `${collection}/${key}`, cid: recordCid }];
     await assertBlobKeysAvailable(this.env, did, effectiveBlobKeys);
     const { commitCid, rev, ops, commitData, sig, blocks } = await bumpRoot(
       this.env,
       prevMstRoot ?? undefined,
       currentRoot,
       {
+        ops: opsForCommit,
         newMstBlocks: Array.from(newMstBlocks),
-        expectedCommitCid,
+        newRecordBlocks: [recordBlock],
+        expectedCommitCid: commitGuard,
         requiredBlobKeys: effectiveBlobKeys,
         sideEffectStatements: (guard) => [
           ...putRecordStatements(this.env, {
@@ -193,12 +213,13 @@ export class RepoManager {
     record: unknown,
   ): Promise<RecordMutation> {
     const key = `${collection}/${rkey}`;
-    const currentMst = await this.getOrCreateRoot();
-    const prevMstRoot = await currentMst.getPointer();
-    const recordCid = await storeRecord(this.blockstore, record);
+    const { mst: currentMst, commitCid: expectedCommitCid } = await this.getOrCreateRootSnapshot();
+    const prevMstRoot = expectedCommitCid === null ? null : await currentMst.getPointer();
+    const recordBlock = await encodeRecordBlock(record);
+    const [recordCid] = recordBlock;
     const newMst = await currentMst.update(key, recordCid);
-    const newMstBlocks = await storeMstBlocks(this.blockstore, newMst);
-    return { mst: newMst, recordCid, prevMstRoot, newMstBlocks };
+    const newMstBlocks = await collectUnstoredMstBlocks(newMst);
+    return { mst: newMst, recordCid, recordBlock, prevMstRoot, expectedCommitCid, newMstBlocks };
   }
 
   async putRecord(
@@ -209,33 +230,39 @@ export class RepoManager {
     expectedCommitCid?: string | null,
   ): Promise<RecordWriteResult> {
     const key = `${collection}/${rkey}`;
-    const currentMst = await this.getOrCreateRoot();
-    const prevMstRoot = await currentMst.getPointer();
+    const { mst: currentMst, commitCid: rootCommitCid } = await this.getOrCreateRootSnapshot();
+    const prevMstRoot = rootCommitCid === null ? null : await currentMst.getPointer();
     const existingCid = await currentMst.get(key);
     const recordCid = await cidForRecord(record);
     const did = await this.getDid();
     const effectiveBlobKeys = blobKeys ?? await resolveRecordBlobKeys(this.env, did, record);
     const uri = `at://${did}/${collection}/${rkey}`;
+    const commitGuard = expectedCommitCid === undefined ? rootCommitCid : expectedCommitCid;
     if (existingCid?.toString() === recordCid.toString()) {
-      await assertRepoHead(this.env, did, expectedCommitCid);
+      await assertRepoHead(this.env, did, commitGuard);
       return { uri, cid: recordCid.toString(), ops: [] };
     }
 
     const previousBlobKeys = await getRecordBlobKeys(this.env, did, uri);
-    await storeRecord(this.blockstore, record);
+    const recordBlock = await encodeRecordBlock(record);
     const mst = existingCid
       ? await currentMst.update(key, recordCid)
       : await currentMst.add(key, recordCid);
-    const newMstBlocks = await storeMstBlocks(this.blockstore, mst);
+    const newMstBlocks = await collectUnstoredMstBlocks(mst);
     const currentRoot = await mst.getPointer();
+    const opsForCommit: RepoOp[] = existingCid
+      ? [{ action: 'update', path: key, cid: recordCid, prev: existingCid }]
+      : [{ action: 'create', path: key, cid: recordCid }];
     await assertBlobKeysAvailable(this.env, did, effectiveBlobKeys);
     const { commitCid, rev, ops, commitData, sig, blocks } = await bumpRoot(
       this.env,
       prevMstRoot ?? undefined,
       currentRoot,
       {
+        ops: opsForCommit,
         newMstBlocks: Array.from(newMstBlocks),
-        expectedCommitCid,
+        newRecordBlocks: [recordBlock],
+        expectedCommitCid: commitGuard,
         requiredBlobKeys: effectiveBlobKeys,
         sideEffectStatements: (guard) => [
           ...putRecordStatements(this.env, {
@@ -274,13 +301,13 @@ export class RepoManager {
     expectedCommitCid?: string | null,
   ): Promise<BatchCommitResult> {
     const did = await this.getDid();
+    const snapshot = await this.getOrCreateRootSnapshot();
     return applyPreparedWritesToRepo(
       this.env,
-      this.blockstore,
       did,
-      await this.getOrCreateRoot(),
+      snapshot.mst,
       writes,
-      expectedCommitCid,
+      expectedCommitCid === undefined ? snapshot.commitCid : expectedCommitCid,
     );
   }
 
@@ -294,7 +321,7 @@ export class RepoManager {
     const currentCid = await currentMst.get(key);
     if (!currentCid) throw new RepoWriteError('InvalidRequest', 'record does not exist');
     const newMst = await currentMst.delete(key);
-    const newMstBlocks = await storeMstBlocks(this.blockstore, newMst);
+    const newMstBlocks = await collectUnstoredMstBlocks(newMst);
 
     const did = await this.getDid();
     const uri = `at://${did}/${collection}/${rkey}`;

@@ -1,11 +1,17 @@
 import type { APIContext } from 'astro';
 import type { Env } from '../../env';
-import { errorMessage } from '../../lib/errors';
-import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError, insufficientScopeResponse } from '../../lib/oauth/resource';
+import { PayloadTooLarge } from '../../lib/errors';
+import {
+  verifyResourceRequestHybrid,
+  dpopResourceUnauthorized,
+  handleResourceAuthError,
+  insufficientScopeResponse,
+  type ResourceAuthContext,
+} from '../../lib/oauth/resource';
 import { canUploadBlob } from '../../lib/auth-scope';
 import { verifyServiceAuth, isServiceAuthToken } from '../../lib/service-auth';
 import { checkRate } from '../../lib/ratelimit';
-import { sniffMime, baseMime } from '../../lib/util';
+import { sniffMime, baseMime, readBodyBounded, readStreamBounded } from '../../lib/util';
 import {
   deleteUnreferencedBlobRef,
   isAccountActive,
@@ -15,46 +21,27 @@ import {
 import { resolveSecret } from '../../lib/secrets';
 import { CID } from 'multiformats/cid';
 import { sha256 } from 'multiformats/hashes/sha2';
+import { jsonError } from '../../lib/repo-write-error';
 
 export const prerender = false;
 
+const UPLOAD_BLOB_LXM = 'com.atproto.repo.uploadBlob';
+
+type UploadAuth =
+  | { tag: 'service' }
+  | { tag: 'user'; auth: ResourceAuthContext };
+
 export async function POST({ locals, request }: APIContext) {
   const { env } = locals.runtime;
-  
-  // Check if this is a service auth request (from video.bsky.app, etc.)
-  const authHeader = request.headers.get('authorization');
-  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
-  
-  let isServiceAuth = false;
-  if (token && isServiceAuthToken(token)) {
-    const serviceAuth = await verifyServiceAuth(env, request);
-    if (serviceAuth) {
-      isServiceAuth = true;
-    } else {
-      return new Response(
-        JSON.stringify({ error: 'AuthRequired', message: 'Invalid service auth token' }),
-        { status: 401, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
+  const did = await resolveSecret(env.PDS_DID);
+  if (!did) {
+    return jsonError('InternalServerError', 'PDS_DID is not configured', 500);
   }
-
-  // If not service auth, verify as user request
-  if (!isServiceAuth) {
-    try {
-      const auth = await verifyResourceRequestHybrid(env, request);
-      if (!auth) return dpopResourceUnauthorized(env);
-      if (!canUploadBlob(auth.access, baseMime(request.headers.get('content-type')))) {
-        return insufficientScopeResponse();
-      }
-    } catch (error) {
-      const handled = await handleResourceAuthError(env, error);
-      if (handled) return handled;
-      throw error;
-    }
+  const uploadAuth = await authenticateUpload(env, request, did);
+  if (uploadAuth instanceof Response) return uploadAuth;
+  if (uploadAuth.tag === 'user' && uploadAuth.auth.did !== did) {
+    return jsonError('InvalidRequest', 'authenticated user does not own this repo', 400);
   }
-
-  // Get DID from environment (single-user PDS)
-  const did = (await resolveSecret(env.PDS_DID)) ?? 'did:example:single-user';
 
   // Check if account is active
   const active = await isAccountActive(env, did);
@@ -68,29 +55,26 @@ export async function POST({ locals, request }: APIContext) {
     );
   }
 
-  const rateLimitResponse = await checkRate(env, request, 'blob');
+  const rateLimitResponse = await checkRate(env, request, 'blob', { key: did });
   if (rateLimitResponse) return rateLimitResponse;
 
-  // Decompress if Content-Encoding is present (some clients may compress uploads)
-  const enc = (request.headers.get('content-encoding') || '').toLowerCase();
-  let buf: ArrayBuffer;
-  if (enc && (enc === 'gzip' || enc === 'br' || enc === 'deflate')) {
-    try {
-      // @ts-ignore: DecompressionStream is available in CF Workers runtime
-      const ds = new DecompressionStream(enc);
-      const decompressed = request.body?.pipeThrough(ds);
-      buf = await new Response(decompressed).arrayBuffer();
-    } catch {
-      // Fallback to raw body if decompression not supported
-      buf = await request.arrayBuffer();
+  const enc = uploadEncoding(request);
+  let bytes: Uint8Array;
+  try {
+    bytes = await readUploadBytes(request, maxBlobBytes(env), enc);
+  } catch (error) {
+    if (error instanceof PayloadTooLarge) {
+      return jsonError('PayloadTooLarge', 'blob exceeds maximum size', 413);
     }
-  } else {
-    buf = await request.arrayBuffer();
+    return jsonError('InvalidRequest', 'failed to read upload body', 400);
   }
+  const buf = toArrayBuffer(bytes);
   const headerMime = baseMime(request.headers.get('content-type'));
   const sniffed = sniffMime(buf);
-  // Prefer sniffed MIME like upstream PDS; fall back to header
-  const contentType = sniffed || headerMime;
+  const contentType = resolveUploadMime(headerMime, sniffed);
+  if (uploadAuth.tag === 'user' && !canUploadBlob(uploadAuth.auth.access, contentType)) {
+    return insufficientScopeResponse();
+  }
 
   // Skip MIME type validation during migration - accept all types
   // Uncomment to enforce: if (!isAllowedMime(env, contentType)) return new Response(JSON.stringify({ error: 'UnsupportedMediaType' }), { status: 415 });
@@ -143,9 +127,76 @@ export async function POST({ locals, request }: APIContext) {
     return new Response(JSON.stringify(body), { headers });
   } catch (error) {
     if (registeredCid) await deleteUnreferencedBlobRef(env, did, registeredCid).catch(() => undefined);
-    if (String(errorMessage(error) || '').startsWith('BlobTooLarge')) return new Response(JSON.stringify({ error: 'PayloadTooLarge' }), { status: 413 });
+    if (error instanceof PayloadTooLarge) {
+      return jsonError('PayloadTooLarge', 'blob exceeds maximum size', 413);
+    }
     return new Response(JSON.stringify({ error: 'UploadFailed' }), { status: 500 });
   }
+}
+
+async function authenticateUpload(env: Env, request: Request, did: string): Promise<UploadAuth | Response> {
+  const authHeader = request.headers.get('authorization');
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+
+  if (token && isServiceAuthToken(token)) {
+    const serviceAuth = await verifyServiceAuth(env, request);
+    if (!serviceAuth || serviceAuth.lxm !== UPLOAD_BLOB_LXM || serviceAuth.iss !== did) {
+      return jsonError('InvalidToken', 'Invalid service auth token', 401);
+    }
+    return { tag: 'service' };
+  }
+
+  try {
+    const auth = await verifyResourceRequestHybrid(env, request);
+    if (!auth) return dpopResourceUnauthorized(env);
+    return { tag: 'user', auth };
+  } catch (error) {
+    const handled = await handleResourceAuthError(env, error);
+    if (handled) return handled;
+    throw error;
+  }
+}
+
+async function readUploadBytes(
+  request: Request,
+  maxBytes: number,
+  encoding: string,
+): Promise<Uint8Array> {
+  if (!isCompressedEncoding(encoding)) {
+    return readBodyBounded(request, maxBytes);
+  }
+  const decompressed = request.body?.pipeThrough(createDecompressionStream(encoding));
+  return readStreamBounded(decompressed ?? null, maxBytes);
+}
+
+function uploadEncoding(request: Request): string {
+  return (request.headers.get('content-encoding') || '').trim().toLowerCase();
+}
+
+function isCompressedEncoding(encoding: string): boolean {
+  return encoding === 'gzip' || encoding === 'br' || encoding === 'deflate';
+}
+
+function resolveUploadMime(headerMime: string, sniffed: string | null): string {
+  if (!sniffed) return headerMime;
+  if (sniffed === 'video/webm' && (headerMime === 'audio/webm' || headerMime === 'video/webm')) {
+    return headerMime;
+  }
+  if (sniffed === 'video/mp4' && (headerMime === 'audio/mp4' || headerMime === 'video/mp4')) {
+    return headerMime;
+  }
+  return sniffed;
+}
+
+function createDecompressionStream(encoding: string): TransformStream<Uint8Array, Uint8Array> {
+  const Decompression = globalThis.DecompressionStream as unknown as {
+    new (format: string): TransformStream<Uint8Array, Uint8Array>;
+  };
+  return new Decompression(encoding);
+}
+
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
 type BlobIdentity = {
@@ -157,7 +208,7 @@ type BlobIdentity = {
 async function blobIdentity(env: Env, body: ArrayBuffer): Promise<BlobIdentity> {
   const size = body.byteLength;
   const limit = maxBlobBytes(env);
-  if (size > limit) throw new Error(`BlobTooLarge:${size}>${limit}`);
+  if (size > limit) throw new PayloadTooLarge('blob exceeds maximum size');
 
   const digest = await sha256.digest(new Uint8Array(body));
   const cid = CID.createV1(0x55, digest);

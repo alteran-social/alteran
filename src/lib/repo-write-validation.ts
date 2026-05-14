@@ -8,6 +8,7 @@ import { RepoManager } from '../services/repo-manager';
 import { resolveRecordBlobKeys } from '../services/repo/blob-refs';
 import { validateRawRecord } from './repo-write-data';
 import { RepoWriteError } from './repo-write-error';
+import { enforceRepoWriteLexiconConstraints } from './repo-write-blob-constraints';
 
 export { handleRepoWriteError, invalidSwap, jsonError, RepoWriteError } from './repo-write-error';
 
@@ -383,6 +384,7 @@ function validateLexiconRecord(
   if (!result.success) {
     throw new RepoWriteError('InvalidRequest', result.error?.message ?? 'invalid record');
   }
+  enforceRepoWriteLexiconConstraints(knownRecord, record);
   return 'valid';
 }
 

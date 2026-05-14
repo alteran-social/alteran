@@ -10,9 +10,13 @@ import {
 } from '../../db/dal';
 import type { RepoOp } from '../../lib/firehose/frames';
 import { RepoWriteError } from '../../lib/repo-write-error';
-import type { D1Blockstore, MST } from '../../lib/mst';
+import type { MST } from '../../lib/mst';
 import type { PreparedWrite, ValidationStatus } from '../../lib/repo-write-validation';
-import { storeMstBlocks, storeRecord } from './blockstore-ops';
+import {
+  collectUnstoredMstBlocks,
+  encodeRecordBlock,
+  type EncodedBlock,
+} from './blockstore-ops';
 import { assertBlobKeysAvailable } from './blob-refs';
 
 export interface BatchCommitResult {
@@ -41,7 +45,6 @@ type SideEffect =
 
 export async function applyPreparedWritesToRepo(
   env: Env,
-  blockstore: D1Blockstore,
   did: string,
   root: MST,
   writes: PreparedWrite[],
@@ -52,6 +55,7 @@ export async function applyPreparedWritesToRepo(
   const ops: RepoOp[] = [];
   const sideEffects: SideEffect[] = [];
   const results: BatchCommitResult['results'] = [];
+  const recordBlocks: EncodedBlock[] = [];
 
   for (const write of writes) {
     const path = `${write.collection}/${write.rkey}`;
@@ -69,7 +73,9 @@ export async function applyPreparedWritesToRepo(
     const prev = await mst.get(path);
     if (write.action === 'update') {
       if (!prev) throw new RepoWriteError('InvalidRequest', 'record does not exist');
-      const recordCid = await storeRecord(blockstore, write.record);
+      const recordBlock = await encodeRecordBlock(write.record);
+      const [recordCid] = recordBlock;
+      recordBlocks.push(recordBlock);
       mst = await mst.update(path, recordCid);
       ops.push({ action: 'update', path, cid: recordCid, prev });
       addPutEffect(sideEffects, results, uri, recordCid, write);
@@ -77,7 +83,9 @@ export async function applyPreparedWritesToRepo(
     }
 
     if (prev) throw new RepoWriteError('InvalidRequest', 'record already exists');
-    const recordCid = await storeRecord(blockstore, write.record);
+    const recordBlock = await encodeRecordBlock(write.record);
+    const [recordCid] = recordBlock;
+    recordBlocks.push(recordBlock);
     mst = await mst.add(path, recordCid);
     ops.push({ action: 'create', path, cid: recordCid });
     addPutEffect(sideEffects, results, uri, recordCid, write);
@@ -85,7 +93,7 @@ export async function applyPreparedWritesToRepo(
 
   const dereferencedBlobKeys = await findDereferencedBlobKeys(env, did, sideEffects);
   const currentRoot = await mst.getPointer();
-  const newMstBlocks = await storeMstBlocks(blockstore, mst);
+  const newMstBlocks = await collectUnstoredMstBlocks(mst);
   const requiredBlobKeys = sideEffects.flatMap((effect) =>
     effect.action === 'put' ? effect.blobKeys : [],
   );
@@ -98,6 +106,7 @@ export async function applyPreparedWritesToRepo(
     {
       ops,
       newMstBlocks: Array.from(newMstBlocks),
+      newRecordBlocks: recordBlocks,
       expectedCommitCid,
       requiredBlobKeys,
       sideEffectStatements: (guard) => sideEffects.flatMap((effect) => {

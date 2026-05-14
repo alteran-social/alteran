@@ -213,6 +213,10 @@ describe('sync blob endpoints', () => {
     expect(registered.tag).toBe('registered');
     if (registered.tag !== 'registered') throw new Error('expected blob registration');
     expect(registered.blob.mime).toBe(first.mimeType);
+    const staleUploadedAt = Date.now() - 2 * 60 * 60 * 1000;
+    await env.ALTERAN_DB.prepare(
+      'UPDATE blob SET uploaded_at = ? WHERE did = ? AND cid = ?',
+    ).bind(staleUploadedAt, env.PDS_DID, first.cid).run();
 
     const duplicate = await registerBlobRefWithQuota(
       env,
@@ -225,6 +229,7 @@ describe('sync blob endpoints', () => {
     expect(duplicate.tag).toBe('alreadyExists');
     if (duplicate.tag !== 'alreadyExists') throw new Error('expected duplicate blob');
     expect(duplicate.blob.cid).toBe(first.cid);
+    expect(duplicate.blob.uploadedAt).toBeGreaterThan(staleUploadedAt);
     let quota = await getBlobQuota(env, String(env.PDS_DID));
     expect(quota.total_bytes).toBe(first.size);
     expect(quota.blob_count).toBe(1);

@@ -140,6 +140,20 @@ describe('repo write validation', () => {
     expect((await json(unknownRequired)).error).toBe('InvalidRequest');
   });
 
+  it('enforces strict ATProto datetime fields for known records', async () => {
+    const env = await makeEnv();
+    const res = await callRoute(CreateRecord, env, {
+      repo: env.PDS_DID,
+      collection: 'app.bsky.feed.post',
+      record: postRecord('loose datetime', {
+        createdAt: '2024-01-01T00:00:00',
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    expect((await json(res)).error).toBe('InvalidRequest');
+  });
+
   it('normalizes missing type and rejects mismatched types and rkeys', async () => {
     const env = await makeEnv();
 
@@ -254,6 +268,60 @@ describe('repo write validation', () => {
     });
     expect(legacyBlob.status).toBe(400);
     expect((await json(legacyBlob)).error).toBe('InvalidRequest');
+  });
+
+  it('rejects forbidden object keys at the raw record boundary', async () => {
+    const env = await makeEnv();
+    const record = JSON.parse('{"$type":"com.example.record","__proto__":{"polluted":true}}');
+
+    const res = await callRoute(CreateRecord, env, {
+      repo: env.PDS_DID,
+      collection: 'com.example.record',
+      rkey: 'forbidden-key',
+      validate: false,
+      record,
+    });
+
+    expect(res.status).toBe(400);
+    expect((await json(res)).error).toBe('InvalidRequest');
+  });
+
+  it('enforces lexicon blob accept and maxSize constraints', async () => {
+    const env = await makeEnv();
+    const gifBlob = await rawBlob(new TextEncoder().encode('gif-ish'));
+    const gifKey = `blobs/by-cid/${gifBlob.cid}`;
+    await env.ALTERAN_BLOBS.put(gifKey, blobBody(new TextEncoder().encode('gif-ish')), {
+      httpMetadata: { contentType: 'image/gif' },
+    });
+    await putBlobRef(env, String(env.PDS_DID), gifBlob.cid, gifKey, 'image/gif', gifBlob.size);
+
+    const wrongMime = await callRoute(PutRecord, env, {
+      repo: env.PDS_DID,
+      collection: 'app.bsky.actor.profile',
+      rkey: 'self',
+      record: profileRecord({
+        avatar: { ...gifBlob.object, mimeType: 'image/gif' },
+      }),
+    });
+    expect(wrongMime.status).toBe(400);
+    expect((await json(wrongMime)).error).toBe('InvalidMimeType');
+
+    const largeBytes = new Uint8Array(1_000_001);
+    const largeBlob = await rawBlob(largeBytes);
+    const largeKey = `blobs/by-cid/${largeBlob.cid}`;
+    await env.ALTERAN_BLOBS.put(largeKey, blobBody(largeBytes), {
+      httpMetadata: { contentType: 'image/png' },
+    });
+    await putBlobRef(env, String(env.PDS_DID), largeBlob.cid, largeKey, 'image/png', largeBlob.size);
+
+    const tooLarge = await callRoute(PutRecord, env, {
+      repo: env.PDS_DID,
+      collection: 'app.bsky.actor.profile',
+      rkey: 'self',
+      record: profileRecord({ avatar: largeBlob.object }),
+    });
+    expect(tooLarge.status).toBe(413);
+    expect((await json(tooLarge)).error).toBe('BlobTooLarge');
   });
 
   it('rejects non-JSON write request content types', async () => {
