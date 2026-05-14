@@ -4,7 +4,7 @@ import type { AccountState } from '../../lib/account-state';
 export interface Client {
   webSocket: WebSocket;
   id: string;
-  cursor: number;
+  cursor: number | null;
 }
 
 export interface CommitEvent {

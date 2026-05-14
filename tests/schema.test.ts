@@ -6,6 +6,7 @@ import {
   blockstore,
   refresh_token_store,
   account,
+  app_password,
   secret,
 } from '../src/db/schema';
 
@@ -39,6 +40,13 @@ describe('Schema Tests', () => {
       expect(account.handle.notNull).toBe(true);
     });
 
+    test('app_password table requires owner, name, hash, and creation time', () => {
+      expect(app_password.did.notNull).toBe(true);
+      expect(app_password.name.notNull).toBe(true);
+      expect(app_password.passwordScrypt.notNull).toBe(true);
+      expect(app_password.createdAt.notNull).toBe(true);
+    });
+
     test('commit_log table has primary key on seq', () => {
       expect(commit_log.seq.primary).toBe(true);
     });
@@ -59,6 +67,10 @@ describe('Schema Tests', () => {
 
     test('refresh_token.expiresAt is integer', () => {
       expect(refresh_token_store.expiresAt.dataType).toBe('number');
+    });
+
+    test('app_password.createdAt is integer', () => {
+      expect(app_password.createdAt.dataType).toBe('number');
     });
 
     test('secret.updatedAt is integer', () => {

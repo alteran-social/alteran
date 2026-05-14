@@ -1,18 +1,26 @@
 import type { APIContext } from 'astro';
+import { lexicons } from '@atproto/api';
 import { readJson } from '../../lib/util';
 import { drizzle } from 'drizzle-orm/d1';
 import { login_attempts } from '../../db/schema';
 import { eq } from 'drizzle-orm';
-import { createAccount, getAccountByIdentifier, storeRefreshToken } from '../../db/account';
+import { createAccount, getAccountByIdentifier, storeRefreshToken, verifyAppPasswordForLogin } from '../../db/account';
 import { hashPassword, verifyPassword } from '../../lib/password';
 import { issueSessionTokens } from '../../lib/session-tokens';
 import { getRuntimeString } from '../../lib/secrets';
 import { buildDidDocument } from '../../lib/did-document';
+import { AuthScope } from '../../lib/auth-scope';
+import { jsonError } from '../../lib/repo-write-validation';
 
 export const prerender = false;
 
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_DURATION_SEC = 15 * 60; // 15 minutes
+
+type CreateSessionInput = {
+  identifier: string;
+  password: string;
+};
 
 export async function POST({ locals, request }: APIContext) {
   const { env } = locals.runtime;
@@ -34,13 +42,23 @@ export async function POST({ locals, request }: APIContext) {
     );
   }
 
-  const rawBody = await readJson(request).catch(() => ({}));
-  const body = (rawBody ?? {}) as { identifier?: unknown; password?: unknown };
-  const identifier: string =
-    typeof body.identifier === 'string' && body.identifier
-      ? body.identifier
-      : (await getRuntimeString(env, 'PDS_HANDLE', 'user.example')) ?? 'user.example';
-  const password = typeof body.password === 'string' ? body.password : '';
+  const rawBody = await readJson(request).catch(() => null);
+  let body: CreateSessionInput;
+  try {
+    body = lexicons.assertValidXrpcInput(
+      'com.atproto.server.createSession',
+      rawBody,
+    ) as CreateSessionInput;
+  } catch (error) {
+    return jsonError(
+      'InvalidRequest',
+      error instanceof Error ? error.message : 'invalid input',
+    );
+  }
+  const identifier = body.identifier.trim();
+  const password = body.password;
+  if (!identifier) return jsonError('InvalidRequest', 'identifier must not be empty');
+  if (!password) return jsonError('InvalidRequest', 'password must not be empty');
 
   let account = await getAccountByIdentifier(env, identifier);
   if (!account) {
@@ -59,7 +77,18 @@ export async function POST({ locals, request }: APIContext) {
     }
   }
   const passwordHash = account?.passwordScrypt ?? null;
-  const ok = !!password && !!account && (await verifyPassword(password, passwordHash));
+  const primaryPasswordOk = !!account && (await verifyPassword(password, passwordHash));
+  let ok = primaryPasswordOk;
+  let accessScope: typeof AuthScope.Access | typeof AuthScope.AppPass | typeof AuthScope.AppPassPrivileged = AuthScope.Access;
+  let appPasswordName: string | null = null;
+  if (!ok && account) {
+    const appPassword = await verifyAppPasswordForLogin(env, account.did, password);
+    if (appPassword) {
+      ok = true;
+      appPasswordName = appPassword.name;
+      accessScope = appPassword.privileged ? AuthScope.AppPassPrivileged : AuthScope.AppPass;
+    }
+  }
 
   if (!ok) {
     // Track failed attempt
@@ -111,13 +140,17 @@ export async function POST({ locals, request }: APIContext) {
   const did = (account?.did ?? (await getRuntimeString(env, 'PDS_DID', 'did:example:single-user')) ?? 'did:example:single-user');
   const handle = (account?.handle ?? (await getRuntimeString(env, 'PDS_HANDLE', identifier ?? 'user.example')) ?? (identifier ?? 'user.example'));
 
-  const { accessJwt, refreshJwt, refreshPayload, refreshExpiry } = await issueSessionTokens(env, did);
+  const { accessJwt, refreshJwt, refreshPayload, refreshExpiry } = await issueSessionTokens(
+    env,
+    did,
+    { scope: accessScope },
+  );
 
   await storeRefreshToken(env, {
     id: refreshPayload.jti,
     did,
     expiresAt: refreshExpiry,
-    appPasswordName: null,
+    appPasswordName,
   });
 
   // Build didDoc for the response (required by official API contract)

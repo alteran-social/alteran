@@ -4,6 +4,7 @@ import { CID } from 'multiformats/cid';
 import {
   encodeAccountFrame,
   encodeCommitFrame,
+  encodeErrorFrame,
   encodeIdentityFrame,
   encodeInfoFrame,
   FrameType,
@@ -119,10 +120,20 @@ describe('cid-helpers', () => {
 
 describe('frame encoders', () => {
   it('encodes #info as decodable CBOR', () => {
-    const bytes = encodeInfoFrame('OutdatedCursor', 'Cursor is ahead of current sequence');
+    const bytes = encodeInfoFrame('OutdatedCursor', 'Cursor is too old for backfill');
     const { header, body } = decodeFrame(bytes);
     expect(header).toEqual({ op: FrameType.Message, t: '#info' });
-    expect(body).toEqual({ name: 'OutdatedCursor', message: 'Cursor is ahead of current sequence' });
+    expect(body).toEqual({ name: 'OutdatedCursor', message: 'Cursor is too old for backfill' });
+  });
+
+  it('encodes FutureCursor errors as decodable CBOR', () => {
+    const bytes = encodeErrorFrame('FutureCursor', 'Cursor is ahead of current sequence');
+    const { header, body } = decodeFrame(bytes);
+    expect(header).toEqual({ op: FrameType.Error });
+    expect(body).toEqual({
+      error: 'FutureCursor',
+      message: 'Cursor is ahead of current sequence',
+    });
   });
 
   it('encodes #account', () => {

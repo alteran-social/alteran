@@ -12,6 +12,7 @@ import { InvalidToken } from './errors';
 import { getRuntimeString } from './secrets';
 import {
   getAccountByIdentifier,
+  getAppPassword,
   getRefreshToken,
   markRefreshTokenRotated,
   storeRefreshToken,
@@ -22,6 +23,7 @@ import {
   issueSessionTokens,
   computeGraceExpiry,
 } from './session-tokens';
+import { AuthScope } from './auth-scope';
 
 export type RefreshFailureCode =
   | 'AuthRequired'
@@ -147,11 +149,15 @@ async function finalizeRotation({
   // If a previous rotation already chose the next JTI we MUST reuse it so
   // a client retrying inside the grace window receives the same pair.
   const desiredJti = stored.nextId ?? undefined;
+  const scope = await accessScopeForStoredRefresh(env, stored);
+  if (!scope) {
+    return failure('InvalidToken', 'Refresh token has been revoked');
+  }
 
   const { accessJwt, refreshJwt, refreshPayload, refreshExpiry } = await issueSessionTokens(
     env,
     did,
-    { jti: desiredJti },
+    { jti: desiredJti, scope },
   );
 
   // Reuse attack detection: the stored nextId fixes what the client is
@@ -174,4 +180,14 @@ async function finalizeRotation({
   }
 
   return { tag: 'success', did, handle, accessJwt, refreshJwt };
+}
+
+async function accessScopeForStoredRefresh(
+  env: Env,
+  stored: RefreshTokenRow,
+): Promise<typeof AuthScope.Access | typeof AuthScope.AppPass | typeof AuthScope.AppPassPrivileged | null> {
+  if (!stored.appPasswordName) return AuthScope.Access;
+  const appPassword = await getAppPassword(env, stored.did, stored.appPasswordName);
+  if (!appPassword) return null;
+  return appPassword.privileged ? AuthScope.AppPassPrivileged : AuthScope.AppPass;
 }

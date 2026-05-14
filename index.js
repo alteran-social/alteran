@@ -52,7 +52,10 @@ const CORE_ROUTES = [
   { pattern: '/xrpc/com.atproto.sync.listRepos', entrypoint: './src/pages/xrpc/com.atproto.sync.listRepos.ts' },
   // Additional atproto endpoints
   { pattern: '/xrpc/com.atproto.identity.signPlcOperation', entrypoint: './src/pages/xrpc/com.atproto.identity.signPlcOperation.ts' },
+  { pattern: '/xrpc/com.atproto.server.createAppPassword', entrypoint: './src/pages/xrpc/com.atproto.server.createAppPassword.ts' },
   { pattern: '/xrpc/com.atproto.server.getServiceAuth', entrypoint: './src/pages/xrpc/com.atproto.server.getServiceAuth.ts' },
+  { pattern: '/xrpc/com.atproto.server.listAppPasswords', entrypoint: './src/pages/xrpc/com.atproto.server.listAppPasswords.ts' },
+  { pattern: '/xrpc/com.atproto.server.revokeAppPassword', entrypoint: './src/pages/xrpc/com.atproto.server.revokeAppPassword.ts' },
   // AppView proxy endpoints (bsky) — local-only where required
   { pattern: '/xrpc/app.bsky.actor.getPreferences', entrypoint: './src/pages/xrpc/app.bsky.actor.getPreferences.ts' },
   { pattern: '/xrpc/app.bsky.actor.putPreferences', entrypoint: './src/pages/xrpc/app.bsky.actor.putPreferences.ts' },
