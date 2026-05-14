@@ -163,15 +163,18 @@ export default function alteran(options = {}) {
           ? existingAlias.slice()
           : Object.entries(existingAlias).map(([find, replacement]) => ({ find, replacement }));
 
+        const cloudflareAliasKeys = [
+          '@astrojs/cloudflare/entrypoints/server',
+          '@astrojs/cloudflare/entrypoints/server.js',
+        ];
         const hasCloudflareAlias = aliasArray.some(
-          (entry) => entry && entry.find === '@astrojs/cloudflare/entrypoints/server.js'
+          (entry) => entry && cloudflareAliasKeys.includes(entry.find)
         );
 
         if (!hasCloudflareAlias) {
-          aliasArray.push({
-            find: '@astrojs/cloudflare/entrypoints/server.js',
-            replacement: cloudflareServerAdapter,
-          });
+          for (const find of cloudflareAliasKeys) {
+            aliasArray.push({ find, replacement: cloudflareServerAdapter });
+          }
         }
 
         updateConfig({
