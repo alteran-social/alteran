@@ -17,6 +17,11 @@ export function extractBlobRefs(obj: any): Set<string> {
   return refs;
 }
 
+export type LegacyBlobRef = {
+  cid: string;
+  mimeType: string;
+};
+
 /**
  * Recursively extract blob CIDs from an object
  */
@@ -59,6 +64,9 @@ function extractBlobRefsRecursive(obj: any, refs: Set<string>): void {
  */
 export function extractBskyBlobRefs(record: any): Set<string> {
   const refs = new Set<string>();
+  for (const ref of extractBskyLegacyBlobRefs(record)) {
+    refs.add(ref.cid);
+  }
 
   // Handle app.bsky.feed.post embeds
   if (record.embed) {
@@ -82,6 +90,37 @@ export function extractBskyBlobRefs(record: any): Set<string> {
   extractBlobRefsRecursive(record, refs);
 
   return refs;
+}
+
+export function extractBskyLegacyBlobRefs(record: any): LegacyBlobRef[] {
+  if (!record || typeof record !== 'object') return [];
+  if (typeof record.$type !== 'string' || !record.$type.startsWith('app.bsky.')) return [];
+
+  const refs = new Map<string, LegacyBlobRef>();
+  extractLegacyBlobRefsRecursive(record, refs);
+  return Array.from(refs.values());
+}
+
+function extractLegacyBlobRefsRecursive(obj: any, refs: Map<string, LegacyBlobRef>): void {
+  if (!obj || typeof obj !== 'object') return;
+  if (isLegacyBlobObject(obj)) {
+    refs.set(obj.cid, { cid: obj.cid, mimeType: obj.mimeType });
+    return;
+  }
+  if (obj.$type === 'blob') return;
+  if (Array.isArray(obj)) {
+    for (const item of obj) extractLegacyBlobRefsRecursive(item, refs);
+    return;
+  }
+  for (const value of Object.values(obj)) extractLegacyBlobRefsRecursive(value, refs);
+}
+
+function isLegacyBlobObject(obj: any): obj is { cid: string; mimeType: string } {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
+  const keys = Object.keys(obj).sort();
+  return keys.join('\0') === ['cid', 'mimeType'].join('\0') &&
+    typeof obj.cid === 'string' &&
+    typeof obj.mimeType === 'string';
 }
 
 /**

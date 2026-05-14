@@ -178,6 +178,15 @@ export function canAccessFullAccount(access: AuthAccessContext): boolean {
   return access.isFullAccess && !access.isTakendown && !access.isSignupQueued;
 }
 
+export function canImportRepo(access: AuthAccessContext): boolean {
+  if (access.isTakendown || access.isSignupQueued) return false;
+  if (access.isFullAccess) return true;
+  if (!access.isOAuth) return false;
+  const parts = oauthScopeParts(access.scope);
+  if (!parts) return false;
+  return parts.some(oauthPermissionAllowsRepoImport);
+}
+
 export function canUseAppPasswordLevelAccess(access: AuthAccessContext): boolean {
   if (access.isTakendown || access.isSignupQueued) return false;
   if (access.isFullAccess || access.isAppPassword) return true;
@@ -382,6 +391,13 @@ function oauthPermissionAllowsBlob(scope: string, mimeType: string): boolean {
   const parsed = parsePermissionScope(scope);
   if (!parsed || parsed.resource !== 'blob') return false;
   return parsed.accepts.some((accept) => mimeMatches(accept, mimeType));
+}
+
+function oauthPermissionAllowsRepoImport(scope: string): boolean {
+  const parsed = parsePermissionScope(scope);
+  return parsed?.resource === 'account' &&
+    parsed.attr === 'repo' &&
+    parsed.action === 'manage';
 }
 
 function oauthPermissionAllowsRpc(scope: string, lxm: string, aud: string): boolean {

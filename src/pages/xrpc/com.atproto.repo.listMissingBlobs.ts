@@ -6,7 +6,7 @@ import { canUseAppPasswordLevelAccess } from '../../lib/auth-scope';
 import { getDb } from '../../db/client';
 import { record, blob_ref } from '../../db/schema';
 import { eq } from 'drizzle-orm';
-import { extractBlobRefs } from '../../lib/blob-refs';
+import { extractBskyBlobRefs } from '../../lib/blob-refs';
 
 export const prerender = false;
 
@@ -68,7 +68,7 @@ export async function GET({ locals, request, url }: APIContext) {
     for (const rec of records) {
       try {
         const data = JSON.parse(rec.json);
-        const refs = extractBlobRefs(data);
+        const refs = extractBskyBlobRefs(data);
         refs.forEach(ref => referencedBlobs.push({ cid: ref, recordUri: rec.uri }));
       } catch {
         // Skip invalid JSON

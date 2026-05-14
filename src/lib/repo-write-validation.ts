@@ -441,7 +441,15 @@ function enforceRecordKeyPolicy(policy: unknown, rkey: string): void {
   }
 }
 
-function validateRawRecord(collection: string, value: unknown): Record<string, unknown> {
+type RawRecordValidationOptions = {
+  allowLegacyBlobObjects?: boolean;
+};
+
+export function validateRawRecord(
+  collection: string,
+  value: unknown,
+  options: RawRecordValidationOptions = {},
+): Record<string, unknown> {
   if (!isPlainObject(value)) {
     throw new RepoWriteError('InvalidRequest', 'record must be an object');
   }
@@ -451,11 +459,11 @@ function validateRawRecord(collection: string, value: unknown): Record<string, u
   } else if (record.$type !== collection) {
     throw new RepoWriteError('InvalidRequest', 'record $type must match collection');
   }
-  validateRawValue(record, 'record');
+  validateRawValue(record, 'record', options);
   return record;
 }
 
-function validateRawValue(value: unknown, path: string): void {
+function validateRawValue(value: unknown, path: string, options: RawRecordValidationOptions): void {
   if (value === null) return;
   if (typeof value === 'string' || typeof value === 'boolean') return;
   if (typeof value === 'number') {
@@ -468,7 +476,7 @@ function validateRawValue(value: unknown, path: string): void {
     return;
   }
   if (Array.isArray(value)) {
-    for (let i = 0; i < value.length; i++) validateRawValue(value[i], `${path}/${i}`);
+    for (let i = 0; i < value.length; i++) validateRawValue(value[i], `${path}/${i}`, options);
     return;
   }
   if (!isPlainObject(value)) {
@@ -485,7 +493,11 @@ function validateRawValue(value: unknown, path: string): void {
     return;
   }
   if (isLegacyBlobObject(obj)) {
-    throw new RepoWriteError('InvalidRequest', `${path} contains a legacy blob object`);
+    if (!options.allowLegacyBlobObjects) {
+      throw new RepoWriteError('InvalidRequest', `${path} contains a legacy blob object`);
+    }
+    validateLegacyBlobObject(obj, path);
+    return;
   }
   if (obj.$type === 'blob') {
     validateBlobObject(obj, path);
@@ -499,7 +511,7 @@ function validateRawValue(value: unknown, path: string): void {
     if (key === '$type' && typeof child !== 'string') {
       throw new RepoWriteError('InvalidRequest', `${path} $type must be a string`);
     }
-    validateRawValue(child, `${path}/${key}`);
+    validateRawValue(child, `${path}/${key}`, options);
   }
 }
 
@@ -574,6 +586,19 @@ function isLegacyBlobObject(obj: Record<string, unknown>): boolean {
   return keys.join('\0') === ['cid', 'mimeType'].join('\0') &&
     typeof obj.cid === 'string' &&
     typeof obj.mimeType === 'string';
+}
+
+function validateLegacyBlobObject(obj: Record<string, unknown>, path: string): void {
+  let cid;
+  try {
+    cid = CID.parse(String(obj.cid));
+  } catch {
+    throw new RepoWriteError('InvalidRequest', `${path}.cid must contain a valid CID`);
+  }
+  validateRawBlobCid(cid, path);
+  if (typeof obj.mimeType !== 'string' || obj.mimeType.length === 0) {
+    throw new RepoWriteError('InvalidRequest', `${path}.mimeType must be non-empty`);
+  }
 }
 
 function validateDataCid(cid: CID, path: string): void {
