@@ -15,7 +15,7 @@ import {
 import { assertRepoHead, bumpRoot } from '../db/repo';
 import { generateTid } from '../lib/commit';
 import { resolveSecret } from '../lib/secrets';
-import { storeRecord, storeMstBlocks, cidForRecord } from './repo/blockstore-ops';
+import { collectMstBlocks, encodeRecordBlock } from './repo/blockstore-ops';
 import { extractOps as extractOpsImpl } from './repo/operations';
 import { ServerMisconfigured } from '../lib/errors';
 import {
@@ -27,6 +27,7 @@ import {
 interface RecordMutation {
   mst: MST;
   recordCid: CID;
+  recordBlock: [CID, Uint8Array];
   prevMstRoot: CID | null;
   newMstBlocks: BlockMap;
 }
@@ -133,7 +134,6 @@ export class RepoManager {
 
     console.log('[RepoManager] Creating new empty MST');
     const mst = await MST.create(this.blockstore, []);
-    await storeMstBlocks(this.blockstore, mst);
     const pointer = await mst.getPointer();
     console.log(`[RepoManager] Created new MST root: ${pointer.toString()}`);
     return mst;
@@ -147,10 +147,16 @@ export class RepoManager {
     const key = `${collection}/${rkey}`;
     const currentMst = await this.getOrCreateRoot();
     const prevMstRoot = await currentMst.getPointer();
-    const recordCid = await storeRecord(this.blockstore, record);
+    const { cid: recordCid, bytes: recordBytes } = await encodeRecordBlock(record);
     const newMst = await currentMst.add(key, recordCid);
-    const newMstBlocks = await storeMstBlocks(this.blockstore, newMst);
-    return { mst: newMst, recordCid, prevMstRoot, newMstBlocks };
+    const newMstBlocks = await collectMstBlocks(this.blockstore, newMst);
+    return {
+      mst: newMst,
+      recordCid,
+      recordBlock: [recordCid, recordBytes],
+      prevMstRoot,
+      newMstBlocks,
+    };
   }
 
   async createRecord(
@@ -161,7 +167,7 @@ export class RepoManager {
     expectedCommitCid?: string | null,
   ): Promise<CommitResult> {
     const key = rkey ?? generateTid();
-    const { mst, recordCid, prevMstRoot, newMstBlocks } = await this.addRecord(
+    const { mst, recordCid, recordBlock, prevMstRoot, newMstBlocks } = await this.addRecord(
       collection,
       key,
       record,
@@ -179,6 +185,8 @@ export class RepoManager {
       currentRoot,
       {
         newMstBlocks: Array.from(newMstBlocks),
+        newRecordBlocks: [recordBlock],
+        ops: [{ action: 'create', path: `${collection}/${key}`, cid: recordCid }],
         expectedCommitCid,
         requiredBlobKeys: effectiveBlobKeys,
         sideEffectStatements: (guard) => [
@@ -214,10 +222,16 @@ export class RepoManager {
     const key = `${collection}/${rkey}`;
     const currentMst = await this.getOrCreateRoot();
     const prevMstRoot = await currentMst.getPointer();
-    const recordCid = await storeRecord(this.blockstore, record);
+    const { cid: recordCid, bytes: recordBytes } = await encodeRecordBlock(record);
     const newMst = await currentMst.update(key, recordCid);
-    const newMstBlocks = await storeMstBlocks(this.blockstore, newMst);
-    return { mst: newMst, recordCid, prevMstRoot, newMstBlocks };
+    const newMstBlocks = await collectMstBlocks(this.blockstore, newMst);
+    return {
+      mst: newMst,
+      recordCid,
+      recordBlock: [recordCid, recordBytes],
+      prevMstRoot,
+      newMstBlocks,
+    };
   }
 
   async putRecord(
@@ -231,7 +245,7 @@ export class RepoManager {
     const currentMst = await this.getOrCreateRoot();
     const prevMstRoot = await currentMst.getPointer();
     const existingCid = await currentMst.get(key);
-    const recordCid = await cidForRecord(record);
+    const { cid: recordCid, bytes: recordBytes } = await encodeRecordBlock(record);
     const did = await this.getDid();
     const effectiveBlobKeys = blobKeys ?? await resolveRecordBlobKeys(this.env, did, record);
     const uri = `at://${did}/${collection}/${rkey}`;
@@ -241,11 +255,10 @@ export class RepoManager {
     }
 
     const previousBlobKeys = await getRecordBlobKeys(this.env, did, uri);
-    await storeRecord(this.blockstore, record);
     const mst = existingCid
       ? await currentMst.update(key, recordCid)
       : await currentMst.add(key, recordCid);
-    const newMstBlocks = await storeMstBlocks(this.blockstore, mst);
+    const newMstBlocks = await collectMstBlocks(this.blockstore, mst);
     const currentRoot = await mst.getPointer();
     await assertBlobKeysAvailable(this.env, did, effectiveBlobKeys);
     const { commitCid, rev, ops, commitData, sig, blocks } = await bumpRoot(
@@ -254,6 +267,13 @@ export class RepoManager {
       currentRoot,
       {
         newMstBlocks: Array.from(newMstBlocks),
+        newRecordBlocks: [[recordCid, recordBytes]],
+        ops: [{
+          action: existingCid ? 'update' : 'create',
+          path: key,
+          cid: recordCid,
+          ...(existingCid ? { prev: existingCid } : {}),
+        }],
         expectedCommitCid,
         requiredBlobKeys: effectiveBlobKeys,
         sideEffectStatements: (guard) => [
@@ -300,6 +320,7 @@ export class RepoManager {
       | { action: 'put'; uri: string; cid: string; record: unknown; blobKeys: string[] }
       | { action: 'delete'; uri: string }
     > = [];
+    const recordBlocks: Array<[CID, Uint8Array]> = [];
     const results: BatchCommitResult['results'] = [];
 
     for (const write of writes) {
@@ -321,7 +342,8 @@ export class RepoManager {
       const prev = await mst.get(path);
       if (write.action === 'update') {
         if (!prev) throw new RepoWriteError('InvalidRequest', 'record does not exist');
-        const recordCid = await storeRecord(this.blockstore, write.record);
+        const { cid: recordCid, bytes: recordBytes } = await encodeRecordBlock(write.record);
+        recordBlocks.push([recordCid, recordBytes]);
         mst = await mst.update(path, recordCid);
         ops.push({ action: 'update', path, cid: recordCid, prev });
         const cid = recordCid.toString();
@@ -342,7 +364,8 @@ export class RepoManager {
       }
 
       if (prev) throw new RepoWriteError('InvalidRequest', 'record already exists');
-      const recordCid = await storeRecord(this.blockstore, write.record);
+      const { cid: recordCid, bytes: recordBytes } = await encodeRecordBlock(write.record);
+      recordBlocks.push([recordCid, recordBytes]);
       mst = await mst.add(path, recordCid);
       ops.push({ action: 'create', path, cid: recordCid });
       const cid = recordCid.toString();
@@ -393,7 +416,7 @@ export class RepoManager {
     );
 
     const currentRoot = await mst.getPointer();
-    const newMstBlocks = await storeMstBlocks(this.blockstore, mst);
+    const newMstBlocks = await collectMstBlocks(this.blockstore, mst);
     await assertBlobKeysAvailable(
       this.env,
       did,
@@ -406,6 +429,7 @@ export class RepoManager {
       {
         ops,
         newMstBlocks: Array.from(newMstBlocks),
+        newRecordBlocks: recordBlocks,
         expectedCommitCid,
         requiredBlobKeys: sideEffects.flatMap((effect) =>
           effect.action === 'put' ? effect.blobKeys : [],
@@ -421,9 +445,9 @@ export class RepoManager {
             ...putRecordStatements(this.env, {
               uri: effect.uri,
               did,
-            cid: effect.cid,
-            json: JSON.stringify(effect.record),
-          }, guard),
+              cid: effect.cid,
+              json: JSON.stringify(effect.record),
+            }, guard),
             ...setRecordBlobUsageStatements(this.env, did, effect.uri, effect.blobKeys, guard),
           ];
         }),
@@ -453,7 +477,7 @@ export class RepoManager {
     const currentCid = await currentMst.get(key);
     if (!currentCid) throw new RepoWriteError('InvalidRequest', 'record does not exist');
     const newMst = await currentMst.delete(key);
-    const newMstBlocks = await storeMstBlocks(this.blockstore, newMst);
+    const newMstBlocks = await collectMstBlocks(this.blockstore, newMst);
 
     const did = await this.getDid();
     const uri = `at://${did}/${collection}/${rkey}`;

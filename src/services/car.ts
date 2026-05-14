@@ -175,22 +175,28 @@ export async function encodeBlocksForCommit(
   ops: Array<{ path: string; cid: CID | null }>,
   newMstBlocks?: Array<[CID, Uint8Array]>,
   commitBlock?: Uint8Array,
+  newRecordBlocks?: Array<[CID, Uint8Array]>,
 ): Promise<Uint8Array> {
   const blockstore = new D1Blockstore(env);
   const blocks: { cid: CID; bytes: Uint8Array }[] = [];
   const seen = new Set<string>();
+  const stagedBlocks = new Map<string, Uint8Array>();
+  for (const [cid, bytes] of newMstBlocks ?? []) {
+    stagedBlocks.set(cid.toString(), bytes);
+  }
+  for (const [cid, bytes] of newRecordBlocks ?? []) {
+    stagedBlocks.set(cid.toString(), bytes);
+  }
+  if (commitBlock) {
+    stagedBlocks.set(commitCid.toString(), commitBlock);
+  }
 
   // Helper to add block if not already seen
   const addBlock = async (cid: CID) => {
     const cidStr = cid.toString();
     if (seen.has(cidStr)) return;
     seen.add(cidStr);
-    let bytes = await blockstore.get(cid);
-    if (!bytes) {
-      if (cidStr === commitCid.toString() && commitBlock) {
-        bytes = commitBlock;
-      }
-    }
+    let bytes = stagedBlocks.get(cidStr) ?? await blockstore.get(cid);
     if (!bytes) {
       // Attempt to reconstruct commit block from commit_log if this is the commit cid
       if (cidStr === commitCid.toString()) {
