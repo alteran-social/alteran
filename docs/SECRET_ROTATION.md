@@ -86,6 +86,9 @@ Secret rotation is a critical security practice. This guide covers rotation proc
    curl "https://your-pds.example.com/xrpc/com.atproto.sync.getRepo?did=<your-did>" \
      -o backup-$(date +%Y%m%d).car
    ```
+   For a complete service backup before rotation, follow
+   [`BACKUP_RESTORE.md`](BACKUP_RESTORE.md); a CAR file does not include R2
+   blobs, sessions, token revocation state, or private operational state.
 
 3. **Set new signing key**:
    ```bash
@@ -227,6 +230,10 @@ If a secret is compromised:
 3. **Force re-authentication** for all users
 4. **Audit logs** for suspicious activity
 5. **Notify users** if data may have been accessed
+
+If secret compromise coincides with data loss or service instability, switch to
+the incident flow in [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md) and restore
+from a known-good backup before returning traffic.
 
 ## Checklist
 

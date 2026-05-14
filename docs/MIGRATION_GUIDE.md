@@ -17,6 +17,8 @@ This guide focuses on **Path B** - migrating your existing account.
 - You have admin access to your current PDS (or backups of your data)
 - You control DNS for your domain
 - You have configured all required secrets (see [Configuration](#configuration))
+- You have reviewed the [backup and restore runbook](BACKUP_RESTORE.md) if
+  migrating from a local backup rather than a live old PDS
 
 ## Terminology
 
@@ -213,6 +215,10 @@ If migration fails:
 2. Fix issues on new PDS
 3. Re-run migration steps
 4. Don't activate new PDS until fully verified
+
+If the old PDS is unavailable and you are restoring from local backups, follow
+[`BACKUP_RESTORE.md`](BACKUP_RESTORE.md) first, then return to the migration
+verification steps above.
 
 ## Security Notes
 
