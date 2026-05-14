@@ -1,12 +1,12 @@
 import { describe, it } from "./helpers/bdd";
 import { expect } from "@std/expect";
-import { normalizePdsRequestForAstro, normalizeXrpcRequestForAstro } from '../src/worker/runtime';
+import { normalizePdsRequestForAstro } from '../src/worker/normalize-request';
 
-describe('normalizeXrpcRequestForAstro', () => {
+describe('normalizePdsRequestForAstro', () => {
   it('leaves non-XRPC requests unchanged', () => {
     const request = new Request('https://rawkode.dev/health', { method: 'POST' });
 
-    expect(normalizeXrpcRequestForAstro(request as any) as unknown).toBe(request);
+    expect(normalizePdsRequestForAstro(request as any) as unknown).toBe(request);
   });
 
   it('adds a same-origin Origin header to bodyless XRPC POSTs', () => {
@@ -14,7 +14,7 @@ describe('normalizeXrpcRequestForAstro', () => {
       method: 'POST',
     });
 
-    const normalized = normalizeXrpcRequestForAstro(request as any) as unknown as Request;
+    const normalized = normalizePdsRequestForAstro(request as any) as unknown as Request;
 
     expect(normalized.headers.get('origin')).toBe('https://rawkode.dev');
     expect(normalized.method).toBe('POST');
@@ -26,7 +26,7 @@ describe('normalizeXrpcRequestForAstro', () => {
       headers: { origin: 'https://bsky.app' },
     });
 
-    const normalized = normalizeXrpcRequestForAstro(request as any) as unknown as Request;
+    const normalized = normalizePdsRequestForAstro(request as any) as unknown as Request;
 
     expect(normalized.headers.get('origin')).toBe('https://rawkode.dev');
   });
@@ -38,7 +38,7 @@ describe('normalizeXrpcRequestForAstro', () => {
       body: '{"collection":"app.bsky.feed.post"}',
     });
 
-    const normalized = normalizeXrpcRequestForAstro(request as any) as unknown as Request;
+    const normalized = normalizePdsRequestForAstro(request as any) as unknown as Request;
 
     expect(normalized.headers.get('origin')).toBe('https://rawkode.dev');
     expect(await normalized.text()).toBe('{"collection":"app.bsky.feed.post"}');
@@ -69,10 +69,10 @@ describe('normalizeXrpcRequestForAstro', () => {
     expect(normalizePdsRequestForAstro(request as any) as unknown).toBe(request);
   });
 
-  it('keeps the legacy XRPC normalization export working', () => {
+  it('normalizes OAuth token POST origins for Astro', () => {
     const request = new Request('https://rawkode.dev/oauth/token', { method: 'POST' });
 
-    const normalized = normalizeXrpcRequestForAstro(request as any) as unknown as Request;
+    const normalized = normalizePdsRequestForAstro(request as any) as unknown as Request;
 
     expect(normalized.headers.get('origin')).toBe('https://rawkode.dev');
   });
