@@ -47,7 +47,7 @@ async function issueOauthAccess(env: any, key: Awaited<ReturnType<typeof makeDpo
     env,
     did,
     {
-      scope: 'atproto transition:generic',
+      accessScope: 'atproto transition:generic',
       clientId,
       dpopJkt: key.jkt,
       oauthSessionId: sessionId,
@@ -119,7 +119,7 @@ describe('ATProto auth scopes', () => {
     const env = await makeEnv();
 
     const { accessJwt: appPass } = await issueSessionTokens(env, did, {
-      scope: AuthScope.AppPass,
+      accessScope: AuthScope.AppPass,
     });
     const appPassAuth = await authenticateRequest(
       new Request('https://pds.example/xrpc/app.bsky.actor.getPreferences', {
@@ -134,7 +134,7 @@ describe('ATProto auth scopes', () => {
     });
 
     const { accessJwt: privileged } = await issueSessionTokens(env, did, {
-      scope: AuthScope.AppPassPrivileged,
+      accessScope: AuthScope.AppPassPrivileged,
     });
     const privilegedAuth = await authenticateRequest(
       new Request('https://pds.example/xrpc/app.bsky.actor.getPreferences', {
@@ -187,7 +187,7 @@ describe('ATProto auth scopes', () => {
 
   it('rejects unknown bearer access scopes instead of treating them as full access', async () => {
     const env = await makeEnv();
-    await expect(issueSessionTokens(env, did, { scope: 'mystery.scope' }))
+    await expect(issueSessionTokens(env, did, { accessScope: 'mystery.scope' }))
       .rejects.toThrow('Invalid access token scope');
 
     const token = await signAccessWithScope(env, 'mystery.scope');
@@ -217,7 +217,7 @@ describe('ATProto auth scopes', () => {
     });
 
     const { accessJwt: takendownScopeJwt } = await issueSessionTokens(takendownEnv, did, {
-      scope: AuthScope.Takendown,
+      accessScope: AuthScope.Takendown,
     });
     const takendownScopeAuth = await authenticateRequest(
       new Request('https://pds.example/xrpc/com.atproto.server.getSession', {
@@ -298,7 +298,7 @@ describe('ATProto auth scopes', () => {
     expect(fullResponse.status).toBe(200);
 
     const { accessJwt: appPass } = await issueSessionTokens(env, did, {
-      scope: AuthScope.AppPass,
+      accessScope: AuthScope.AppPass,
     });
     const appPassResponse = await requestPlcOperationSignature(apiContext(env, new Request(
       'https://pds.example/xrpc/com.atproto.identity.requestPlcOperationSignature',
@@ -307,7 +307,7 @@ describe('ATProto auth scopes', () => {
     expect(appPassResponse.status).toBe(401);
 
     const { accessJwt: signupQueued } = await issueSessionTokens(env, did, {
-      scope: AuthScope.SignupQueued,
+      accessScope: AuthScope.SignupQueued,
     });
     const signupQueuedResponse = await requestPlcOperationSignature(apiContext(env, new Request(
       'https://pds.example/xrpc/com.atproto.identity.requestPlcOperationSignature',

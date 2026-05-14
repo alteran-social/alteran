@@ -18,7 +18,7 @@ async function issueOauthRefresh(env: any, key: Awaited<ReturnType<typeof makeDp
   const sessionId = crypto.randomUUID().replace(/-/g, '');
   const accessJti = crypto.randomUUID().replace(/-/g, '');
   const { accessJwt, refreshJwt, accessPayload, refreshPayload, refreshExpiry } = await issueSessionTokens(env, 'did:example:test', {
-    scope: 'atproto',
+    accessScope: 'atproto',
     clientId,
     dpopJkt: key.jkt,
     oauthSessionId: sessionId,

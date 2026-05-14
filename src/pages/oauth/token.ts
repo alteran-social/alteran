@@ -91,7 +91,7 @@ export async function POST({ locals, request }: APIContext) {
       const sessionId = crypto.randomUUID().replace(/-/g, '');
       const accessJti = crypto.randomUUID().replace(/-/g, '');
       const { accessJwt, refreshJwt, accessPayload, refreshPayload, refreshExpiry } = await issueSessionTokens(env, rec.did, {
-        scope: rec.scope,
+        accessScope: rec.scope,
         clientId: rec.client_id,
         dpopJkt: rec.dpopJkt,
         oauthSessionId: sessionId,
@@ -184,7 +184,7 @@ export async function POST({ locals, request }: APIContext) {
 
       const accessJti = crypto.randomUUID().replace(/-/g, '');
       const { accessJwt, refreshJwt, accessPayload, refreshPayload, refreshExpiry } = await issueSessionTokens(env, session.did, {
-        scope: session.scope,
+        accessScope: session.scope,
         clientId: session.clientId,
         dpopJkt: session.dpopJkt,
         oauthSessionId: session.id,

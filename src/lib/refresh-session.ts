@@ -17,11 +17,13 @@ import {
   storeRefreshToken,
   type RefreshTokenRow,
 } from '../db/account';
+import { findAppPasswordByName } from '../db/app-password';
 import {
   verifyRefreshToken,
   issueSessionTokens,
   computeGraceExpiry,
 } from './session-tokens';
+import { AuthScope } from './auth-scope';
 
 export type RefreshFailureCode =
   | 'AuthRequired'
@@ -148,10 +150,19 @@ async function finalizeRotation({
   // a client retrying inside the grace window receives the same pair.
   const desiredJti = stored.nextId ?? undefined;
 
+  let accessScope: string = AuthScope.Access;
+  if (stored.appPasswordName) {
+    const appPassword = await findAppPasswordByName(env, stored.did, stored.appPasswordName);
+    if (!appPassword) {
+      return failure('InvalidToken', 'Refresh token has been revoked');
+    }
+    accessScope = appPassword.privileged ? AuthScope.AppPassPrivileged : AuthScope.AppPass;
+  }
+
   const { accessJwt, refreshJwt, refreshPayload, refreshExpiry } = await issueSessionTokens(
     env,
     did,
-    { jti: desiredJti },
+    { jti: desiredJti, accessScope },
   );
 
   // Reuse attack detection: the stored nextId fixes what the client is

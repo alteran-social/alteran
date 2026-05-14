@@ -26,7 +26,7 @@ function decodeJwtPayload(token: string): Record<string, any> {
 }
 
 async function bearerToken(env: any, scope: string = AuthScope.Access): Promise<string> {
-  return (await issueSessionTokens(env, did, { scope })).accessJwt;
+  return (await issueSessionTokens(env, did, { accessScope: scope })).accessJwt;
 }
 
 async function oauthToken(
@@ -40,7 +40,7 @@ async function oauthToken(
     env,
     did,
     {
-      scope,
+      accessScope: scope,
       clientId,
       dpopJkt: key.jkt,
       oauthSessionId: sessionId,

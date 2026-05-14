@@ -8,15 +8,15 @@
 This repository now ships an Astro integration that turns any Cloudflare Worker-backed Astro app into a single-user ATProto Personal Data Server. Install the package (or link it locally), then add the integration to your `astro.config.mjs`:
 
 ```bash
-npm install @alteran/astro
+npm install @alteran-social/astro
 # or, in a Deno project
-deno add npm:@alteran/astro
+deno add npm:@alteran-social/astro
 ```
 
 ```ts
 import { defineConfig } from 'astro/config';
 import cloudflare from '@astrojs/cloudflare';
-import alteran from '@alteran/astro';
+import alteran from '@alteran-social/astro';
 
 export default defineConfig({
   adapter: cloudflare({ mode: 'advanced' }),
@@ -49,7 +49,7 @@ The integration no longer overrides `build.serverEntry` by default. If you need 
 
 ```ts
 // src/_worker.ts in your Astro project
-import { createPdsFetchHandler, Sequencer } from '@alteran/astro/worker';
+import { createPdsFetchHandler, Sequencer } from '@alteran-social/astro/worker';
 
 const fetch = createPdsFetchHandler();
 
@@ -62,7 +62,7 @@ export { Sequencer };
 export { MyDurableObject } from './worker/my-durable-object';
 ```
 
-Helpers like `onRequest`, `seed`, and `validateConfigOrThrow` are also exported from `@alteran/astro/worker` if you need to build more advanced wrappers (for example, to add request instrumentation before delegating to the PDS handler).
+Helpers like `onRequest`, `seed`, and `validateConfigOrThrow` are also exported from `@alteran-social/astro/worker` if you need to build more advanced wrappers (for example, to add request instrumentation before delegating to the PDS handler).
 
 To install dependencies:
 

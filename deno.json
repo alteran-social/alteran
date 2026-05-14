@@ -1,6 +1,6 @@
 {
-  "name": "@alteran-social/alteran",
-  "version": "0.8.5",
+  "name": "@alteran-social/astro",
+  "version": "0.9.0",
   "exports": "./mod.ts",
   "publish": {
     "include": [

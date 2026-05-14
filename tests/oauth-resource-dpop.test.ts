@@ -22,7 +22,7 @@ async function issueOAuthAccess(
   const sessionId = crypto.randomUUID().replace(/-/g, '');
   const accessJti = crypto.randomUUID().replace(/-/g, '');
   const { accessJwt, refreshPayload, refreshExpiry, accessPayload } = await issueSessionTokens(env, 'did:example:test', {
-    scope,
+    accessScope: scope,
     clientId: 'https://client.example/metadata',
     dpopJkt: key.jkt,
     oauthSessionId: sessionId,

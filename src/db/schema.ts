@@ -154,5 +154,18 @@ export const account_state = sqliteTable('account_state', {
   created_at: integer('created_at').notNull(),
 });
 
+export const app_password = sqliteTable('app_password', {
+  did: text('did').notNull(),
+  name: text('name').notNull(),
+  passwordScrypt: text('password_scrypt').notNull(),
+  privileged: integer('privileged', { mode: 'boolean' }).notNull().default(false),
+  createdAt: integer('created_at', { mode: 'number' }).notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.did, table.name] }),
+  didIdx: index('app_password_did_idx').on(table.did),
+}));
+
+export type AppPasswordRow = typeof app_password.$inferSelect;
+
 export type RecordRow = typeof record.$inferSelect;
 export type NewRecordRow = typeof record.$inferInsert;

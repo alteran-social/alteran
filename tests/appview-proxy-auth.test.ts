@@ -41,7 +41,7 @@ async function issueOauthAccess(
     env,
     did,
     {
-      scope,
+      accessScope: scope,
       clientId,
       dpopJkt: key.jkt,
       oauthSessionId: sessionId,
