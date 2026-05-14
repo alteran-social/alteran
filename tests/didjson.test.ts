@@ -1,6 +1,6 @@
 import { describe, it } from "./helpers/bdd";
 import { expect } from "@std/expect";
-import * as Did from '../src/pages/.well-known/did.json.ts';
+import * as Did from '../src/entrypoints/well-known/did.json.ts';
 
 function b64(u8: Uint8Array): string {
   let s = '';
