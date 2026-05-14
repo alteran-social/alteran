@@ -131,12 +131,10 @@ export default function alteran(options = {}) {
   const {
     debugRoutes = false,
     includeRootEndpoint = false,
-    injectServerEntry = false,
   } = options;
 
   const middlewareEntrypoint = resolvePackagePath('./src/middleware.ts');
-  const serverEntrypoint = resolvePackagePath('./src/_worker.ts');
-  const cloudflareServerAdapter = resolvePackagePath('./src/entrypoints/server.ts');
+  const cloudflareServerAdapter = resolvePackagePath('./src/_worker.ts');
 
   const routes = CORE_ROUTES.slice();
   if (includeRootEndpoint) {
@@ -154,6 +152,12 @@ export default function alteran(options = {}) {
           updateConfig({ output: 'server' });
         }
 
+        // Replace the cloudflare adapter's entrypoint with alteran's wrapper.
+        // The wrapper imports `handle` from `@astrojs/cloudflare/handler` and
+        // composes PDS concerns (CORS preflight, Sequencer routing, config
+        // validation, relay notification) ahead of Astro's render pipeline.
+        // It also exports `Sequencer` so the Durable Object class lands in the
+        // built worker bundle for Wrangler to bind.
         const existingAlias = config.vite?.resolve?.alias ?? [];
         const aliasArray = Array.isArray(existingAlias)
           ? existingAlias.slice()
@@ -170,68 +174,13 @@ export default function alteran(options = {}) {
           });
         }
 
-        const vitePlugins = Array.isArray(config.vite?.plugins)
-          ? config.vite.plugins.slice().filter(Boolean)
-          : [];
-
-        vitePlugins.push({
-          name: 'alteran-sequencer-export',
-          enforce: 'post',
-          apply: 'build',
-          transform(code, id) {
-            if (code.includes("_exports['Sequencer']") || code.includes('_exports.Sequencer')) {
-              return null;
-            }
-
-            // Astro 6: virtual:astro:legacy-ssr-entry — the resolved id is `\0virtual:astro:legacy-ssr-entry`.
-            // The body is a thin wrapper that re-exports `_exports.default`; we tack on a named Sequencer export.
-            if (id.includes('virtual:astro:legacy-ssr-entry')) {
-              return {
-                code: `${code}\nexport const Sequencer = _exports['Sequencer'];\n`,
-                map: null,
-              };
-            }
-
-            // Astro 5: @astrojs-ssr-virtual-entry — the body assigns `_exports` and exports a default; patch both.
-            if (id.includes('@astrojs-ssr-virtual-entry')) {
-              if (!code.includes('const _exports = createExports')) return null;
-              const withSequencer = code.replace(
-                'const __astrojsSsrVirtualEntry = _exports.default;',
-                "const Sequencer = _exports['Sequencer'];\nconst __astrojsSsrVirtualEntry = _exports.default;",
-              );
-              if (withSequencer === code) return null;
-              const reexported = withSequencer.replace(
-                'export { __astrojsSsrVirtualEntry as default, pageMap };',
-                'export { Sequencer, __astrojsSsrVirtualEntry as default, pageMap };',
-              );
-              return { code: reexported, map: null };
-            }
-
-            return null;
-          },
-        });
-
         updateConfig({
           vite: {
             resolve: {
               alias: aliasArray,
             },
-            plugins: vitePlugins,
           },
         });
-
-        if (injectServerEntry) {
-          if (config.build?.serverEntry && config.build.serverEntry !== serverEntrypoint) {
-            logger.info(
-              '[alteran] Overriding existing build.serverEntry with the packaged worker entry. Pass { injectServerEntry: false } to opt out.'
-            );
-          }
-          updateConfig({
-            build: {
-              serverEntry: serverEntrypoint,
-            },
-          });
-        }
 
         addMiddleware({
           entrypoint: middlewareEntrypoint,

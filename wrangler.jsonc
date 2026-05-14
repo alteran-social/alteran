@@ -3,6 +3,7 @@
   "name": "alteran",
   "main": "src/_worker.ts",
   "compatibility_date": "2025-09-27",
+  "compatibility_flags": ["nodejs_compat"],
   // Base vars apply when running `wrangler dev`/`wrangler deploy` without
   // `--env`. Identity (PDS_DID/PDS_HANDLE/PDS_HOSTNAME) belongs to the
   // per-environment blocks below so a fork can configure dev/staging/prod

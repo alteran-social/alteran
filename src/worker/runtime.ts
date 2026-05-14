@@ -1,9 +1,9 @@
+import { handle } from '@astrojs/cloudflare/handler';
 import { seed } from '../db/seed';
 import { validateConfigOrThrow } from '../lib/config';
 import { resolveEnvSecrets } from '../lib/secrets';
 import { notifyRelaysIfNeeded } from '../lib/relay';
 import type { Env } from '../env';
-import type { SSRManifest } from 'astro';
 import type {
   ExecutionContext,
   Request as WorkersRequest,
@@ -16,19 +16,11 @@ export type PdsFetchHandler = (
   ctx: ExecutionContext
 ) => Promise<WorkersResponse>;
 
-export interface CreatePdsFetchHandlerOptions {
-  /**
-   * Optionally pass the host project's manifest when composing the worker manually.
-   * When omitted, the integration will load the manifest lazily from the build output.
-   */
-  manifest?: SSRManifest;
-}
-
 /**
  * Returns the Alteran PDS Worker fetch handler so downstream apps can
  * compose it inside their own Cloudflare Worker entrypoint.
  */
-export function createPdsFetchHandler(options?: CreatePdsFetchHandlerOptions): PdsFetchHandler {
+export function createPdsFetchHandler(): PdsFetchHandler {
   return async function fetch(request: WorkersRequest, env: Env, ctx: ExecutionContext) {
     // Resolve any Secret Store bindings to strings so downstream code can
     // treat secrets uniformly regardless of source (Secret or Secret Store).
@@ -139,8 +131,11 @@ export function createPdsFetchHandler(options?: CreatePdsFetchHandlerOptions): P
       return (await stub.fetch(request as any)) as unknown as WorkersResponse;
     }
 
-    const astroFetch = await getAstroFetch(options);
-    const response = await astroFetch(normalizePdsRequestForAstro(request), resolvedEnv as any, ctx);
+    const response = await handle(
+      normalizePdsRequestForAstro(request) as any,
+      resolvedEnv as any,
+      ctx as any,
+    );
     return response as unknown as WorkersResponse;
   };
 }
@@ -175,49 +170,6 @@ export function normalizePdsRequestForAstro(request: WorkersRequest): WorkersReq
 }
 
 export const normalizeXrpcRequestForAstro = normalizePdsRequestForAstro;
-
-type AstroFetchHandler = (
-  request: WorkersRequest,
-  env: Env,
-  ctx: ExecutionContext
-) => Promise<WorkersResponse>;
-
-let cachedFetchPromise: Promise<AstroFetchHandler> | undefined;
-
-async function loadAstroFetchFromManifest(manifest: SSRManifest): Promise<AstroFetchHandler> {
-  const { App } = await import('astro/app');
-  const { handle } = await import('@astrojs/cloudflare/handler');
-  const app = new App(manifest);
-  return async (
-    request: WorkersRequest,
-    env: Env,
-    ctx: ExecutionContext,
-  ) =>
-    (await handle(
-      manifest,
-      app,
-      request as any,
-      env as any,
-      ctx as any,
-    )) as unknown as WorkersResponse;
-}
-
-async function getAstroFetch(options?: CreatePdsFetchHandlerOptions): Promise<AstroFetchHandler> {
-  if (options?.manifest) {
-    return loadAstroFetchFromManifest(options.manifest);
-  }
-
-  if (!cachedFetchPromise) {
-    cachedFetchPromise = (async () => {
-      const moduleSpecifier = '@astrojs-manifest';
-      const mod = await import(/* @vite-ignore */ moduleSpecifier);
-      const manifest = (mod as any).manifest as SSRManifest;
-      return loadAstroFetchFromManifest(manifest);
-    })();
-  }
-
-  return cachedFetchPromise;
-}
 
 export { onRequest } from '../middleware';
 export { seed };
