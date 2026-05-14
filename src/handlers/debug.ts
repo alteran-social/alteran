@@ -1,8 +1,11 @@
 import type { APIContext } from 'astro';
 import { putRecord as dalPutRecord, getRecord as dalGetRecord } from '../db/dal';
+import { debugNotFound, isDebugRouteAllowed } from '../lib/debug-routes';
 
 export async function POST_db_bootstrap(ctx: APIContext) {
   const env: any = (ctx.locals as any).runtime?.env ?? (ctx.locals as any) ?? (globalThis as any);
+  if (!isDebugRouteAllowed(env, ctx.request)) return debugNotFound();
+
   const db = env.ALTERAN_DB;
   await db.exec("CREATE TABLE IF NOT EXISTS record (uri TEXT PRIMARY KEY, cid TEXT NOT NULL, json TEXT NOT NULL, created_at INTEGER DEFAULT (strftime('%s','now')));");
   await db.exec("CREATE TABLE IF NOT EXISTS blob (cid TEXT PRIMARY KEY, key TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL);");
@@ -15,6 +18,8 @@ export async function POST_db_bootstrap(ctx: APIContext) {
 
 export async function POST_record(ctx: APIContext) {
   const env: any = (ctx.locals as any).runtime?.env ?? (ctx.locals as any) ?? (globalThis as any);
+  if (!isDebugRouteAllowed(env, ctx.request)) return debugNotFound();
+
   const body: any = await ctx.request.json().catch(() => ({} as any));
   const uri = body.uri;
   if (!uri) return new Response('missing uri', { status: 400 });
@@ -25,6 +30,8 @@ export async function POST_record(ctx: APIContext) {
 
 export async function GET_record(ctx: APIContext) {
   const env: any = (ctx.locals as any).runtime?.env ?? (ctx.locals as any) ?? (globalThis as any);
+  if (!isDebugRouteAllowed(env, ctx.request)) return debugNotFound();
+
   const url = new URL(ctx.request.url);
   const uri = url.searchParams.get('uri');
   if (!uri) return new Response('missing uri', { status: 400 });

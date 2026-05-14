@@ -37,21 +37,6 @@ export async function isAuthorized(request: Request, env: Env): Promise<boolean>
     throw error;
   }
 
-  const token = bearerToken(request);
-  if (!token) {
-    return false;
-  }
-
-  // Back-compat local escape hatch if explicitly enabled
-  const allowDev = (env as any).PDS_ALLOW_DEV_TOKEN === '1';
-
-  if (allowDev && token === 'dev-access-token') {
-    return true;
-  }
-  if (allowDev && env.USER_PASSWORD && token === env.USER_PASSWORD) {
-    return true;
-  }
-
   return false;
 }
 
@@ -95,7 +80,6 @@ export async function authenticateRequest(request: Request, env: Env): Promise<A
     if (error instanceof AuthTokenExpiredError) {
       throw error;
     }
-    console.error('JWT verification error:', error);
     return null;
   }
   if (!ver || !ver.valid) return null;

@@ -184,13 +184,8 @@ export function toXRPCError(error: unknown): XRPCError {
   }
 
   if (error instanceof Error) {
-    return new InternalServerError(error.message, {
-      originalError: error.name,
-      stack: error.stack,
-    });
+    return new InternalServerError(error.message);
   }
 
-  return new InternalServerError('Unknown error occurred', {
-    error: String(error),
-  });
+  return new InternalServerError('Unknown error occurred');
 }

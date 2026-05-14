@@ -2,15 +2,13 @@ import type { APIContext } from 'astro';
 import { drizzle } from 'drizzle-orm/d1';
 import { commit_log } from '../../../db/schema';
 import { desc } from 'drizzle-orm';
+import { debugNotFound, isDebugRouteAllowed } from '../../../lib/debug-routes';
 
 export const prerender = false;
 
 export async function GET({ locals, request }: APIContext) {
   const { env } = locals.runtime;
-  const host = env.PDS_HOSTNAME as string | undefined;
-  const envName = (env as any).ENVIRONMENT as string | undefined;
-  const isLocal = envName !== 'production' && (!host || host.includes('localhost') || host.startsWith('127.') || host === '::1');
-  if (!isLocal) return new Response('Not Found', { status: 404 });
+  if (!isDebugRouteAllowed(env, request)) return debugNotFound();
 
   const url = new URL(request.url);
   const n = Math.min(Number(url.searchParams.get('n') ?? '20') || 20, 200);

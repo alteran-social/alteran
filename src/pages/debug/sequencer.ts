@@ -1,10 +1,12 @@
 import type { APIContext } from 'astro';
+import { debugNotFound, isDebugRouteAllowed } from '../../lib/debug-routes';
 import { errorMessage } from '../../lib/errors';
 
 export const prerender = false;
 
-export async function GET({ locals }: APIContext) {
+export async function GET({ locals, request }: APIContext) {
   const { env } = locals.runtime;
+  if (!isDebugRouteAllowed(env, request)) return debugNotFound();
 
   if (!env.ALTERAN_SEQUENCER) {
     return new Response(JSON.stringify({ error: 'SequencerNotConfigured' }), {
