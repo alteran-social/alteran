@@ -1,5 +1,5 @@
 import type { AstroIntegration } from 'astro';
-import type { Env, PdsLocals } from './types/env';
+import type { Env, PdsLocals } from './types/public-env';
 
 export interface PdsIntegrationOptions {
   debugRoutes?: boolean;

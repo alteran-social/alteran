@@ -14,7 +14,7 @@ import { D1Blockstore, MST } from '../src/lib/mst';
 import { CID } from 'multiformats/cid';
 import * as dagCbor from '@ipld/dag-cbor';
 import { eq } from 'drizzle-orm';
-import type { Env } from '../types/env';
+import type { Env } from '../types/public-env';
 
 async function reindexRecords() {
   // Get environment from wrangler
