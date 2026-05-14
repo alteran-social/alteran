@@ -412,6 +412,10 @@ Mitigation strategies:
 
 - Single-user PDS: All authenticated requests authorized
 - Multi-user: Would need per-user authorization checks
+- Public signup, invite queues, hosted account recovery, local
+  moderation/report triage, and ToS-acceptance workflows are deliberate
+  single-user non-goals. See
+  [`SINGLE_USER_BOUNDARIES.md`](SINGLE_USER_BOUNDARIES.md).
 
 ### Rate Limiting
 
