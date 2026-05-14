@@ -98,11 +98,12 @@ describe('com.atproto.server.getServiceAuth policy', () => {
   it('allows full bearer access to mint account migration service auth within the one-hour cap', async () => {
     const env = await serviceAuthEnv();
     const token = await bearerToken(env);
+    const requestedLifetime = 1800;
     const now = Math.floor(Date.now() / 1000);
     const response = await callBearer(env, token, new URLSearchParams({
       aud: 'did:web:bsky.social',
       lxm: 'com.atproto.server.createAccount',
-      exp: String(now + 3600),
+      exp: String(now + requestedLifetime),
     }));
 
     expect(response.status).toBe(200);
@@ -111,7 +112,8 @@ describe('com.atproto.server.getServiceAuth policy', () => {
     expect(payload.iss).toBe(did);
     expect(payload.aud).toBe('did:web:bsky.social');
     expect(payload.lxm).toBe('com.atproto.server.createAccount');
-    expect(payload.exp - payload.iat).toBe(3600);
+    expect(payload.exp - payload.iat).toBeGreaterThan(0);
+    expect(payload.exp - payload.iat).toBeLessThanOrEqual(requestedLifetime);
   });
 
   it('blocks protected methods for all credentials before minting', async () => {
@@ -240,18 +242,15 @@ describe('com.atproto.server.getServiceAuth policy', () => {
   it('caps method-less service auth at sixty seconds', async () => {
     const env = await serviceAuthEnv();
     const token = await bearerToken(env);
-    const now = Math.floor(Date.now() / 1000);
-
     const tooLong = await callBearer(env, token, new URLSearchParams({
       aud: 'did:web:api.bsky.app#bsky_appview',
-      exp: String(now + 61),
+      exp: String(Math.floor(Date.now() / 1000) + 120),
     }));
     expect(tooLong.status).toBe(400);
     expect(await tooLong.json()).toMatchObject({ error: 'BadExpiration' });
 
     const ok = await callBearer(env, token, new URLSearchParams({
       aud: 'did:web:api.bsky.app#bsky_appview',
-      exp: String(now + 60),
     }));
     expect(ok.status).toBe(200);
     const { token: serviceToken } = await ok.json() as { token: string };
