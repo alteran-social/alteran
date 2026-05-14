@@ -114,8 +114,11 @@ describe('AppView proxy authentication', () => {
     const url = `https://pds.example/xrpc/${nsid}`;
     let upstreamAuthorization: string | null = null;
 
-    const response = await withFetch(async (_input, init) => {
-      upstreamAuthorization = new Headers(init?.headers).get('authorization');
+    const response = await withFetch(async (input, init) => {
+      const headers = input instanceof Request
+        ? input.headers
+        : new Headers(init?.headers);
+      upstreamAuthorization = headers.get('authorization');
       return new Response(JSON.stringify({ ok: true }), {
         headers: { 'Content-Type': 'application/json' },
       });
