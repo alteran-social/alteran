@@ -162,11 +162,11 @@ const sortedKeys = Array.from(recordMap.keys()).sort();
 console.log(`[INFO] Adding ${sortedKeys.length} records to MST...`);
 for (const key of sortedKeys) {
   const record = recordMap.get(key)!;
-  try {
-    mst = await mst.add(key, record.cid);
-  } catch (error: any) {
-    console.error(`[WARN] Failed to add record ${key}: ${error.message}`);
-  }
+  // Do not swallow add errors. A silently-skipped record ends up in the
+  // `record` table but absent from the MST, which makes deleteRecord on that
+  // rkey silently no-op and leaves the AppView with ghost entries it can
+  // never undo. Abort so the import can be diagnosed and re-run.
+  mst = await mst.add(key, record.cid);
 }
 
 // Calculate rebuilt MST root and collect all MST blocks to persist
@@ -177,6 +177,14 @@ console.log(`[INFO] Rebuilt MST root: ${rebuiltMstRoot.toString()}`);
 const originalMstRoot = typeof dataCid === 'string' ? CID.parse(dataCid) : dataCid;
 const rootsMatch = rebuiltMstRoot.equals(originalMstRoot);
 console.log(`[INFO] Original MST root: ${originalMstRoot.toString()} (match: ${rootsMatch})`);
+if (!rootsMatch) {
+  // Mismatch means we'd write a `repo_root` pointing at the original commit
+  // while the locally-rebuilt MST blocks we persist have a different
+  // structure. Either the CAR walk missed records or the rebuilt encoding
+  // disagrees with the source. Abort rather than ship an inconsistent repo.
+  console.error('[ERROR] Rebuilt MST root does not match the CAR commit root. Aborting.');
+  process.exit(1);
+}
 
 // Gather all MST node blocks that are not in storage
 const { blocks: mstBlocks } = await mst.getUnstoredBlocks();

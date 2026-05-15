@@ -343,85 +343,42 @@ export class RepoManager {
     return { mst: newMst, prevMstRoot, uri, newMstBlocks, currentCid };
   }
 
+  // MST is canonical; if the key isn't in the MST the record doesn't exist,
+  // regardless of any stale rows in the `record` table. See the note above
+  // listRecords for context.
   async getRecord(collection: string, rkey: string): Promise<unknown | null> {
-    const key = `${collection}/${rkey}`;
     const currentMst = await this.getRoot();
-    if (!currentMst) return this.getRecordFromTable(collection, rkey);
+    if (!currentMst) return null;
 
-    const recordCid = await currentMst.get(key);
-    if (!recordCid) return this.getRecordFromTable(collection, rkey);
+    const recordCid = await currentMst.get(`${collection}/${rkey}`);
+    if (!recordCid) return null;
 
     return this.blockstore.readObj(recordCid);
   }
 
-  private async getRecordFromTable(collection: string, rkey: string): Promise<unknown | null> {
-    const did = await this.getDid();
-    const uri = `at://${did}/${collection}/${rkey}`;
-
-    const result = await this.env.ALTERAN_DB.prepare(`SELECT json FROM record WHERE uri = ?`)
-      .bind(uri)
-      .first();
-
-    if (!result) return null;
-    try {
-      return JSON.parse(result.json as string);
-    } catch (parseError) {
-      console.warn('[RepoManager] Failed to parse record JSON:', parseError);
-      return null;
-    }
-  }
-
+  // The MST is the canonical record of repo state. We do NOT fall back to the
+  // `record` table when the MST is empty for a collection: a row in `record`
+  // whose key is absent from the MST is an orphan, and exposing it would let
+  // clients (e.g. the AppView) index URIs that subsequent deleteRecord calls
+  // silently no-op on, because deleteRecord's existence check goes through
+  // the MST.
   async listRecords(
     collection: string,
     limit = 50,
     cursor?: string,
   ): Promise<{ key: string; cid: CID }[]> {
     const currentMst = await this.getRoot();
-    if (!currentMst) return this.listRecordsFromTable(collection, limit, cursor);
+    if (!currentMst) return [];
 
     const prefix = `${collection}/`;
     const leaves = await currentMst.listWithPrefix(prefix, limit);
 
-    const results = leaves
+    return leaves
       .filter((leaf) => !cursor || leaf.key > `${collection}/${cursor}`)
       .map((leaf) => ({
         key: leaf.key.replace(prefix, ''),
         cid: leaf.value,
       }));
-
-    if (results.length === 0) return this.listRecordsFromTable(collection, limit, cursor);
-    return results;
-  }
-
-  private async listRecordsFromTable(
-    collection: string,
-    limit = 50,
-    cursor?: string,
-  ): Promise<{ key: string; cid: CID }[]> {
-    const did = await this.getDid();
-    const prefix = `at://${did}/${collection}/`;
-
-    // D1's LIKE planner is flaky on long prefixes; use a >= / < range instead.
-    // URIs sort lexicographically so this scans only the collection's slice.
-    const rangeEnd =
-      prefix.slice(0, -1) +
-      String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
-
-    const stmt = cursor
-      ? this.env.ALTERAN_DB.prepare(
-          `SELECT uri, cid FROM record WHERE uri >= ? AND uri < ? AND uri > ? ORDER BY uri LIMIT ?`,
-        ).bind(prefix, rangeEnd, prefix + cursor, limit)
-      : this.env.ALTERAN_DB.prepare(
-          `SELECT uri, cid FROM record WHERE uri >= ? AND uri < ? ORDER BY uri LIMIT ?`,
-        ).bind(prefix, rangeEnd, limit);
-
-    const result = await stmt.all();
-    const rows = result.results as Array<{ uri: string; cid: string }>;
-
-    return rows.map((row) => ({
-      key: row.uri.replace(prefix, ''),
-      cid: CID.parse(row.cid),
-    }));
   }
 
   async updateRoot(mst: MST, rev: number): Promise<void> {
