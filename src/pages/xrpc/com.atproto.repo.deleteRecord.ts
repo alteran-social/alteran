@@ -1,11 +1,16 @@
-import type { APIContext } from 'astro';
-import { errorCode } from '../../lib/errors';
-import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError, insufficientScopeResponse } from '../../lib/oauth/resource';
-import { canWriteRepo } from '../../lib/auth-scope';
-import { checkRate } from '../../lib/ratelimit';
-import { readJsonBounded } from '../../lib/util';
-import { assertRepoHead, bumpRoot } from '../../db/repo';
-import { notifySequencer } from '../../lib/sequencer';
+import type { APIContext } from "astro";
+import { errorCode } from "../../lib/errors";
+import {
+  dpopResourceUnauthorized,
+  handleResourceAuthError,
+  insufficientScopeResponse,
+  verifyResourceRequestHybrid,
+} from "../../lib/oauth/resource";
+import { canWriteRepo } from "../../lib/auth-scope";
+import { checkRate } from "../../lib/ratelimit";
+import { readJsonBounded } from "../../lib/util";
+import { assertRepoHead, bumpRoot } from "../../db/repo";
+import { notifySequencer } from "../../lib/sequencer";
 import {
   deleteRecordStatements,
   deleteUnreferencedBlobKeys,
@@ -13,23 +18,27 @@ import {
   isAccountActive,
   setRecordBlobUsageStatements,
   sweepEligibleUnreferencedBlobKeys,
-} from '../../db/dal';
+} from "../../db/dal";
 import {
   assertRepoWriteInput,
   deleteRecordAuthorizations,
+} from "../../lib/repo-write-input";
+import { retryNoSwapCommit } from "../../lib/repo-write-retry";
+import {
   handleRepoWriteError,
   jsonError,
   prepareDeleteRecord,
   RepoWriteError,
-  retryNoSwapCommit,
-} from '../../lib/repo-write-validation';
+} from "../../lib/repo-write-validation";
 
 export const prerender = false;
 
 export async function POST({ locals, request }: APIContext) {
   const { env } = locals;
   const ctx = locals.cfContext;
-  let auth: NonNullable<Awaited<ReturnType<typeof verifyResourceRequestHybrid>>>;
+  let auth: NonNullable<
+    Awaited<ReturnType<typeof verifyResourceRequestHybrid>>
+  >;
   try {
     const verified = await verifyResourceRequestHybrid(env, request);
     if (!verified) return dpopResourceUnauthorized(env);
@@ -44,27 +53,37 @@ export async function POST({ locals, request }: APIContext) {
   try {
     body = await readJsonBounded(env, request);
   } catch (error) {
-    const rateLimitResponse = await checkRate(env, request, 'writes', { key: auth.did });
+    const rateLimitResponse = await checkRate(env, request, "writes", {
+      key: auth.did,
+    });
     if (rateLimitResponse) return rateLimitResponse;
-    if (errorCode(error) === 'PayloadTooLarge') {
-      return jsonError('PayloadTooLarge', undefined, 413);
+    if (errorCode(error) === "PayloadTooLarge") {
+      return jsonError("PayloadTooLarge", undefined, 413);
     }
-    return jsonError('BadRequest');
+    return jsonError("BadRequest");
   }
 
   let writeRateCharged = false;
   try {
-    const input = assertRepoWriteInput('com.atproto.repo.deleteRecord', body);
+    const input = assertRepoWriteInput("com.atproto.repo.deleteRecord", body);
     for (const write of deleteRecordAuthorizations(input)) {
-      if (!canWriteRepo(auth.access, write.collection, write.action)) return insufficientScopeResponse();
+      if (!canWriteRepo(auth.access, write.collection, write.action)) {
+        return insufficientScopeResponse();
+      }
     }
 
-    const rateLimitResponse = await checkRate(env, request, 'writes', { key: auth.did });
+    const rateLimitResponse = await checkRate(env, request, "writes", {
+      key: auth.did,
+    });
     writeRateCharged = true;
     if (rateLimitResponse) return rateLimitResponse;
 
     if (!(await isAccountActive(env, auth.did))) {
-      return jsonError('AccountDeactivated', 'Account is deactivated. Activate it before making changes.', 403);
+      return jsonError(
+        "AccountDeactivated",
+        "Account is deactivated. Activate it before making changes.",
+        403,
+      );
     }
 
     const committed = await retryNoSwapCommit(input, async () => {
@@ -75,39 +94,48 @@ export async function POST({ locals, request }: APIContext) {
         return { prepared, result: null };
       }
 
-      const { mst, prevMstRoot, uri, newMstBlocks, currentCid } = await repo.deleteRecord(
-        write.collection,
-        write.rkey,
-      );
+      const { mst, prevMstRoot, uri, newMstBlocks, currentCid } = await repo
+        .deleteRecord(
+          write.collection,
+          write.rkey,
+        );
       const previousBlobKeys = await getRecordBlobKeys(env, prepared.did, uri);
       const currentRoot = await mst.getPointer();
       const opsForCommit = [{
-        action: 'delete' as const,
+        action: "delete" as const,
         path: `${write.collection}/${write.rkey}`,
         cid: null,
         prev: currentCid,
       }];
-      const result = await bumpRoot(env, prevMstRoot ?? undefined, currentRoot, {
-        ops: opsForCommit,
-        newMstBlocks: Array.from(newMstBlocks),
-        expectedCommitCid: prepared.expectedCommitCid,
-        sideEffectStatements: (guard) => [
-          ...deleteRecordStatements(env, uri, guard),
-          ...setRecordBlobUsageStatements(env, prepared.did, uri, [], guard),
-        ],
-      });
+      const result = await bumpRoot(
+        env,
+        prevMstRoot ?? undefined,
+        currentRoot,
+        {
+          ops: opsForCommit,
+          newMstBlocks: Array.from(newMstBlocks),
+          expectedCommitCid: prepared.expectedCommitCid,
+          sideEffectStatements: (guard) => [
+            ...deleteRecordStatements(env, uri, guard),
+            ...setRecordBlobUsageStatements(env, prepared.did, uri, [], guard),
+          ],
+        },
+      );
       return {
         prepared,
         result: {
           ...result,
           opsForCommit,
-          dereferencedBlobKeys: previousBlobKeys.map((key) => ({ did: prepared.did, key })),
+          dereferencedBlobKeys: previousBlobKeys.map((key) => ({
+            did: prepared.did,
+            key,
+          })),
         },
       };
     });
     if (!committed.result) {
       return new Response(JSON.stringify({}), {
-        headers: { 'Content-Type': 'application/json' },
+        headers: { "Content-Type": "application/json" },
       });
     }
     const { prepared, result } = committed;
@@ -121,24 +149,39 @@ export async function POST({ locals, request }: APIContext) {
       ops: opsForCommit,
       blocks,
     });
-    await deleteUnreferencedBlobKeys(env, result.dereferencedBlobKeys).catch((error) => {
-      console.warn('[deleteRecord] Failed to clean dereferenced blobs:', error);
-    });
-    ctx?.waitUntil(sweepEligibleUnreferencedBlobKeys(env).catch((error) => {
-      console.warn('[deleteRecord] Failed to sweep dereferenced blobs:', error);
-    }));
-
-    return new Response(JSON.stringify({
-      commit: {
-        cid: commitCid,
-        rev,
+    await deleteUnreferencedBlobKeys(env, result.dereferencedBlobKeys).catch(
+      (error) => {
+        console.warn(
+          "[deleteRecord] Failed to clean dereferenced blobs:",
+          error,
+        );
       },
-    }), {
-      headers: { 'Content-Type': 'application/json' },
-    });
+    );
+    ctx?.waitUntil(
+      sweepEligibleUnreferencedBlobKeys(env).catch((error) => {
+        console.warn(
+          "[deleteRecord] Failed to sweep dereferenced blobs:",
+          error,
+        );
+      }),
+    );
+
+    return new Response(
+      JSON.stringify({
+        commit: {
+          cid: commitCid,
+          rev,
+        },
+      }),
+      {
+        headers: { "Content-Type": "application/json" },
+      },
+    );
   } catch (error) {
     if (!writeRateCharged && error instanceof RepoWriteError) {
-      const rateLimitResponse = await checkRate(env, request, 'writes', { key: auth.did });
+      const rateLimitResponse = await checkRate(env, request, "writes", {
+        key: auth.did,
+      });
       if (rateLimitResponse) return rateLimitResponse;
     }
     return handleRepoWriteError(error);
