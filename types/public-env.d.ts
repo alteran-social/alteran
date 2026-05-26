@@ -27,6 +27,7 @@ export type Env = {
   REFRESH_TOKEN?: string | SecretsStoreSecret;
   REFRESH_TOKEN_SECRET?: string | SecretsStoreSecret;
   SESSION_JWT_SECRET?: string | SecretsStoreSecret;
+  PDS_DEBUG_TOKEN?: string | SecretsStoreSecret;
   PDS_ACCESS_TTL_SEC?: string;
   PDS_REFRESH_TTL_SEC?: string;
   REPO_SIGNING_KEY?: string | SecretsStoreSecret;
