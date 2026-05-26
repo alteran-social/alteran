@@ -18,6 +18,8 @@
   "files": [
     "index.js",
     "index.d.ts",
+    "route-registry.js",
+    "route-registry.d.ts",
     "src",
     "types",
     "migrations"

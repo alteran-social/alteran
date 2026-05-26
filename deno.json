@@ -1,7 +1,10 @@
 {
   "name": "@alteran-social/astro",
   "version": "0.9.6",
-  "exports": "./mod.ts",
+  "exports": {
+    ".": "./mod.ts",
+    "./worker": "./src/worker/index.ts"
+  },
   "publish": {
     "include": [
       "deno.json",
@@ -11,6 +14,8 @@
       "migrations/**/*.json",
       "migrations/**/*.sql",
       "mod.ts",
+      "route-registry.d.ts",
+      "route-registry.js",
       "README.md",
       "src/**/*.ts",
       "types/public-env.d.ts"
@@ -29,7 +34,8 @@
     "deploy": "deno task build && deno run -A npm:wrangler deploy --env production",
     "test": "deno test -A --no-check tests/",
     "test:oauth": "deno test -A --no-check tests/oauth-*.test.ts tests/resource-auth.test.ts",
-    "check": "deno check index.d.ts mod.ts src/_worker.ts src/worker/index.ts",
+    "check": "deno check index.d.ts mod.ts route-registry.d.ts src/_worker.ts src/worker/index.ts",
+    "release:check": "deno task check && deno test -A --no-check tests/published-typescript.test.ts tests/route-registry.test.ts tests/worker-runtime.test.ts tests/debug-routes.test.ts tests/observability.test.ts && deno publish --dry-run --allow-dirty --allow-slow-types",
     "db:generate": "deno run -A npm:drizzle-kit generate",
     "db:apply": "deno run -A npm:wrangler d1 migrations apply pds",
     "db:apply:local": "deno run -A npm:wrangler d1 migrations apply pds --local",
