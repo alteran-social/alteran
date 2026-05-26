@@ -1,28 +1,8 @@
-import type { APIContext } from 'astro';
-import { errorMessage } from '../../lib/errors';
+import type { APIContext } from "astro";
+import { fetchSequencerDebugMetrics } from "../../lib/debug-sequencer";
 
 export const prerender = false;
 
-export async function GET({ locals }: APIContext) {
-  const { env } = locals;
-
-  if (!env.ALTERAN_SEQUENCER) {
-    return new Response(JSON.stringify({ error: 'SequencerNotConfigured' }), {
-      status: 503,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-
-  try {
-    const id = env.ALTERAN_SEQUENCER.idFromName('default');
-    const stub = env.ALTERAN_SEQUENCER.get(id);
-    const response = await stub.fetch(new Request('http://internal/metrics') as any);
-    const text = await response.text();
-    return new Response(text, { status: response.status, headers: { 'Content-Type': 'application/json' } });
-  } catch (e) {
-    return new Response(JSON.stringify({ error: 'InternalError', message: String(errorMessage(e) || e) }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
+export async function GET({ locals, request }: APIContext) {
+  return fetchSequencerDebugMetrics(locals.env, request);
 }

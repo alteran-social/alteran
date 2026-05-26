@@ -9,6 +9,7 @@ const SECRET_KEYS = [
   "REFRESH_TOKEN",
   "REFRESH_TOKEN_SECRET",
   "SESSION_JWT_SECRET",
+  "PDS_DEBUG_TOKEN",
   "REPO_SIGNING_KEY",
   "PDS_PLC_ROTATION_KEY",
 ] as const satisfies readonly (keyof Env)[];
@@ -50,8 +51,9 @@ export async function resolveEnvSecrets<E extends Env>(env: E): Promise<E> {
   setGetEnv((key) => {
     const local = resolved[key];
     if (typeof local === "string") return local;
-    if (typeof local === "number" || typeof local === "boolean")
+    if (typeof local === "number" || typeof local === "boolean") {
       return String(local);
+    }
     const fallback = process.env[key];
     return typeof fallback === "string" ? fallback : undefined;
   });

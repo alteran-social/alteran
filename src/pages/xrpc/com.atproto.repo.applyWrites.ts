@@ -1,20 +1,31 @@
-import type { APIContext } from 'astro';
-import { errorCode } from '../../lib/errors';
-import { readJsonBounded } from '../../lib/util';
-import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError, insufficientScopeResponse } from '../../lib/oauth/resource';
-import { canWriteRepo } from '../../lib/auth-scope';
-import { deleteUnreferencedBlobKeys, isAccountActive, sweepEligibleUnreferencedBlobKeys } from '../../db/dal';
-import { checkRate } from '../../lib/ratelimit';
-import { notifySequencer } from '../../lib/sequencer';
+import type { APIContext } from "astro";
+import { errorCode } from "../../lib/errors";
+import { readJsonBounded } from "../../lib/util";
+import {
+  dpopResourceUnauthorized,
+  handleResourceAuthError,
+  insufficientScopeResponse,
+  verifyResourceRequestHybrid,
+} from "../../lib/oauth/resource";
+import { canWriteRepo } from "../../lib/auth-scope";
+import {
+  deleteUnreferencedBlobKeys,
+  isAccountActive,
+  sweepEligibleUnreferencedBlobKeys,
+} from "../../db/dal";
+import { checkRate } from "../../lib/ratelimit";
+import { notifySequencer } from "../../lib/sequencer";
 import {
   applyWritesAuthorizations,
   assertRepoWriteInput,
+} from "../../lib/repo-write-input";
+import { retryNoSwapCommit } from "../../lib/repo-write-retry";
+import {
   handleRepoWriteError,
   jsonError,
   prepareApplyWrites,
   RepoWriteError,
-  retryNoSwapCommit,
-} from '../../lib/repo-write-validation';
+} from "../../lib/repo-write-validation";
 
 export const prerender = false;
 
@@ -25,7 +36,9 @@ export const prerender = false;
 export async function POST({ locals, request }: APIContext) {
   const { env } = locals;
   const ctx = locals.cfContext;
-  let auth: NonNullable<Awaited<ReturnType<typeof verifyResourceRequestHybrid>>>;
+  let auth: NonNullable<
+    Awaited<ReturnType<typeof verifyResourceRequestHybrid>>
+  >;
   try {
     const verified = await verifyResourceRequestHybrid(env, request);
     if (!verified) return dpopResourceUnauthorized(env);
@@ -40,29 +53,35 @@ export async function POST({ locals, request }: APIContext) {
   try {
     body = await readJsonBounded(env, request);
   } catch (error) {
-    const rateLimitResponse = await checkRate(env, request, 'writes', { key: auth.did });
+    const rateLimitResponse = await checkRate(env, request, "writes", {
+      key: auth.did,
+    });
     if (rateLimitResponse) return rateLimitResponse;
-    if (errorCode(error) === 'PayloadTooLarge') {
-      return jsonError('PayloadTooLarge', undefined, 413);
+    if (errorCode(error) === "PayloadTooLarge") {
+      return jsonError("PayloadTooLarge", undefined, 413);
     }
-    return jsonError('BadRequest');
+    return jsonError("BadRequest");
   }
 
   let writeRateCharged = false;
   try {
-    const input = assertRepoWriteInput('com.atproto.repo.applyWrites', body);
+    const input = assertRepoWriteInput("com.atproto.repo.applyWrites", body);
     const writes = Array.isArray(input.writes) ? input.writes : [];
     if (writes.length > 200) {
-      const rateLimitResponse = await checkRate(env, request, 'writes', { key: auth.did });
+      const rateLimitResponse = await checkRate(env, request, "writes", {
+        key: auth.did,
+      });
       writeRateCharged = true;
       if (rateLimitResponse) return rateLimitResponse;
-      return jsonError('InvalidRequest', 'Too many writes. Max: 200');
+      return jsonError("InvalidRequest", "Too many writes. Max: 200");
     }
     for (const write of applyWritesAuthorizations(input)) {
-      if (!canWriteRepo(auth.access, write.collection, write.action)) return insufficientScopeResponse();
+      if (!canWriteRepo(auth.access, write.collection, write.action)) {
+        return insufficientScopeResponse();
+      }
     }
 
-    const rateLimitResponse = await checkRate(env, request, 'writes', {
+    const rateLimitResponse = await checkRate(env, request, "writes", {
       key: auth.did,
       cost: writes.length,
     });
@@ -74,21 +93,27 @@ export async function POST({ locals, request }: APIContext) {
     if (!active) {
       return new Response(
         JSON.stringify({
-          error: 'AccountDeactivated',
-          message: 'Account is deactivated. Activate it before making changes.'
+          error: "AccountDeactivated",
+          message: "Account is deactivated. Activate it before making changes.",
         }),
-        { status: 403, headers: { 'Content-Type': 'application/json' } }
+        { status: 403, headers: { "Content-Type": "application/json" } },
       );
     }
 
     const { prepared, applied } = await retryNoSwapCommit(input, async () => {
       const prepared = await prepareApplyWrites(env, auth, input);
-      const applied = await prepared.repo.applyPreparedWrites(prepared.writes, prepared.expectedCommitCid);
+      const applied = await prepared.repo.applyPreparedWrites(
+        prepared.writes,
+        prepared.expectedCommitCid,
+      );
       return { prepared, applied };
     });
 
     // Notify sequencer about the commit for firehose
-    if (applied.commit && applied.commitCid && applied.rev && applied.commitData && applied.sig && applied.blocks) {
+    if (
+      applied.commit && applied.commitCid && applied.rev &&
+      applied.commitData && applied.sig && applied.blocks
+    ) {
       await notifySequencer(env, {
         did: prepared.did,
         commitCid: applied.commitCid,
@@ -98,12 +123,22 @@ export async function POST({ locals, request }: APIContext) {
         ops: applied.ops,
         blocks: applied.blocks,
       });
-      await deleteUnreferencedBlobKeys(env, applied.dereferencedBlobKeys).catch((error) => {
-        console.warn('[applyWrites] Failed to clean dereferenced blobs:', error);
-      });
-      ctx?.waitUntil(sweepEligibleUnreferencedBlobKeys(env).catch((error) => {
-        console.warn('[applyWrites] Failed to sweep dereferenced blobs:', error);
-      }));
+      await deleteUnreferencedBlobKeys(env, applied.dereferencedBlobKeys).catch(
+        (error) => {
+          console.warn(
+            "[applyWrites] Failed to clean dereferenced blobs:",
+            error,
+          );
+        },
+      );
+      ctx?.waitUntil(
+        sweepEligibleUnreferencedBlobKeys(env).catch((error) => {
+          console.warn(
+            "[applyWrites] Failed to sweep dereferenced blobs:",
+            error,
+          );
+        }),
+      );
     }
 
     return new Response(
@@ -113,22 +148,30 @@ export async function POST({ locals, request }: APIContext) {
       }),
       {
         status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }
+        headers: { "Content-Type": "application/json" },
+      },
     );
   } catch (error) {
     if (!writeRateCharged && error instanceof RepoWriteError) {
-      const rateLimitResponse = await checkRate(env, request, 'writes', { key: auth.did });
+      const rateLimitResponse = await checkRate(env, request, "writes", {
+        key: auth.did,
+      });
       if (rateLimitResponse) return rateLimitResponse;
     }
     try {
       return handleRepoWriteError(error);
     } catch (unhandled) {
-      console.error('applyWrites error:', unhandled);
-      console.error('Error stack:', unhandled instanceof Error ? unhandled.stack : 'No stack');
+      console.error("applyWrites error:", unhandled);
+      console.error(
+        "Error stack:",
+        unhandled instanceof Error ? unhandled.stack : "No stack",
+      );
       return new Response(
-        JSON.stringify({ error: 'InternalServerError', message: String(unhandled) }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
+        JSON.stringify({
+          error: "InternalServerError",
+          message: String(unhandled),
+        }),
+        { status: 500, headers: { "Content-Type": "application/json" } },
       );
     }
   }

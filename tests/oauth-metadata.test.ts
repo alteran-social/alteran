@@ -1,12 +1,13 @@
 import { describe, it } from "./helpers/bdd";
 import { expect } from "@std/expect";
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeEnv } from './helpers/env';
 import { GET as authServerMetadata } from '../src/entrypoints/well-known/oauth-authorization-server';
 import { GET as protectedResourceMetadata } from '../src/entrypoints/well-known/oauth-protected-resource';
 import { GET as authServerRedirect } from '../src/pages/well-known/oauth-authorization-server';
 import { GET as jwks } from '../src/pages/oauth/jwks';
+import { CORE_ROUTES } from '../route-registry.js';
 
 describe('OAuth metadata and route injection', () => {
   it('advertises atproto OAuth server metadata with PAR, JWKS, and revocation', async () => {
@@ -76,7 +77,7 @@ describe('OAuth metadata and route injection', () => {
   });
 
   it('injects OAuth routes from the packaged integration', () => {
-    const integration = readFileSync(join(process.cwd(), 'index.js'), 'utf8');
+    const patterns = CORE_ROUTES.map((route) => route.pattern);
     for (const route of [
       '/.well-known/oauth-authorization-server',
       '/.well-known/oauth-protected-resource',
@@ -89,15 +90,12 @@ describe('OAuth metadata and route injection', () => {
       '/oauth/jwks',
       '/oauth/revoke',
     ]) {
-      expect(integration).toContain(`pattern: '${route}'`);
+      expect(patterns).toContain(route);
     }
   });
 
   it('injects packaged route entrypoints from non-hidden paths', () => {
-    const integration = readFileSync(join(process.cwd(), 'index.js'), 'utf8');
-    const entrypoints = [...integration.matchAll(/entrypoint: '(\.\/[^']+)'/g)]
-      .map((match) => match[1])
-      .sort();
+    const entrypoints = CORE_ROUTES.map((route) => route.entrypoint).sort();
 
     for (const entrypoint of [
       './src/entrypoints/well-known/atproto-did.ts',

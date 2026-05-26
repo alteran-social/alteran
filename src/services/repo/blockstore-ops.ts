@@ -1,20 +1,20 @@
-import { CID } from 'multiformats/cid';
-import * as dagCbor from '@ipld/dag-cbor';
-import { fromString as bytesFromString } from 'uint8arrays/from-string';
-import { cidForCbor } from '../../lib/mst/util';
-import type { MST, BlockMap } from '../../lib/mst';
-import { RepoWriteError } from '../../lib/repo-write-error';
+import { CID } from "multiformats/cid";
+import * as dagCbor from "@ipld/dag-cbor";
+import { cidForCbor } from "../../lib/mst/util";
+import type { BlockMap, MST } from "../../lib/mst";
+import { RepoWriteError } from "../../lib/repo-write-error";
+import { decodeLexBytes } from "../../lib/lex-bytes";
 
 export type EncodedBlock = readonly [CID, Uint8Array];
 
 export function recordToIpld(record: unknown, depth = 0): unknown {
   if (depth > 100) {
-    throw new RepoWriteError('InvalidRequest', 'record is too deeply nested');
+    throw new RepoWriteError("InvalidRequest", "record is too deeply nested");
   }
   if (Array.isArray(record)) {
     return record.map((item) => recordToIpld(item, depth + 1));
   }
-  if (!record || typeof record !== 'object') {
+  if (!record || typeof record !== "object") {
     return record;
   }
   if (record instanceof Uint8Array || CID.asCID(record)) {
@@ -23,17 +23,20 @@ export function recordToIpld(record: unknown, depth = 0): unknown {
 
   const obj = record as Record<string, unknown>;
   const keys = Object.keys(obj);
-  if (keys.length === 1 && typeof obj.$link === 'string') {
+  if (keys.length === 1 && typeof obj.$link === "string") {
     return CID.parse(obj.$link);
   }
-  if (keys.length === 1 && typeof obj.$bytes === 'string') {
-    return bytesFromString(obj.$bytes, 'base64');
+  if (keys.length === 1 && typeof obj.$bytes === "string") {
+    return decodeLexBytes(obj.$bytes);
   }
 
   const converted: Record<string, unknown> = Object.create(null);
   for (const [key, value] of Object.entries(obj)) {
-    if (key === '__proto__') {
-      throw new RepoWriteError('InvalidRequest', 'record contains a forbidden object key');
+    if (key === "__proto__") {
+      throw new RepoWriteError(
+        "InvalidRequest",
+        "record contains a forbidden object key",
+      );
     }
     converted[key] = recordToIpld(value, depth + 1);
   }
@@ -45,7 +48,10 @@ export async function cidForRecord(record: unknown): Promise<CID> {
     return cidForCbor(recordToIpld(record));
   } catch (error) {
     if (error instanceof RepoWriteError) throw error;
-    throw new RepoWriteError('InvalidRequest', 'record is not dag-cbor encodable');
+    throw new RepoWriteError(
+      "InvalidRequest",
+      "record is not dag-cbor encodable",
+    );
   }
 }
 
@@ -59,7 +65,10 @@ export async function encodeRecordBlock(
     return [cid, bytes] as const;
   } catch (error) {
     if (error instanceof RepoWriteError) throw error;
-    throw new RepoWriteError('InvalidRequest', 'record is not dag-cbor encodable');
+    throw new RepoWriteError(
+      "InvalidRequest",
+      "record is not dag-cbor encodable",
+    );
   }
 }
 

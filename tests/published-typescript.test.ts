@@ -4,6 +4,7 @@ import { expect } from "@std/expect";
 const publishedTypeScriptRoots = [
   "mod.ts",
   "index.d.ts",
+  "route-registry.d.ts",
   "src",
   "types",
 ] as const;
