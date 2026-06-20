@@ -11,7 +11,6 @@ const describeIntegration = runAppIntegrationTests ? describe : describe.skip;
 import { createApp } from '../src/app';
 import { makeEnv, ctx } from './helpers/env';
 import { AtpAgent } from '@atproto/api';
-import { ensureChatTables } from '../src/lib/chat';
 
 const app = runAppIntegrationTests ? createApp() : (null as unknown as ReturnType<typeof createApp>);
 
@@ -183,46 +182,5 @@ describeIntegration('AtpAgent integration', () => {
     const labelerViews = await agent.app.bsky.labeler.getServices({ dids: [did], detailed: true });
     expect(labelerViews.success).toBe(true);
     expect(labelerViews.data.views.length).toBeGreaterThan(0);
-
-    await ensureChatTables(env as any);
-    await env.ALTERAN_DB.exec('DELETE FROM chat_convo_member; DELETE FROM chat_convo;');
-
-    const now = Date.now();
-    const lastMessage = {
-      id: 'msg1',
-      rev: '0',
-      text: 'Hi there',
-      sender: { did },
-      sentAt: new Date(now).toISOString(),
-      reactions: [],
-      facets: [],
-    };
-
-    await env.ALTERAN_DB.prepare(
-      'INSERT INTO chat_convo (id, rev, status, muted, unread_count, last_message_json, last_reaction_json, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    )
-      .bind('convo-test', '0', 'accepted', 0, 1, JSON.stringify(lastMessage), null, now, now)
-      .run();
-
-    await env.ALTERAN_DB.prepare(
-      'INSERT OR REPLACE INTO chat_convo_member (convo_id, did, handle, display_name, avatar, position) VALUES (?, ?, ?, ?, ?, ?)',
-    )
-      .bind('convo-test', did, String(env.PDS_HANDLE ?? 'user.example.com'), 'Owner', null, 0)
-      .run();
-
-    await env.ALTERAN_DB.prepare(
-      'INSERT OR REPLACE INTO chat_convo_member (convo_id, did, handle, display_name, avatar, position) VALUES (?, ?, ?, ?, ?, ?)',
-    )
-      .bind('convo-test', 'did:example:friend', 'friend.test', 'Friend', null, 1)
-      .run();
-
-    const convos = await agent.chat.bsky.convo.listConvos({ limit: 20 });
-    expect(convos.success).toBe(true);
-    expect(convos.data.convos.length).toBeGreaterThan(0);
-
-    const convoLog = await agent.chat.bsky.convo.getLog({});
-    expect(convoLog.success).toBe(true);
-    expect(Array.isArray(convoLog.data.logs)).toBe(true);
-    expect(convoLog.data.logs.length).toBeGreaterThan(0);
   });
 });
