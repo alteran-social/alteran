@@ -1,6 +1,6 @@
 {
   "name": "@alteran-social/astro",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "description": "Astro integration for running a Cloudflare-hosted Bluesky PDS with Alteran.",
   "module": "index.js",
   "types": "index.d.ts",
