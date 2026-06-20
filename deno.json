@@ -18,6 +18,9 @@
   },
   "nodeModulesDir": "auto",
   "unstable": ["sloppy-imports"],
+  "compilerOptions": {
+    "ignoreDeprecations": "6.0"
+  },
   "imports": {
     "@std/testing/bdd": "jsr:@std/testing@^1.0.18/bdd",
     "@std/expect": "jsr:@std/expect@^1.0.19"
