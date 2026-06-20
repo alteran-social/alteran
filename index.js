@@ -67,9 +67,6 @@ const CORE_ROUTES = [
   { pattern: '/xrpc/app.bsky.unspecced.getConfig', entrypoint: './src/pages/xrpc/app.bsky.unspecced.getConfig.ts' },
   // Catchall for proxied XRPC endpoints (app.bsky.*, chat.bsky.*, tools.ozone.*)
   { pattern: '/xrpc/[...nsid]', entrypoint: './src/pages/xrpc/[...nsid].ts' },
-  // Chat endpoints (proxied)
-  { pattern: '/xrpc/chat.bsky.convo.getLog', entrypoint: './src/pages/xrpc/chat.bsky.convo.getLog.ts' },
-  { pattern: '/xrpc/chat.bsky.convo.listConvos', entrypoint: './src/pages/xrpc/chat.bsky.convo.listConvos.ts' },
 ];
 
 const ROOT_ROUTE = {
