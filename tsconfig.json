@@ -2,6 +2,7 @@
   "extends": "astro/tsconfigs/base",
   "compilerOptions": {
     "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
     "moduleResolution": "Bundler",
     "verbatimModuleSyntax": true,
     "resolveJsonModule": true,
