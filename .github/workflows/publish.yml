@@ -15,7 +15,7 @@ jobs:
   validate:
     name: Validate package
     runs-on: ubuntu-latest
-    if: github.event_name != 'release'
+    if: github.event_name != 'release' && github.event_name != 'workflow_dispatch'
     permissions:
       contents: read
     steps:
@@ -43,7 +43,7 @@ jobs:
   publish-jsr:
     name: Publish to JSR
     runs-on: ubuntu-latest
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
       id-token: write
