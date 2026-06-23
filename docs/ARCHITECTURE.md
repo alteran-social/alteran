@@ -531,6 +531,11 @@ Recommended flow:
 - [ ] Metrics dashboard
 - [ ] Automated backups
 
+Operational runbooks for manual backup, restore, and disaster recovery are now
+documented in [`BACKUP_RESTORE.md`](BACKUP_RESTORE.md) and
+[`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md). Automated backup scheduling is
+still a planned enhancement.
+
 ### Considered
 
 - [ ] Read replicas (D1)
