@@ -1,5 +1,6 @@
 import type { Env } from '../../env';
 import { ServerMisconfigured } from '../errors';
+import { isChatMethod } from '../privileged-method';
 import type { AppViewConfig, ServiceConfig, ServiceId } from './types';
 
 const DEFAULT_APPVIEW_URL = 'https://api.bsky.app';
@@ -53,8 +54,9 @@ export function getServiceRegistry(env: Env): Record<ServiceId, ServiceConfig> {
 
 export function defaultServiceForNsid(env: Env, nsid: string): ServiceConfig {
   const registry = getServiceRegistry(env);
-  if (nsid.startsWith('chat.bsky.')) return registry.bsky_chat;
-  if (nsid.startsWith('tools.ozone.') || nsid.startsWith('com.atproto.moderation.')) {
+  const normalized = nsid.toLowerCase();
+  if (isChatMethod(nsid)) return registry.bsky_chat;
+  if (normalized.startsWith('tools.ozone.') || normalized.startsWith('com.atproto.moderation.')) {
     return registry.atproto_labeler;
   }
   return registry.bsky_appview;

@@ -148,12 +148,25 @@ describe('com.atproto.server.getServiceAuth policy', () => {
     }
   });
 
-  it('does not let privileged app passwords mint account-management service auth', async () => {
+  it('lets a privileged app password mint createAccount service auth', async () => {
     const env = await serviceAuthEnv();
     const token = await bearerToken(env, AuthScope.AppPassPrivileged);
     const response = await callBearer(env, token, new URLSearchParams({
       aud: 'did:web:bsky.social',
       lxm: 'com.atproto.server.createAccount',
+    }));
+
+    expect(response.status).toBe(200);
+    const { token: serviceToken } = await response.json() as { token: string };
+    expect(decodeJwtPayload(serviceToken).lxm).toBe('com.atproto.server.createAccount');
+  });
+
+  it('still refuses privileged app passwords for protected account methods', async () => {
+    const env = await serviceAuthEnv();
+    const token = await bearerToken(env, AuthScope.AppPassPrivileged);
+    const response = await callBearer(env, token, new URLSearchParams({
+      aud: 'did:web:bsky.social',
+      lxm: 'com.atproto.server.deleteAccount',
     }));
 
     expect(response.status).toBe(401);
@@ -169,7 +182,11 @@ describe('com.atproto.server.getServiceAuth policy', () => {
 
     const appPass = await bearerToken(env, AuthScope.AppPass);
     const appPassResponse = await callBearer(env, appPass, chatParams);
-    expect(appPassResponse.status).toBe(401);
+    expect(appPassResponse.status).toBe(400);
+    expect(await appPassResponse.json()).toEqual({
+      error: 'InvalidRequest',
+      message: 'insufficient access to request a service auth token for the following method: chat.bsky.convo.sendMessage',
+    });
 
     const privileged = await bearerToken(env, AuthScope.AppPassPrivileged);
     const privilegedResponse = await callBearer(env, privileged, chatParams);

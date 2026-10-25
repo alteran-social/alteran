@@ -7,24 +7,6 @@ export const PRIVILEGED_SCOPES: ReadonlySet<BearerAccessScope> = new Set([
   AuthScope.AppPassPrivileged,
 ]);
 
-export const PRIVILEGED_METHODS: ReadonlySet<string> = new Set([
-  'chat.bsky.actor.deleteAccount',
-  'chat.bsky.actor.exportAccountData',
-  'chat.bsky.convo.deleteMessageForSelf',
-  'chat.bsky.convo.getConvo',
-  'chat.bsky.convo.getConvoForMembers',
-  'chat.bsky.convo.getLog',
-  'chat.bsky.convo.getMessages',
-  'chat.bsky.convo.leaveConvo',
-  'chat.bsky.convo.listConvos',
-  'chat.bsky.convo.muteConvo',
-  'chat.bsky.convo.sendMessage',
-  'chat.bsky.convo.sendMessageBatch',
-  'chat.bsky.convo.unmuteConvo',
-  'chat.bsky.convo.updateRead',
-  'com.atproto.server.createAccount',
-]);
-
 export const PROTECTED_METHODS: ReadonlySet<string> = new Set([
   'com.atproto.admin.sendEmail',
   'com.atproto.identity.requestPlcOperationSignature',
