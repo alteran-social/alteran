@@ -2,8 +2,8 @@ import type { Env } from '../../env';
 import { authErrorResponse, authenticateRequest, unauthorized, type AuthContext } from '../auth';
 import { canMakeRpcCall, canUseAppPasswordLevelAccess } from '../auth-scope';
 import { InvalidProxyHeader } from '../errors';
+import { isPrivilegedMethod, lexiconMethodIn } from '../privileged-method';
 import {
-  PRIVILEGED_METHODS,
   PRIVILEGED_SCOPES,
   PROTECTED_METHODS,
   resolveAuthScope,
@@ -93,7 +93,7 @@ export async function proxyAppView({
     });
   }
 
-  if (PROTECTED_METHODS.has(lxm)) {
+  if (lexiconMethodIn(PROTECTED_METHODS, lxm)) {
     return new Response(
       JSON.stringify({ error: 'InvalidToken', message: 'method cannot be proxied' }),
       { status: 400, headers: { 'Content-Type': 'application/json' } },
@@ -138,7 +138,15 @@ export async function proxyAppView({
   const hasPrivilegedAccess = auth.access.isOAuth
     ? canMakeRpcCall(auth.access, lxm, permissionAudience)
     : !!scope && PRIVILEGED_SCOPES.has(scope);
-  if (!hasPrivilegedAccess && PRIVILEGED_METHODS.has(lxm)) {
+  if (!hasPrivilegedAccess && isPrivilegedMethod(lxm)) {
+    // Reference PDS raises InvalidRequestError('Bad token method', 'InvalidToken')
+    // for access tokens. That error is HTTP 400, unlike the local InvalidToken class.
+    if (!auth.access.isOAuth) {
+      return new Response(
+        JSON.stringify({ error: 'InvalidToken', message: 'Bad token method' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
     return new Response(JSON.stringify({ error: 'InvalidToken' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' },

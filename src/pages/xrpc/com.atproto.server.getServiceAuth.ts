@@ -3,7 +3,8 @@ import { NSID, ensureValidDid } from '@atproto/syntax';
 import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError, insufficientScopeResponse } from '../../lib/oauth/resource';
 import { createServiceAuthToken } from '../../lib/appview';
 import { canMakeRpcCall, type AuthAccessContext } from '../../lib/auth-scope';
-import { PRIVILEGED_METHODS, PROTECTED_METHODS } from '../../lib/appview/auth-policy';
+import { PROTECTED_METHODS } from '../../lib/appview/auth-policy';
+import { isPrivilegedMethod, lexiconMethodIn } from '../../lib/privileged-method';
 
 export const prerender = false;
 
@@ -16,10 +17,6 @@ const SERVICE_AUTH_PROTECTED_METHODS: ReadonlySet<string> = new Set([
   'com.atproto.identity.submitPlcOperation',
   'com.atproto.repo.importRepo',
   'com.atproto.server.deleteAccount',
-]);
-
-const APP_PASSWORD_DENIED_SERVICE_AUTH_METHODS: ReadonlySet<string> = new Set([
-  'com.atproto.server.createAccount',
 ]);
 
 export async function GET({ locals, request }: APIContext) {
@@ -55,9 +52,8 @@ export async function GET({ locals, request }: APIContext) {
   if (!isAccountActiveForServiceAuth(auth.access)) {
     return jsonError('AccountInactive', 'Account is not active', 403);
   }
-  if (!canIssueServiceAuth(auth.access, lexiconMethod, audience)) {
-    return insufficientScopeResponse();
-  }
+  const denial = denyServiceAuth(auth.access, lexiconMethod, audience);
+  if (denial) return denial;
 
   let expiresIn = 60;
   const maxExpiresIn = lexiconMethod ? METHOD_SCOPED_MAX_EXPIRATION_SECONDS : METHODLESS_MAX_EXPIRATION_SECONDS;
@@ -93,23 +89,30 @@ export async function GET({ locals, request }: APIContext) {
   }
 }
 
-function canIssueServiceAuth(
+function denyServiceAuth(
   access: AuthAccessContext,
   lexiconMethod: string | null,
   audience: string,
-): boolean {
+): Response | null {
   if (lexiconMethod === null) {
-    return access.isFullAccess || access.isAppPassword;
+    return access.isFullAccess || access.isAppPassword ? null : insufficientScopeResponse();
   }
-  if (SERVICE_AUTH_PROTECTED_METHODS.has(lexiconMethod)) return false;
-  if (access.isOAuth) return canMakeRpcCall(access, lexiconMethod, audience);
-  if (APP_PASSWORD_DENIED_SERVICE_AUTH_METHODS.has(lexiconMethod)) {
-    return access.isFullAccess;
+  if (lexiconMethodIn(SERVICE_AUTH_PROTECTED_METHODS, lexiconMethod)) {
+    return insufficientScopeResponse();
   }
-  if (PRIVILEGED_METHODS.has(lexiconMethod)) {
-    return access.isPrivileged;
+  // Same predicate as the proxy. Reference PDS: InvalidRequestError with no
+  // custom name, so the code is InvalidRequest and the status is 400.
+  if (!access.isOAuth && isPrivilegedMethod(lexiconMethod) && !access.isPrivileged) {
+    return jsonError(
+      'InvalidRequest',
+      `insufficient access to request a service auth token for the following method: ${lexiconMethod}`,
+      400,
+    );
   }
-  return canMakeRpcCall(access, lexiconMethod, audience);
+  if (!canMakeRpcCall(access, lexiconMethod, audience)) {
+    return insufficientScopeResponse();
+  }
+  return null;
 }
 
 function isAccountActiveForServiceAuth(access: AuthAccessContext): boolean {

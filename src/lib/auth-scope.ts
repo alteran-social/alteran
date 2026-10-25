@@ -1,4 +1,5 @@
 import { mimeMatches } from './mime';
+import { isChatMethod, isPrivilegedMethod, lexiconMethodIn } from './privileged-method';
 
 export const AuthScope = {
   Access: 'com.atproto.access',
@@ -220,7 +221,7 @@ export function canMakeRpcCall(
   if (access.isTakendown || access.isSignupQueued) return false;
   if (access.isFullAccess) return true;
   if (access.isAppPassword) {
-    return access.isPrivileged || !isChatRpc(lxm);
+    return access.isPrivileged || !isPrivilegedAppPasswordMethod(lxm);
   }
   if (!access.isOAuth || !lxm || !aud) return false;
   const parts = oauthScopeParts(access.scope);
@@ -229,7 +230,7 @@ export function canMakeRpcCall(
   if (
     parts.includes(OAUTH_TRANSITION_GENERIC) &&
     !isChatRpc(lxm) &&
-    !TRANSITION_GENERIC_BLOCKED_RPC.has(lxm)
+    !lexiconMethodIn(TRANSITION_GENERIC_BLOCKED_RPC, lxm)
   ) return true;
   return parts.some((part) => oauthPermissionAllowsRpc(part, lxm, aud));
 }
@@ -395,5 +396,9 @@ function oauthPermissionAllowsRpc(scope: string, lxm: string, aud: string): bool
 }
 
 function isChatRpc(lxm: string | null | undefined): boolean {
-  return typeof lxm === 'string' && lxm.startsWith('chat.bsky.');
+  return typeof lxm === 'string' && isChatMethod(lxm);
+}
+
+function isPrivilegedAppPasswordMethod(lxm: string | null | undefined): boolean {
+  return typeof lxm === 'string' && isPrivilegedMethod(lxm);
 }

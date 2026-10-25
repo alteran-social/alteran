@@ -1,6 +1,7 @@
 import type { APIContext } from 'astro';
 import { proxyAppView } from '../../lib/appview';
 import { authErrorResponse, authenticateRequest, unauthorized } from '../../lib/auth';
+import { isChatMethod } from '../../lib/privileged-method';
 import {
   isSingleUserUnsupportedRoute,
   unsupportedSingleUserRouteResponse,
@@ -9,11 +10,10 @@ import {
 export const prerender = false;
 
 function shouldProxy(nsid: string): boolean {
-  return (
-    nsid.startsWith('app.bsky.') ||
-    nsid.startsWith('chat.bsky.') ||
-    nsid.startsWith('tools.ozone.')
-  );
+  const normalized = nsid.toLowerCase();
+  return isChatMethod(nsid) ||
+    normalized.startsWith('app.bsky.') ||
+    normalized.startsWith('tools.ozone.');
 }
 
 function nsidFromParams(params: Record<string, any>): string {
