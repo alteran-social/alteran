@@ -5,13 +5,14 @@ import { DpopNonceError } from '../../lib/oauth/dpop-errors';
 import { publicPdsOrigin } from '../../lib/oauth/consent';
 import { savePar } from '../../lib/oauth/store';
 import {
-  safeFetchJson,
-  isSafeFetchUrl,
   validateClientMetadataShape,
   validateParRequest,
   verifyClientAuthentication,
   type OAuthClientMetadata,
 } from '../../lib/oauth/clients';
+import { resolveLoopbackClient } from '../../lib/oauth/loopback-client';
+import { resolveRequestedScope } from '../../lib/oauth/requested-scope';
+import { isSafeFetchUrl, safeFetchJson } from '../../lib/oauth/safe-fetch';
 import {
   logOauthPar,
   readFetchContext,
@@ -61,32 +62,41 @@ export async function POST({ locals, request }: APIContext) {
     const prompt = form.get('prompt') || undefined;
     formSummary = summarizeParForm(form);
 
-    if (!client_id || !isSafeFetchUrl(client_id)) {
-      const error = new Error('client_id must be a safe https metadata URL');
+    const loopbackClient = resolveLoopbackClient(client_id);
+    if (loopbackClient.tag === 'invalid') {
+      const error = new Error(loopbackClient.message);
+      log('metadata_shape', { error });
+      return oauthError('invalid_client', error.message);
+    }
+    if (loopbackClient.tag === 'not-loopback' && !isSafeFetchUrl(client_id)) {
+      const error = new Error('client_id must be a safe https metadata URL or an http://localhost development client');
       log('metadata_fetch', { error });
-      return new Response(JSON.stringify({ error: 'invalid_client', error_description: error.message }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      return oauthError('invalid_client', error.message);
     }
     if (!state) {
       const error = new Error('state required');
       log('par_validate', { error });
-      return new Response(JSON.stringify({ error: 'invalid_request', error_description: error.message }), { status: 400, headers: { 'Content-Type': 'application/json' } });
-    }
-
-    let rawMetadata: unknown;
-    try {
-      rawMetadata = await safeFetchJson(env, client_id, 'client metadata');
-    } catch (e) {
-      const ctx = readFetchContext(e);
-      log('metadata_fetch', { error: e, ...ctx });
-      return new Response(JSON.stringify({ error: 'invalid_client', error_description: errorMessage(e) ?? 'Client metadata fetch failed' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      return oauthError('invalid_request', error.message);
     }
 
     let clientMeta: OAuthClientMetadata;
-    try {
-      clientMeta = validateClientMetadataShape(rawMetadata, client_id);
-    } catch (e) {
-      log('metadata_shape', { error: e });
-      return new Response(JSON.stringify({ error: 'invalid_client', error_description: errorMessage(e) ?? 'Client metadata invalid' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+    if (loopbackClient.tag === 'loopback') {
+      clientMeta = loopbackClient.metadata;
+    } else {
+      let rawMetadata: unknown;
+      try {
+        rawMetadata = await safeFetchJson(env, client_id, 'client metadata');
+      } catch (e) {
+        const ctx = readFetchContext(e);
+        log('metadata_fetch', { error: e, ...ctx });
+        return oauthError('invalid_client', errorMessage(e) ?? 'Client metadata fetch failed');
+      }
+      try {
+        clientMeta = validateClientMetadataShape(rawMetadata, client_id);
+      } catch (e) {
+        log('metadata_shape', { error: e });
+        return oauthError('invalid_client', errorMessage(e) ?? 'Client metadata invalid');
+      }
     }
 
     try {
@@ -94,13 +104,18 @@ export async function POST({ locals, request }: APIContext) {
         response_type,
         grant_type,
         redirect_uri,
-        scope,
         code_challenge,
         code_challenge_method,
       });
     } catch (e) {
       log('par_validate', { error: e });
-      return new Response(JSON.stringify({ error: 'invalid_client', error_description: errorMessage(e) ?? 'PAR request invalid' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      return oauthError('invalid_request', errorMessage(e) ?? 'PAR request invalid');
+    }
+
+    const grantedScope = resolveRequestedScope(scope, clientMeta.scope);
+    if (grantedScope.tag === 'invalid') {
+      log('par_validate', { error: new Error(grantedScope.message) });
+      return oauthError('invalid_scope', grantedScope.message);
     }
 
     const issuerOrigin = publicPdsOrigin(env, request);
@@ -109,7 +124,7 @@ export async function POST({ locals, request }: APIContext) {
       clientAuth = await verifyClientAuthentication(env, client_id, issuerOrigin, clientMeta, form);
     } catch (e) {
       log('client_auth', { error: e });
-      return new Response(JSON.stringify({ error: 'invalid_client', error_description: errorMessage(e) ?? 'Client authentication failed' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+      return oauthError('invalid_client', errorMessage(e) ?? 'Client authentication failed', 401);
     }
 
     const id = crypto.randomUUID().replace(/-/g, '');
@@ -119,7 +134,7 @@ export async function POST({ locals, request }: APIContext) {
       redirect_uri,
       code_challenge,
       code_challenge_method: 'S256' as const,
-      scope,
+      scope: grantedScope.scope,
       state,
       login_hint,
       prompt,
@@ -143,7 +158,13 @@ export async function POST({ locals, request }: APIContext) {
       return dpopErrorResponse(env, e);
     }
     log('outer', { error: e });
-    const headers = new Headers({ 'Content-Type': 'application/json' });
-    return new Response(JSON.stringify({ error: 'invalid_request', error_description: errorMessage(e) ?? 'Unknown error' }), { status: 400, headers });
+    return oauthError('invalid_request', errorMessage(e) ?? 'Unknown error');
   }
+}
+
+function oauthError(error: string, description: string, status = 400): Response {
+  return new Response(JSON.stringify({ error, error_description: description }), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }

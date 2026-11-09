@@ -98,8 +98,8 @@ describe('repo write blobs', () => {
       body: blobBody(jpegBytes),
     })));
 
-    expect(res.status).toBe(401);
-    expect((await json(res)).error).toBe('InvalidToken');
+    expect(res.status).toBe(403);
+    expect((await json(res)).error).toBe('ScopeMissingError');
     const rows = await env.ALTERAN_DB.prepare('SELECT cid FROM blob').all();
     expect(rows.results).toHaveLength(0);
   });

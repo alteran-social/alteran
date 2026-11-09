@@ -6,6 +6,7 @@ import { publicPdsOrigin } from '../../lib/oauth/consent';
 import { consumeCode } from '../../lib/oauth/store';
 import { issueSessionTokens, verifyRefreshToken, verifyAccessToken } from '../../lib/session-tokens';
 import { requireStoredClientAuthentication } from '../../lib/oauth/clients';
+import { oauthSessionExpiresAt } from '../../lib/oauth/session-lifetime';
 import {
   createOAuthSession,
   getOAuthSession,
@@ -98,6 +99,10 @@ export async function POST({ locals, request }: APIContext) {
         accessJti,
       });
 
+      const sessionExpiresAt = oauthSessionExpiresAt(rec.clientAuthMethod, refreshExpiry, {
+        tag: 'created',
+        now: Math.floor(Date.now() / 1000),
+      });
       await createOAuthSession(env, {
         id: sessionId,
         did: rec.did,
@@ -108,12 +113,12 @@ export async function POST({ locals, request }: APIContext) {
         scope: rec.scope,
         currentRefreshTokenId: refreshPayload.jti,
         accessJti: String(accessPayload.jti),
-        expiresAt: refreshExpiry,
+        expiresAt: sessionExpiresAt,
       });
       await storeRefreshToken(env, {
         id: refreshPayload.jti,
         did: rec.did,
-        expiresAt: refreshExpiry,
+        expiresAt: sessionExpiresAt,
         appPasswordName: null,
         tokenKind: 'oauth',
         oauthSessionId: sessionId,
@@ -190,10 +195,14 @@ export async function POST({ locals, request }: APIContext) {
         oauthSessionId: session.id,
         accessJti,
       });
+      const sessionExpiresAt = oauthSessionExpiresAt(session.clientAuthMethod, refreshExpiry, {
+        tag: 'refreshed',
+        currentExpiresAt: session.expiresAt,
+      });
       await storeRefreshToken(env, {
         id: refreshPayload.jti,
         did: session.did,
-        expiresAt: refreshExpiry,
+        expiresAt: sessionExpiresAt,
         appPasswordName: null,
         tokenKind: 'oauth',
         oauthSessionId: session.id,
@@ -210,7 +219,7 @@ export async function POST({ locals, request }: APIContext) {
           currentRefreshTokenId: refreshPayload.jti,
           previousRefreshTokenId: stored.id,
           accessJti: String(accessPayload.jti),
-          expiresAt: refreshExpiry,
+          expiresAt: sessionExpiresAt,
           now: nowSec,
         });
       } catch {

@@ -3,20 +3,18 @@ import { expect } from "@std/expect";
 import { SignJWT, exportJWK, generateKeyPair } from 'jose';
 import { makeEnv } from './helpers/env';
 import {
-  isAllowedRedirectUri,
-  isSafeFetchUrl,
-  redirectUriMatches,
-  safeFetchJson,
   validateClientMetadataShape,
   validateParRequest,
   verifyClientAuthentication,
 } from '../src/lib/oauth/clients';
+import { isAllowedRedirectUri, redirectUriMatches } from '../src/lib/oauth/redirect-uri';
+import { isSafeFetchUrl, safeFetchJson } from '../src/lib/oauth/safe-fetch';
 
 describe('OAuth client metadata validation', () => {
   const clientId = 'https://client.example/metadata';
   const metadata = {
     client_id: clientId,
-    redirect_uris: ['https://client.example/callback', 'http://127.0.0.1/callback'],
+    redirect_uris: ['https://client.example/callback'],
     token_endpoint_auth_method: 'none',
     grant_types: ['authorization_code', 'refresh_token'],
     response_types: ['code'],
@@ -106,7 +104,7 @@ describe('OAuth client metadata validation', () => {
 
   it('supports loopback redirect ports while rejecting private-use schemes', () => {
     expect(isAllowedRedirectUri('https://client.example/callback')).toBe(true);
-    expect(isAllowedRedirectUri('http://127.0.0.1:43210/callback')).toBe(true);
+    expect(isAllowedRedirectUri('http://127.0.0.1:43210/callback')).toBe(false);
     expect(isAllowedRedirectUri('com.example.app:/callback')).toBe(false);
     expect(isAllowedRedirectUri('com.example.client:/callback', {
       applicationType: 'native',
@@ -120,7 +118,31 @@ describe('OAuth client metadata validation', () => {
       applicationType: 'native',
       clientId: clientId,
     })).toBe(false);
+  });
+
+  it('allows loopback IP redirects only for native clients', () => {
+    const native = { applicationType: 'native', clientId: 'http://localhost' } as const;
+    expect(isAllowedRedirectUri('http://127.0.0.1:43210/callback', native)).toBe(true);
+    expect(isAllowedRedirectUri('http://[::1]/callback', native)).toBe(true);
+    expect(isAllowedRedirectUri('http://localhost:43210/callback', native)).toBe(false);
+    expect(isAllowedRedirectUri('http://192.168.1.10/callback', native)).toBe(false);
+    expect(isAllowedRedirectUri('http://127.0.0.1/callback', { applicationType: 'web', clientId })).toBe(false);
+  });
+
+  it('matches a loopback redirect registered without a port on any port', () => {
     expect(redirectUriMatches('http://127.0.0.1/callback', 'http://127.0.0.1:43210/callback')).toBe(true);
+    expect(redirectUriMatches('http://[::1]/callback', 'http://[::1]:43210/callback')).toBe(true);
+  });
+
+  it('requires an exact match for a loopback redirect registered with a port', () => {
+    expect(redirectUriMatches('http://127.0.0.1:3000/callback', 'http://127.0.0.1:3000/callback')).toBe(true);
+    expect(redirectUriMatches('http://127.0.0.1:3000/callback', 'http://127.0.0.1:43210/callback')).toBe(false);
+  });
+
+  it('does not match a loopback redirect on another path or host', () => {
+    expect(redirectUriMatches('http://127.0.0.1/callback', 'http://127.0.0.1:43210/other')).toBe(false);
+    expect(redirectUriMatches('http://127.0.0.1/callback', 'http://[::1]:43210/callback')).toBe(false);
+    expect(redirectUriMatches('https://client.example/callback', 'https://client.example:8443/callback')).toBe(false);
   });
 
   it('rejects unsupported auth methods and malformed PAR requests', () => {
@@ -141,14 +163,12 @@ describe('OAuth client metadata validation', () => {
       response_type: 'code',
       grant_type: 'authorization_code',
       redirect_uri: 'https://client.example/callback',
-      scope: 'atproto',
       code_challenge: 'challenge',
       code_challenge_method: 'S256',
     })).not.toThrow();
     expect(() => validateParRequest(valid, {
       response_type: 'token',
       redirect_uri: 'https://client.example/callback',
-      scope: 'atproto',
       code_challenge: 'challenge',
       code_challenge_method: 'S256',
     })).toThrow();
@@ -156,21 +176,18 @@ describe('OAuth client metadata validation', () => {
       response_type: 'code',
       grant_type: 'client_credentials',
       redirect_uri: 'https://client.example/callback',
-      scope: 'atproto',
       code_challenge: 'challenge',
       code_challenge_method: 'S256',
     })).toThrow();
     expect(() => validateParRequest(valid, {
       response_type: 'code',
       redirect_uri: 'https://evil.example/callback',
-      scope: 'atproto',
       code_challenge: 'challenge',
       code_challenge_method: 'S256',
     })).toThrow();
     expect(() => validateParRequest(native, {
       response_type: 'code',
       redirect_uri: 'com.example.app:/callback',
-      scope: 'atproto',
       code_challenge: 'challenge',
       code_challenge_method: 'S256',
     })).not.toThrow();

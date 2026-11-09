@@ -360,9 +360,9 @@ describe('repo write validation', () => {
       }],
     }, String(env.PDS_DID), headers, url);
 
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
     expect(res.headers.get('content-type')).toContain('application/json');
-    expect((await json(res)).error).toBe('InvalidToken');
+    expect((await json(res)).error).toBe('ScopeMissingError');
     const rateRows = await env.ALTERAN_DB.prepare('SELECT count(*) AS count FROM sqlite_master WHERE name = ?')
       .bind('rate_limit')
       .first<{ count: number }>();

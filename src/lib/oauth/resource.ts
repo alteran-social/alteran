@@ -295,6 +295,12 @@ export function insufficientScopeResponse(): Response {
   return jsonError('InvalidToken', 'token does not grant access to this resource', 401);
 }
 
+// 403, not 401: the token is valid, so a client must not answer this by
+// refreshing and retrying. Matches the reference PDS's ScopeMissingError.
+export function scopeMissingResponse(): Response {
+  return jsonError('ScopeMissingError', 'Missing required scope', 403);
+}
+
 async function withResolvedResourceAccountStatus(
   env: Env,
   did: string,

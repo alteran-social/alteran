@@ -5,7 +5,7 @@ import {
   verifyResourceRequestHybrid,
   dpopResourceUnauthorized,
   handleResourceAuthError,
-  insufficientScopeResponse,
+  scopeMissingResponse,
   type ResourceAuthContext,
 } from '../../lib/oauth/resource';
 import { canUploadBlob } from '../../lib/auth-scope';
@@ -76,7 +76,7 @@ export async function POST({ locals, request }: APIContext) {
   const sniffed = sniffMime(buf);
   const contentType = resolveUploadMime(headerMime, sniffed);
   if (uploadAuth.tag === 'user' && !canUploadBlob(uploadAuth.auth.access, contentType)) {
-    return insufficientScopeResponse();
+    return scopeMissingResponse();
   }
 
   // Skip MIME type validation during migration - accept all types

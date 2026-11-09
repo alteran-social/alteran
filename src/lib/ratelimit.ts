@@ -1,5 +1,9 @@
 import type { Env } from '../env';
 
+// applyWrites charges one unit per write and the protocol allows 200 writes
+// per call, so the writes budget has to admit several full batches a minute.
+const DEFAULT_LIMIT_PER_MINUTE = { writes: 1000, blob: 30 } as const;
+
 // Rate limiting (best-effort, D1 based)
 export async function checkRate(
   env: Env,
@@ -8,7 +12,7 @@ export async function checkRate(
   options: { key?: string; cost?: number } = {},
 ): Promise<Response | null> {
   try {
-    const limit = Number((env.PDS_RATE_LIMIT_PER_MIN as string | undefined) ?? (bucket === 'blob' ? 30 : 60));
+    const limit = Number((env.PDS_RATE_LIMIT_PER_MIN as string | undefined) ?? DEFAULT_LIMIT_PER_MINUTE[bucket]);
     const cost = Math.max(1, Math.floor(options.cost ?? 1));
     const now = Date.now();
     const windowMs = 60_000;

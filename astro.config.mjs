@@ -39,13 +39,13 @@ export default defineConfig({
       PDS_MAX_JSON_BYTES: envField.string({
         context: "server",
         access: "secret",
-        default: "65536",
+        default: "1048576",
         optional: true,
       }),
       PDS_RATE_LIMIT_PER_MIN: envField.string({
         context: "server",
         access: "secret",
-        default: "60",
+        default: "1000",
         optional: true,
       }),
       PDS_CORS_ORIGIN: envField.string({

@@ -19,10 +19,14 @@ export async function readJson(request: Request): Promise<unknown> {
   return JSON.parse(text || '{}');
 }
 
+// A full com.atproto.repo.applyWrites batch is 200 records; the reference PDS
+// allows 1 MB of JSON on the repo write routes for the same reason.
+const DEFAULT_MAX_JSON_BYTES = 1024 * 1024;
+
 export async function readJsonBounded(env: Env, request: Request): Promise<unknown> {
   requireJsonContentType(request);
-  const raw = env.PDS_MAX_JSON_BYTES ?? '65536';
-  const max = Number(raw) > 0 ? Number(raw) : 65536;
+  const configured = Number(env.PDS_MAX_JSON_BYTES);
+  const max = configured > 0 ? configured : DEFAULT_MAX_JSON_BYTES;
   const bytes = await readBodyBounded(request, max);
   const text = new TextDecoder().decode(bytes);
   return JSON.parse(text || '{}');
