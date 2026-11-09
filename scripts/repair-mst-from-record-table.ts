@@ -29,7 +29,7 @@
  *   --binding <name>           D1 binding/db name. Default: alteran.
  *   --local                    Use local D1 instead of remote.
  *   --batch-size <n>           Default: 50. Each batch costs (n) writes against the rate
- *                              limit, which is 60/min by default (PDS_RATE_LIMIT_PER_MIN).
+ *                              limit, which is 1000/min by default (PDS_RATE_LIMIT_PER_MIN).
  *   --sleep-ms <n>             Pause between batches. Default: 65000 (just over a minute).
  *   --dry-run                  Print the plan; do not POST anything.
  *   --did <did>                Override DID for record-table lookup.

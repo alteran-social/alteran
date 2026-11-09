@@ -100,8 +100,8 @@ Auth (JWT)
   - `PDS_DID`, `PDS_HANDLE`
 
 Rate limiting & limits
-- Per‑IP rate limit (best‑effort, D1‑backed): set `PDS_RATE_LIMIT_PER_MIN` (default writes=60/min, blobs=30/min). Responses include `x-ratelimit-*` headers.
-- JSON body size cap via `PDS_MAX_JSON_BYTES` (default 65536/64 KiB).
+- Per‑IP rate limit (best‑effort, D1‑backed): set `PDS_RATE_LIMIT_PER_MIN` (default writes=1000/min counted per record written, blobs=30/min). Responses include `x-ratelimit-*` headers.
+- JSON body size cap via `PDS_MAX_JSON_BYTES` (default 1048576/1 MiB, enough for a full 200-write `applyWrites` batch).
 - CORS: allow `*` by default in dev. In production, set `PDS_CORS_ORIGIN` to a CSV of allowed origins (e.g., `https://example.com,https://app.example.com`). Requests with an `Origin` not in this set are denied at the CORS layer (no wildcard fallback).
 
 This project targets Cloudflare Workers via Astro with `@cloudflare/vite-plugin`, and is developed with Deno as the task runner / package manager.
@@ -229,8 +229,8 @@ These can be set as environment variables in [`wrangler.jsonc`](wrangler.jsonc:1
 |----------|---------|-------------|
 | `PDS_ALLOWED_MIME` | `image/jpeg,image/png,...` | Comma-separated MIME types |
 | `PDS_MAX_BLOB_SIZE` | `5242880` (5MB) | Max blob size in bytes |
-| `PDS_MAX_JSON_BYTES` | `65536` (64KB) | Max JSON body size |
-| `PDS_RATE_LIMIT_PER_MIN` | `60` | Write requests per minute |
+| `PDS_MAX_JSON_BYTES` | `1048576` (1MB) | Max JSON body size |
+| `PDS_RATE_LIMIT_PER_MIN` | `1000` | Records written per minute (an `applyWrites` call counts once per write, so keep this at 200 or more) |
 | `PDS_CORS_ORIGIN` | `*` (dev), specific (prod) | Allowed CORS origins |
 | `PDS_SEQ_WINDOW` | `512` | Firehose sequence window |
 | `PDS_HOSTNAME` | - | Public hostname |

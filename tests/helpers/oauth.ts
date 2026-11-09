@@ -46,7 +46,7 @@ export function mockClientMetadata(clientId = 'https://client.example/metadata')
   const metadata = {
     client_id: clientId,
     client_name: 'Test Client',
-    redirect_uris: ['https://client.example/callback', 'http://127.0.0.1/callback'],
+    redirect_uris: ['https://client.example/callback'],
     token_endpoint_auth_method: 'none',
     grant_types: ['authorization_code', 'refresh_token'],
     response_types: ['code'],

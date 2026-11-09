@@ -11,6 +11,7 @@ import { authenticateRequest, isAuthorized } from '../src/lib/auth';
 import { GET as getSession } from '../src/pages/xrpc/com.atproto.server.getSession';
 import { GET as getPreferences } from '../src/pages/xrpc/app.bsky.actor.getPreferences';
 import { GET as catchallGet } from '../src/pages/xrpc/[...nsid]';
+import { canWriteRepo } from '../src/lib/auth-scope';
 
 const testRepoSigningKey = '8b5e3d226b44c4c88fbd3d4529f6283fb2b20f6deee8a0b34e7f0a9b12d3e4f1';
 
@@ -71,17 +72,19 @@ describe('OAuth resource DPoP binding', () => {
     expect(result?.scope).toBe('atproto transition:generic');
   });
 
-  it('rejects login-only OAuth tokens on PDS resource routes', async () => {
+  it('authenticates login-only OAuth tokens without granting repo writes', async () => {
     const env = await makeEnv();
     const key = await makeDpopKey();
     const access = await issueOAuthAccess(env, key, 'atproto');
     const url = 'https://pds.example/xrpc/com.atproto.repo.createRecord';
     const proof = await signResourceDpop(env, key, 'POST', url, access);
 
-    await expect(verifyResourceRequestHybrid(env, new Request(url, {
+    const result = await verifyResourceRequestHybrid(env, new Request(url, {
       method: 'POST',
       headers: { authorization: `DPoP ${access}`, dpop: proof },
-    }))).rejects.toMatchObject({ code: 'invalid_token' });
+    }));
+    expect(result?.did).toBe('did:example:test');
+    expect(result && canWriteRepo(result.access, 'app.bsky.feed.post', 'create')).toBe(false);
   });
 
   it('accepts case-insensitive DPoP authorization schemes', async () => {

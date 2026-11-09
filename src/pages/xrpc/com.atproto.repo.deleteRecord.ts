@@ -1,6 +1,6 @@
 import type { APIContext } from 'astro';
 import { errorCode } from '../../lib/errors';
-import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError, insufficientScopeResponse } from '../../lib/oauth/resource';
+import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError, scopeMissingResponse } from '../../lib/oauth/resource';
 import { canWriteRepo } from '../../lib/auth-scope';
 import { checkRate } from '../../lib/ratelimit';
 import { readJsonBounded } from '../../lib/util';
@@ -56,7 +56,7 @@ export async function POST({ locals, request }: APIContext) {
   try {
     const input = assertRepoWriteInput('com.atproto.repo.deleteRecord', body);
     for (const write of deleteRecordAuthorizations(input)) {
-      if (!canWriteRepo(auth.access, write.collection, write.action)) return insufficientScopeResponse();
+      if (!canWriteRepo(auth.access, write.collection, write.action)) return scopeMissingResponse();
     }
 
     const rateLimitResponse = await checkRate(env, request, 'writes', { key: auth.did });

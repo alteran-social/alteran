@@ -1,3 +1,4 @@
+import { isValidNsid } from '@atproto/syntax';
 import { mimeMatches } from './mime';
 import { isChatMethod, isPrivilegedMethod, lexiconMethodIn } from './privileged-method';
 
@@ -67,7 +68,9 @@ const OAUTH_TRANSITION_SCOPES = new Set([
 ]);
 const REPO_ACTIONS = new Set(['create', 'update', 'delete']);
 const ACCOUNT_ACTIONS = new Set(['read', 'manage']);
-const OAUTH_RESOURCE_TYPES = new Set(['repo', 'rpc', 'blob', 'identity', 'account', 'include']);
+const ACCOUNT_ATTRIBUTES = new Set(['email', 'repo', 'status']);
+const IDENTITY_ATTRIBUTES = new Set(['handle', '*']);
+const OAUTH_RESOURCE_TYPES = new Set(['repo', 'rpc', 'blob', 'identity', 'account']);
 const TRANSITION_GENERIC_BLOCKED_RPC = new Set([
   'chat.bsky.actor.deleteAccount',
   'com.atproto.admin.sendEmail',
@@ -100,15 +103,7 @@ export function isOAuthScope(scope: unknown): scope is string {
   const parts = oauthScopeParts(scope);
   return parts !== null &&
     parts.includes(OAUTH_PROFILE_SCOPE) &&
-    parts.every(isRecognizedOAuthScopePart);
-}
-
-export function isOAuthPermissionScope(scope: unknown): scope is string {
-  const parts = oauthScopeParts(scope);
-  return parts !== null &&
-    parts.includes(OAUTH_PROFILE_SCOPE) &&
-    parts.some((part) => part !== OAUTH_PROFILE_SCOPE && grantsOAuthResourceAccess(part)) &&
-    parts.every(isRecognizedOAuthScopePart);
+    parts.every(isSupportedOAuthScopeValue);
 }
 
 export function bearerAccessContext(
@@ -203,6 +198,17 @@ export function canWriteRepo(
   return parts.some((part) => oauthPermissionAllowsRepo(part, collection, action));
 }
 
+export function canReadAccountEmail(access: AuthAccessContext): boolean {
+  if (access.isTakendown || access.isSignupQueued) return false;
+  if (!access.isOAuth) return true;
+  const parts = oauthScopeParts(access.scope) ?? [];
+  return parts.some((part) => {
+    if (part === OAUTH_TRANSITION_EMAIL) return true;
+    const parsed = parsePermissionScope(part);
+    return parsed?.resource === 'account' && parsed.attr === 'email';
+  });
+}
+
 export function canUploadBlob(access: AuthAccessContext, mimeType: string): boolean {
   if (access.isTakendown || access.isSignupQueued) return false;
   if (access.isFullAccess || access.isAppPassword) return true;
@@ -241,16 +247,9 @@ function oauthScopeParts(scope: unknown): string[] | null {
   return parts.length > 0 ? parts : null;
 }
 
-function isRecognizedOAuthScopePart(scope: string): boolean {
+export function isSupportedOAuthScopeValue(scope: string): boolean {
   if (scope === OAUTH_PROFILE_SCOPE || OAUTH_TRANSITION_SCOPES.has(scope)) return true;
   return parsePermissionScope(scope) !== null;
-}
-
-function grantsOAuthResourceAccess(scope: string): boolean {
-  if (scope === OAUTH_TRANSITION_CHAT) return false;
-  if (OAUTH_TRANSITION_SCOPES.has(scope)) return true;
-  const parsed = parsePermissionScope(scope);
-  return parsed !== null && parsed.resource !== 'include';
 }
 
 function oauthScopeAllowsTransitionGeneric(scope: string): boolean {
@@ -262,15 +261,14 @@ function oauthScopeAllowsTransitionChat(scope: string): boolean {
   return !!parts?.includes(OAUTH_TRANSITION_GENERIC) && parts.includes(OAUTH_TRANSITION_CHAT);
 }
 
-type ParsedPermissionScope =
+export type ParsedPermissionScope =
   | { resource: 'repo'; collections: string[]; actions: RepoWriteAction[] | null }
   | { resource: 'rpc'; lxms: string[]; aud: string }
   | { resource: 'blob'; accepts: string[] }
   | { resource: 'account'; attr: string; action: 'read' | 'manage' }
-  | { resource: 'identity'; attr: string }
-  | { resource: 'include' };
+  | { resource: 'identity'; attr: string };
 
-function parsePermissionScope(scope: string): ParsedPermissionScope | null {
+export function parsePermissionScope(scope: string): ParsedPermissionScope | null {
   if (!/^[\x21-\x7e]+$/.test(scope)) return null;
   const questionIndex = scope.indexOf('?');
   const head = questionIndex === -1 ? scope : scope.slice(0, questionIndex);
@@ -296,8 +294,6 @@ function parsePermissionScope(scope: string): ParsedPermissionScope | null {
       return parseAccountScope(positional, params);
     case 'identity':
       return parseIdentityScope(positional, params);
-    case 'include':
-      return positional && paramsHaveOnly(params, new Set(['aud'])) ? { resource: 'include' } : null;
   }
   return null;
 }
@@ -306,7 +302,9 @@ function parseRepoScope(positional: string | null, params: URLSearchParams): Par
   if (!paramsHaveOnly(params, new Set(['collection', 'action']))) return null;
   if (positional !== null && params.has('collection')) return null;
   const collections = positional !== null ? [positional] : params.getAll('collection');
-  if (!collections.length || collections.some((value) => value === '')) return null;
+  // Percent-decoding can produce anything; only real NSIDs may reach the
+  // consent screen and the collection comparison.
+  if (!collections.length || collections.some((value) => value !== '*' && !isValidNsid(value))) return null;
   const actionsRaw = params.getAll('action');
   const actionValues = unique(actionsRaw);
   const actions = actionValues.length
@@ -325,6 +323,8 @@ function parseRpcScope(positional: string | null, params: URLSearchParams): Pars
     return null;
   }
   if (lxms.includes('*') && audiences[0] === '*') return null;
+  if (lxms.some((lxm) => lxm !== '*' && !isValidNsid(lxm))) return null;
+  if (audiences[0] !== '*' && !/^did:[a-z]+:[\x21-\x7e]+$/.test(audiences[0])) return null;
   return { resource: 'rpc', lxms, aud: audiences[0] };
 }
 
@@ -332,7 +332,7 @@ function parseBlobScope(positional: string | null, params: URLSearchParams): Par
   if (!paramsHaveOnly(params, new Set(['accept']))) return null;
   if (positional !== null && params.has('accept')) return null;
   const accepts = positional !== null ? [positional] : params.getAll('accept');
-  if (!accepts.length || accepts.some((value) => value === '')) return null;
+  if (!accepts.length || accepts.some((value) => !/^(?:\*\/\*|[a-z0-9.+-]+\/(?:\*|[a-z0-9.+-]+))$/i.test(value))) return null;
   return { resource: 'blob', accepts };
 }
 
@@ -340,18 +340,17 @@ function parseAccountScope(positional: string | null, params: URLSearchParams): 
   if (!paramsHaveOnly(params, new Set(['attr', 'action']))) return null;
   if (positional !== null && params.has('attr')) return null;
   const attrs = positional !== null ? [positional] : params.getAll('attr');
-  const actions = params.getAll('action');
-  if (attrs.length !== 1 || attrs[0] === '' || actions.length > 1) return null;
-  const action = actions[0] ?? 'read';
-  if (!ACCOUNT_ACTIONS.has(action)) return null;
-  return { resource: 'account', attr: attrs[0], action: action as 'read' | 'manage' };
+  const actions = unique(params.getAll('action'));
+  if (attrs.length !== 1 || !ACCOUNT_ATTRIBUTES.has(attrs[0])) return null;
+  if (!actions.every((action) => ACCOUNT_ACTIONS.has(action))) return null;
+  return { resource: 'account', attr: attrs[0], action: actions.includes('manage') ? 'manage' : 'read' };
 }
 
 function parseIdentityScope(positional: string | null, params: URLSearchParams): ParsedPermissionScope | null {
   if (!paramsHaveOnly(params, new Set(['attr']))) return null;
   if (positional !== null && params.has('attr')) return null;
   const attrs = positional !== null ? [positional] : params.getAll('attr');
-  if (attrs.length !== 1 || attrs[0] === '') return null;
+  if (attrs.length !== 1 || !IDENTITY_ATTRIBUTES.has(attrs[0])) return null;
   return { resource: 'identity', attr: attrs[0] };
 }
 

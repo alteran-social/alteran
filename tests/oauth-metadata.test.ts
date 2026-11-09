@@ -24,6 +24,19 @@ describe('OAuth metadata and route injection', () => {
     expect(body.dpop_signing_alg_values_supported).toEqual(['ES256']);
   });
 
+  it('advertises the granular repo scope family from both metadata documents', async () => {
+    const env = await makeEnv();
+    for (const [handler, path] of [
+      [authServerMetadata, '/.well-known/oauth-authorization-server'],
+      [protectedResourceMetadata, '/.well-known/oauth-protected-resource'],
+    ] as const) {
+      const res = await handler({ locals: { env }, request: new Request(`https://pds.example${path}`) } as any);
+      const body = await res.json() as { scopes_supported: string[] };
+      expect(body.scopes_supported).toContain('atproto');
+      expect(body.scopes_supported).toContain('repo:*');
+    }
+  });
+
   it('advertises protected-resource metadata', async () => {
     const env = await makeEnv();
     const request = new Request('https://pds.example/.well-known/oauth-protected-resource');

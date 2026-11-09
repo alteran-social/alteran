@@ -12,7 +12,9 @@ import {
   redirectWithCode,
   redirectWithOAuthError,
 } from '../../lib/oauth/consent';
-import { fetchClientMetadata } from '../../lib/oauth/clients';
+import { resolveClientMetadata } from '../../lib/oauth/clients';
+import { consentPermissions, describeConsentPermission } from '../../lib/oauth/consent-scopes';
+import { isLoopbackClientId } from '../../lib/oauth/loopback-client';
 
 export const prerender = false;
 
@@ -45,14 +47,26 @@ export async function GET({ locals, request }: APIContext) {
     return redirectWithOAuthError(par.redirect_uri, 'login_required', par.state, issuer, 'login_hint does not match this PDS account');
   }
 
-  let clientName = par.client_id;
-  try {
-    const meta = await fetchClientMetadata(env, par.client_id);
-    if (typeof (meta as any).client_name === 'string') clientName = (meta as any).client_name;
-  } catch {
-    // The PAR step already validated metadata; keep consent rendering available
-    // if the client metadata endpoint is temporarily unavailable.
+  // A loopback client_id is self-declared: any local program can present it,
+  // so it gets a fixed name and nothing it supplies is used as one.
+  const isLoopbackClient = isLoopbackClientId(par.client_id);
+  let clientName = isLoopbackClient ? 'Local development client' : par.client_id;
+  if (!isLoopbackClient) {
+    try {
+      const metadata = await resolveClientMetadata(env, par.client_id);
+      if (metadata.client_name) clientName = metadata.client_name;
+    } catch {
+      // The PAR step already validated metadata; keep consent rendering available
+      // if the client metadata endpoint is temporarily unavailable.
+    }
   }
+
+  const permissionItems = consentPermissions(par.scope)
+    .map((permission) => `<li>${htmlEscape(describeConsentPermission(permission))}</li>`)
+    .join('\n    ');
+  const unverifiedClientNotice = isLoopbackClient
+    ? '<p class="warning">This is a local development client running on your own computer. Its identity cannot be verified, so only continue if you started this sign-in yourself.</p>'
+    : '';
 
   const csrf = crypto.randomUUID().replace(/-/g, '');
   await saveConsent(env, id, csrf, Math.floor(Date.now() / 1000) + 300);
@@ -68,11 +82,19 @@ export async function GET({ locals, request }: APIContext) {
     label, input, button { display: block; width: 100%; box-sizing: border-box; }
     input { margin: .4rem 0 1rem; padding: .7rem; }
     button { margin-top: .75rem; padding: .75rem; }
+    code { overflow-wrap: anywhere; }
+    .scope { color: #555; font-size: .85rem; }
+    .warning { border-left: .25rem solid #b45309; padding: .5rem .75rem; background: #fef3c7; color: #1f2937; }
   </style>
 </head>
 <body>
   <h1>Authorize ${htmlEscape(clientName)}</h1>
-  <p>${htmlEscape(clientName)} is requesting access to ${htmlEscape(par.scope)}.</p>
+  ${unverifiedClientNotice}
+  <p>${htmlEscape(clientName)} (<code>${htmlEscape(par.client_id)}</code>) is asking for permission to:</p>
+  <ul>
+    ${permissionItems}
+  </ul>
+  <p class="scope">Requested scope: <code>${htmlEscape(par.scope)}</code></p>
   <form method="post" action="/oauth/consent">
     <input type="hidden" name="request_uri" value="${htmlEscape(request_uri ?? '')}" />
     <input type="hidden" name="client_id" value="${htmlEscape(par.client_id)}" />

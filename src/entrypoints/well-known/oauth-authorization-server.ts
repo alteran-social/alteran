@@ -1,6 +1,7 @@
 import type { APIContext } from "astro";
 import { CACHE_CONFIGS, withCache } from "../../lib/cache";
 import { publicPdsOrigin } from "../../lib/oauth/consent";
+import { OAUTH_SCOPES_SUPPORTED } from "../../lib/oauth/scopes-supported";
 
 export const prerender = false;
 
@@ -17,7 +18,7 @@ export async function GET({ locals, request }: APIContext) {
         token_endpoint: `${origin}/oauth/token`,
         jwks_uri: `${origin}/oauth/jwks`,
         revocation_endpoint: `${origin}/oauth/revoke`,
-        scopes_supported: ["atproto", "transition:generic"],
+        scopes_supported: OAUTH_SCOPES_SUPPORTED,
         response_types_supported: ["code"],
         response_modes_supported: ["query"],
         grant_types_supported: ["authorization_code", "refresh_token"],

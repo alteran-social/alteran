@@ -444,8 +444,8 @@ describe('repo write swap and retry', () => {
       record: postRecord(),
     }, String(env.PDS_DID), headers, url);
 
-    expect(res.status).toBe(401);
-    expect((await json(res)).error).toBe('InvalidToken');
+    expect(res.status).toBe(403);
+    expect((await json(res)).error).toBe('ScopeMissingError');
     expect(await listRecords(env)).toHaveLength(0);
 
     const createHeaders = await issueOAuthAccess(env, 'atproto repo:app.bsky.feed.post?action=create', url);

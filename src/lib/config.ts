@@ -15,8 +15,8 @@ const REQUIRED_SECRETS = [
 const OPTIONAL_VARS = {
   PDS_ALLOWED_MIME: 'image/jpeg,image/png,image/webp,image/gif,image/avif',
   PDS_MAX_BLOB_SIZE: '5242880', // 5MB
-  PDS_MAX_JSON_BYTES: '65536', // 64KB
-  PDS_RATE_LIMIT_PER_MIN: '60',
+  PDS_MAX_JSON_BYTES: '1048576', // 1MB
+  PDS_RATE_LIMIT_PER_MIN: '1000',
   PDS_CORS_ORIGIN: '*',
   PDS_SEQ_WINDOW: '512',
   ENVIRONMENT: 'development',

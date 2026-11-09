@@ -38,7 +38,10 @@ jobs:
       - name: Validate JSR package
         run: deno publish --dry-run --allow-slow-types
       - name: Validate npm package
-        run: npm publish --dry-run --access public --provenance
+        # `npm publish --dry-run` asks the registry whether the version exists
+        # and fails when it does, which is every PR between releases. Packing
+        # checks the tarball without consulting the registry.
+        run: npm pack --dry-run
 
   publish-jsr:
     name: Publish to JSR

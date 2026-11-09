@@ -1,6 +1,6 @@
 import type { APIContext } from 'astro';
 import { NSID, ensureValidDid } from '@atproto/syntax';
-import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError, insufficientScopeResponse } from '../../lib/oauth/resource';
+import { verifyResourceRequestHybrid, dpopResourceUnauthorized, handleResourceAuthError, insufficientScopeResponse, scopeMissingResponse } from '../../lib/oauth/resource';
 import { createServiceAuthToken } from '../../lib/appview';
 import { canMakeRpcCall, type AuthAccessContext } from '../../lib/auth-scope';
 import { PROTECTED_METHODS } from '../../lib/appview/auth-policy';
@@ -95,7 +95,7 @@ function denyServiceAuth(
   audience: string,
 ): Response | null {
   if (lexiconMethod === null) {
-    return access.isFullAccess || access.isAppPassword ? null : insufficientScopeResponse();
+    return access.isFullAccess || access.isAppPassword ? null : scopeMissingResponse();
   }
   if (lexiconMethodIn(SERVICE_AUTH_PROTECTED_METHODS, lexiconMethod)) {
     return insufficientScopeResponse();
@@ -110,7 +110,7 @@ function denyServiceAuth(
     );
   }
   if (!canMakeRpcCall(access, lexiconMethod, audience)) {
-    return insufficientScopeResponse();
+    return scopeMissingResponse();
   }
   return null;
 }
