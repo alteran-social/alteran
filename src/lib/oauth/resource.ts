@@ -8,7 +8,7 @@ import { jwkThumbprint } from './dpop';
 import {
   bearerAccessContext,
   isBearerAccessScope,
-  isOAuthPermissionScope,
+  isOAuthScope,
   oauthAccessContext,
   withAccountStatus,
   type AuthAccessContext,
@@ -147,8 +147,10 @@ async function verifyDpopAccess(env: Env, request: Request, accessToken: string)
   await importJWK(header.jwk as JoseJWK, 'ES256');
 
   const tokenPayload = await verifyAccessTokenOrThrow(env, accessToken, { allowOAuth: true });
-  if (!isOAuthPermissionScope(tokenPayload.scope)) {
-    throw new ResourceAuthError('invalid_token', { message: 'OAuth token has no PDS resource permissions' });
+  // A token carrying only `atproto` is valid: it identifies the account
+  // (getSession) and every other endpoint checks its own permission.
+  if (!isOAuthScope(tokenPayload.scope)) {
+    throw new ResourceAuthError('invalid_token', { message: 'OAuth token scope is not valid' });
   }
   const tokenJkt = (tokenPayload.cnf as any)?.jkt;
   if (typeof tokenJkt !== 'string') {

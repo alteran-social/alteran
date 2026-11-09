@@ -6,7 +6,7 @@ import { makeDpopKey, signResourceDpop } from './helpers/oauth';
 import { createOAuthSession, getSecret, storeRefreshToken } from '../src/db/account';
 import { setAccountState } from '../src/db/dal';
 import { authenticateRequest } from '../src/lib/auth';
-import { AuthScope, bearerAccessContext, isOAuthPermissionScope, isOAuthScope, oauthAccessContext } from '../src/lib/auth-scope';
+import { AuthScope, bearerAccessContext, isOAuthScope, oauthAccessContext } from '../src/lib/auth-scope';
 import { proxyAppView } from '../src/lib/appview';
 import { verifyResourceRequestHybrid } from '../src/lib/oauth/resource';
 import { issueSessionTokens, verifyAccessToken } from '../src/lib/session-tokens';
@@ -84,10 +84,6 @@ async function issueOauthAccess(env: any, key: Awaited<ReturnType<typeof makeDpo
 describe('ATProto auth scopes', () => {
   it('distinguishes OAuth login scope from PDS resource permissions', async () => {
     expect(isOAuthScope('atproto')).toBe(true);
-    expect(isOAuthPermissionScope('atproto')).toBe(false);
-    expect(isOAuthPermissionScope('atproto transition:chat.bsky')).toBe(false);
-    expect(isOAuthPermissionScope('atproto transition:generic')).toBe(true);
-    expect(isOAuthPermissionScope('atproto repo:app.bsky.feed.post?action=create')).toBe(true);
     expect(isOAuthScope('atproto mystery.scope')).toBe(false);
   });
 

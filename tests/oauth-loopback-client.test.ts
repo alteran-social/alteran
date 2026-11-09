@@ -67,6 +67,18 @@ describe('loopback development client', () => {
     expect(resolveLoopbackClient('http://localhost?scope=transition%3Ageneric').tag).toBe('invalid');
   });
 
+  it('rejects free text posing as scope values', () => {
+    const clientId = `http://localhost?scope=${encodeURIComponent('atproto Official App (verified)')}`;
+    expect(resolveLoopbackClient(clientId).tag).toBe('invalid');
+  });
+
+  it('rejects redirect URIs that only normalise to a loopback IP', () => {
+    for (const redirectUri of ['http://127.1/', 'http://2130706433/', 'http://0x7f.1/callback', 'http://[0:0:0:0:0:0:0:1]/']) {
+      const clientId = `http://localhost?redirect_uri=${encodeURIComponent(redirectUri)}`;
+      expect(resolveLoopbackClient(clientId).tag).toBe('invalid');
+    }
+  });
+
   it('rejects redirect URIs that are not loopback IP literals', () => {
     for (const redirectUri of [
       'http://localhost/callback',

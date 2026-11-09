@@ -47,21 +47,24 @@ export async function GET({ locals, request }: APIContext) {
     return redirectWithOAuthError(par.redirect_uri, 'login_required', par.state, issuer, 'login_hint does not match this PDS account');
   }
 
-  let clientName = par.client_id;
-  try {
-    const meta = await resolveClientMetadata(env, par.client_id);
-    if (typeof (meta as any).client_name === 'string') clientName = (meta as any).client_name;
-  } catch {
-    // The PAR step already validated metadata; keep consent rendering available
-    // if the client metadata endpoint is temporarily unavailable.
+  // A loopback client_id is self-declared: any local program can present it,
+  // so it gets a fixed name and nothing it supplies is used as one.
+  const isLoopbackClient = isLoopbackClientId(par.client_id);
+  let clientName = isLoopbackClient ? 'Local development client' : par.client_id;
+  if (!isLoopbackClient) {
+    try {
+      const metadata = await resolveClientMetadata(env, par.client_id);
+      if (metadata.client_name) clientName = metadata.client_name;
+    } catch {
+      // The PAR step already validated metadata; keep consent rendering available
+      // if the client metadata endpoint is temporarily unavailable.
+    }
   }
 
   const permissionItems = consentPermissions(par.scope)
     .map((permission) => `<li>${htmlEscape(describeConsentPermission(permission))}</li>`)
     .join('\n    ');
-  // A loopback client_id is self-declared: any local program can present it,
-  // so the name on this page proves nothing about who is asking.
-  const unverifiedClientNotice = isLoopbackClientId(par.client_id)
+  const unverifiedClientNotice = isLoopbackClient
     ? '<p class="warning">This is a local development client running on your own computer. Its identity cannot be verified, so only continue if you started this sign-in yourself.</p>'
     : '';
 

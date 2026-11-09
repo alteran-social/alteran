@@ -14,7 +14,7 @@ const ALL_REPO_ACTIONS: readonly RepoWriteAction[] = ['create', 'update', 'delet
 const TRANSITION_DESCRIPTIONS: Readonly<Record<string, string>> = {
   'transition:generic':
     'Full access to your repository: create, update and delete any record, upload blobs, read and change preferences, and call most services on your behalf',
-  'transition:chat.bsky': 'Read and send your direct messages',
+  'transition:chat.bsky': 'Read and send your direct messages (only takes effect together with full repository access)',
   'transition:email': 'Read your account email address',
 };
 
@@ -97,7 +97,7 @@ export function describeConsentPermission(permission: ConsentPermission): string
     case 'identity':
       return permission.attribute === '*'
         ? 'Change your identity, including your handle and signing keys'
-        : `Change your identity ${permission.attribute}`;
+        : 'Change your handle';
   }
 }
 

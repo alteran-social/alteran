@@ -14,6 +14,7 @@ export type OAuthApplicationType = 'web' | 'native';
 
 export type OAuthClientMetadata = {
   client_id: string;
+  client_name?: string;
   redirect_uris: string[];
   token_endpoint_auth_method: ClientAuthMethod;
   grant_types: string[];
@@ -101,6 +102,7 @@ export function validateClientMetadataShape(metadata: any, clientId: string): OA
 
   return {
     client_id: metadata.client_id,
+    client_name: typeof metadata.client_name === 'string' ? metadata.client_name : undefined,
     redirect_uris,
     token_endpoint_auth_method: method,
     grant_types: metadata.grant_types,

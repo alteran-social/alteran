@@ -1,3 +1,4 @@
+import { isSupportedOAuthScopeValue } from '../auth-scope';
 import type { OAuthClientMetadata } from './clients';
 
 // The atproto OAuth profile lets development clients skip hosting a metadata
@@ -42,8 +43,14 @@ export function resolveLoopbackClient(clientId: string): LoopbackClientResolutio
   if (!/^[\x21-\x7e]+(?: [\x21-\x7e]+)*$/.test(grantedScope)) {
     return invalid('"scope" must be a space-separated list of scope values');
   }
-  if (!grantedScope.split(' ').includes('atproto')) {
+  const scopeValues = grantedScope.split(' ');
+  if (!scopeValues.includes('atproto')) {
     return invalid('"scope" must include atproto');
+  }
+  // The client_id is shown on the consent screen, so free text in it could
+  // pose as a trusted name. Only real scope values are allowed through.
+  if (!scopeValues.every(isSupportedOAuthScopeValue)) {
+    return invalid('"scope" contains a value this server does not support');
   }
 
   return {
@@ -89,7 +96,10 @@ function isLoopbackRedirectUri(value: string): boolean {
   } catch {
     return false;
   }
-  return url.protocol === 'http:' &&
+  // URL parsing folds forms such as `127.1` and `0x7f.1` into 127.0.0.1; the
+  // literal has to be spelled out so the registered string means what it says.
+  return /^http:\/\/(?:127\.0\.0\.1|\[::1\])(?:[:/?]|$)/.test(value) &&
+    url.protocol === 'http:' &&
     LOOPBACK_REDIRECT_HOSTNAMES.has(url.hostname) &&
     !url.username &&
     !url.password &&

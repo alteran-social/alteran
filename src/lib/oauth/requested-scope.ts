@@ -13,6 +13,9 @@ export type RequestedScopeResolution =
  * reports the granted scope).
  */
 export function resolveRequestedScope(requested: string, declared: string): RequestedScopeResolution {
+  if (requested === '') {
+    return { tag: 'invalid', message: 'the "atproto" scope is required' };
+  }
   // Enforcement tokenises on any whitespace, so a tab or newline smuggled into
   // one "value" here would become two scopes there.
   if (!/^[\x21-\x7e]+(?: [\x21-\x7e]+)*$/.test(requested)) {

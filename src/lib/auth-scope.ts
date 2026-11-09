@@ -68,6 +68,8 @@ const OAUTH_TRANSITION_SCOPES = new Set([
 ]);
 const REPO_ACTIONS = new Set(['create', 'update', 'delete']);
 const ACCOUNT_ACTIONS = new Set(['read', 'manage']);
+const ACCOUNT_ATTRIBUTES = new Set(['email', 'repo', 'status']);
+const IDENTITY_ATTRIBUTES = new Set(['handle', '*']);
 const OAUTH_RESOURCE_TYPES = new Set(['repo', 'rpc', 'blob', 'identity', 'account']);
 const TRANSITION_GENERIC_BLOCKED_RPC = new Set([
   'chat.bsky.actor.deleteAccount',
@@ -101,14 +103,6 @@ export function isOAuthScope(scope: unknown): scope is string {
   const parts = oauthScopeParts(scope);
   return parts !== null &&
     parts.includes(OAUTH_PROFILE_SCOPE) &&
-    parts.every(isSupportedOAuthScopeValue);
-}
-
-export function isOAuthPermissionScope(scope: unknown): scope is string {
-  const parts = oauthScopeParts(scope);
-  return parts !== null &&
-    parts.includes(OAUTH_PROFILE_SCOPE) &&
-    parts.some((part) => part !== OAUTH_PROFILE_SCOPE && grantsOAuthResourceAccess(part)) &&
     parts.every(isSupportedOAuthScopeValue);
 }
 
@@ -258,12 +252,6 @@ export function isSupportedOAuthScopeValue(scope: string): boolean {
   return parsePermissionScope(scope) !== null;
 }
 
-function grantsOAuthResourceAccess(scope: string): boolean {
-  if (scope === OAUTH_TRANSITION_CHAT) return false;
-  if (OAUTH_TRANSITION_SCOPES.has(scope)) return true;
-  return parsePermissionScope(scope) !== null;
-}
-
 function oauthScopeAllowsTransitionGeneric(scope: string): boolean {
   return oauthScopeParts(scope)?.includes(OAUTH_TRANSITION_GENERIC) ?? false;
 }
@@ -335,6 +323,8 @@ function parseRpcScope(positional: string | null, params: URLSearchParams): Pars
     return null;
   }
   if (lxms.includes('*') && audiences[0] === '*') return null;
+  if (lxms.some((lxm) => lxm !== '*' && !isValidNsid(lxm))) return null;
+  if (audiences[0] !== '*' && !/^did:[a-z]+:[\x21-\x7e]+$/.test(audiences[0])) return null;
   return { resource: 'rpc', lxms, aud: audiences[0] };
 }
 
@@ -342,7 +332,7 @@ function parseBlobScope(positional: string | null, params: URLSearchParams): Par
   if (!paramsHaveOnly(params, new Set(['accept']))) return null;
   if (positional !== null && params.has('accept')) return null;
   const accepts = positional !== null ? [positional] : params.getAll('accept');
-  if (!accepts.length || accepts.some((value) => value === '')) return null;
+  if (!accepts.length || accepts.some((value) => !/^(?:\*\/\*|[a-z0-9.+-]+\/(?:\*|[a-z0-9.+-]+))$/i.test(value))) return null;
   return { resource: 'blob', accepts };
 }
 
@@ -350,18 +340,17 @@ function parseAccountScope(positional: string | null, params: URLSearchParams): 
   if (!paramsHaveOnly(params, new Set(['attr', 'action']))) return null;
   if (positional !== null && params.has('attr')) return null;
   const attrs = positional !== null ? [positional] : params.getAll('attr');
-  const actions = params.getAll('action');
-  if (attrs.length !== 1 || attrs[0] === '' || actions.length > 1) return null;
-  const action = actions[0] ?? 'read';
-  if (!ACCOUNT_ACTIONS.has(action)) return null;
-  return { resource: 'account', attr: attrs[0], action: action as 'read' | 'manage' };
+  const actions = unique(params.getAll('action'));
+  if (attrs.length !== 1 || !ACCOUNT_ATTRIBUTES.has(attrs[0])) return null;
+  if (!actions.every((action) => ACCOUNT_ACTIONS.has(action))) return null;
+  return { resource: 'account', attr: attrs[0], action: actions.includes('manage') ? 'manage' : 'read' };
 }
 
 function parseIdentityScope(positional: string | null, params: URLSearchParams): ParsedPermissionScope | null {
   if (!paramsHaveOnly(params, new Set(['attr']))) return null;
   if (positional !== null && params.has('attr')) return null;
   const attrs = positional !== null ? [positional] : params.getAll('attr');
-  if (attrs.length !== 1 || attrs[0] === '') return null;
+  if (attrs.length !== 1 || !IDENTITY_ATTRIBUTES.has(attrs[0])) return null;
   return { resource: 'identity', attr: attrs[0] };
 }
 

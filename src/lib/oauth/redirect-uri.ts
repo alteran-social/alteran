@@ -62,15 +62,15 @@ export function isAllowedRedirectUri(
 export function redirectUriMatches(registered: string, requested: string): boolean {
   if (registered === requested) return true;
   try {
-    const reg = new URL(registered);
-    const req = new URL(requested);
-    if (reg.protocol !== 'http:' || req.protocol !== 'http:') return false;
-    if (!isLoopbackIpHostname(reg.hostname) || reg.hostname !== req.hostname) return false;
-    if (reg.pathname !== req.pathname || reg.search !== req.search) return false;
+    const registeredUrl = new URL(registered);
+    const requestedUrl = new URL(requested);
+    if (registeredUrl.protocol !== 'http:' || requestedUrl.protocol !== 'http:') return false;
+    if (!isLoopbackIpHostname(registeredUrl.hostname) || registeredUrl.hostname !== requestedUrl.hostname) return false;
+    if (registeredUrl.pathname !== requestedUrl.pathname || registeredUrl.search !== requestedUrl.search) return false;
     // RFC 8252 §7.3: a native client listens on an ephemeral port, so a
     // registration without a port accepts any port. A registered port is a
     // deliberate pin and still has to match exactly (handled above).
-    return !reg.port;
+    return !registeredUrl.port;
   } catch {
     return false;
   }

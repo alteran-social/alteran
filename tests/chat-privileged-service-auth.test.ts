@@ -224,8 +224,8 @@ describe("getServiceAuth chat.bsky privileged access", () => {
       const response = await callDpop(env, generic, genericKey, lexiconMethod);
       expect({ lexiconMethod, status: response.status, body: await response.json() }).toEqual({
         lexiconMethod,
-        status: 401,
-        body: { error: "InvalidToken", message: "token does not grant access to this resource" },
+        status: 403,
+        body: { error: "ScopeMissingError", message: "Missing required scope" },
       });
     }
 

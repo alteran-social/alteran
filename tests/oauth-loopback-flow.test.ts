@@ -234,6 +234,57 @@ describe('native sign-in with the http://localhost development client', () => {
   });
 });
 
+describe('identity-only sign-in with the bare http://localhost client', () => {
+  const bare = { client_id: 'http://localhost', scope: 'atproto', redirect_uri: 'http://127.0.0.1:51789/' };
+
+  async function identityOnlyToken(env: TestEnv, key: DpopKey) {
+    const par = await pushAuthorizationRequest(env, key, bare);
+    const requestUri = String((await par.json() as { request_uri: string }).request_uri);
+    const csrf = (await consentPage(env, requestUri)).match(/name="csrf" value="([^"]+)"/)?.[1] ?? '';
+    const consent = await consentPost(context(env, new Request(`${ORIGIN}/oauth/consent`, {
+      method: 'POST',
+      headers: { origin: ORIGIN, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        request_uri: requestUri,
+        client_id: bare.client_id,
+        csrf,
+        password: 'pwd',
+        decision: 'allow',
+      }).toString(),
+    })));
+    const code = new URL(consent.headers.get('location') ?? '').searchParams.get('code') ?? '';
+    const tokens = await exchange(env, key, {
+      client_id: bare.client_id,
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: bare.redirect_uri,
+      code_verifier: CODE_VERIFIER,
+    });
+    return String(tokens.body.access_token);
+  }
+
+  it('can read its own session', async () => {
+    const env = await makeEnv();
+    const key = await makeDpopKey();
+    const accessToken = await identityOnlyToken(env, key);
+    const url = `${ORIGIN}/xrpc/com.atproto.server.getSession`;
+    const res = await getSession(context(env, await resourceRequest(env, key, accessToken, 'GET', url)));
+    expect(res.status).toBe(200);
+  });
+
+  it('cannot write to the repository', async () => {
+    const env = await makeEnv();
+    const key = await makeDpopKey();
+    const accessToken = await identityOnlyToken(env, key);
+    const url = `${ORIGIN}/xrpc/com.atproto.repo.applyWrites`;
+    const res = await applyWrites(context(env, await resourceRequest(env, key, accessToken, 'POST', url, {
+      repo: 'did:example:test',
+      writes: [signatureWrite(1)],
+    })));
+    expect(res.status).toBe(403);
+  });
+});
+
 describe('pushed authorization requests from the development client', () => {
   it('answers invalid_scope for a scope the client_id does not declare', async () => {
     const env = await makeEnv();

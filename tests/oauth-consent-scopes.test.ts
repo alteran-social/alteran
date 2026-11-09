@@ -42,6 +42,16 @@ describe('consent permission descriptions', () => {
     expect(describeScope('transition:generic')[0]).toContain('Full access to your repository');
   });
 
+  it('describes an account scope with both actions as read and change', () => {
+    expect(describeScope('account:email?action=read&action=manage')).toEqual([
+      'Read and change your account email',
+    ]);
+  });
+
+  it('shows nothing for scope values the server does not accept', () => {
+    expect(describeScope('identity:bogus account:bogus blob:bogus rpc:%3Cimg%3E?aud=*')).toEqual([]);
+  });
+
   it('describes blob and rpc permissions', () => {
     expect(describeScope('blob:image/* rpc:app.bsky.feed.getTimeline?aud=did:web:api.bsky.app%23bsky_appview')).toEqual([
       'Upload files of type image/*',
