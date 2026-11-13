@@ -75,7 +75,6 @@ const ROOT_ROUTE = {
 };
 
 const DEBUG_ROUTES = [
-  { pattern: '/debug/blob/[...key]', entrypoint: './src/pages/debug/blob/[...key].ts' },
   { pattern: '/debug/db/bootstrap', entrypoint: './src/pages/debug/db/bootstrap.ts' },
   { pattern: '/debug/db/commits', entrypoint: './src/pages/debug/db/commits.ts' },
   { pattern: '/debug/gc/blobs', entrypoint: './src/pages/debug/gc/blobs.ts' },

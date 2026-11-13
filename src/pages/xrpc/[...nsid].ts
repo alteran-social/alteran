@@ -25,10 +25,20 @@ function nsidFromParams(params: Record<string, any>): string {
 async function handle({ locals, request, params }: APIContext): Promise<Response> {
   const { env } = locals;
   const nsid = nsidFromParams(params).trim();
-  console.log('xrpc catchall invoked:', { nsid, url: request.url });
   if (!nsid) {
     return new Response(JSON.stringify({ error: 'NotFound' }), {
       status: 404,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (isSpaceRoute(nsid)) {
+    const body = JSON.stringify({
+      error: 'NotImplemented',
+      message: 'AT Protocol Spaces are not supported by this PDS',
+    });
+    return new Response(request.method === 'HEAD' ? null : body, {
+      status: 501,
       headers: { 'Content-Type': 'application/json' },
     });
   }
@@ -55,6 +65,16 @@ async function handle({ locals, request, params }: APIContext): Promise<Response
   }
 
   return proxyAppView({ request, env, lxm: nsid, auth });
+}
+
+function isSpaceRoute(nsid: string): boolean {
+  const normalized = nsid.toLowerCase();
+  return [
+    'com.atproto.space.',
+    'com.atproto.personalspace.',
+    'com.atproto.memberspace.',
+    'com.atproto.managedspace.',
+  ].some((prefix) => normalized.startsWith(prefix));
 }
 
 export async function GET(ctx: APIContext) {

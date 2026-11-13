@@ -74,6 +74,20 @@ external-service responsibilities.
 
 ---
 
+## AT Protocol Spaces
+
+Alteran does not implement Spaces. GET, HEAD, and POST requests to the currently known
+`com.atproto.space.*`, `com.atproto.personalspace.*`,
+`com.atproto.memberspace.*`, and `com.atproto.managedspace.*` namespaces return
+`501 NotImplemented` before authentication. They are not proxied to another
+service. Requested `space:` OAuth permissions are not granted. A separate
+`transition:generic` grant retains its existing public-repository permissions.
+
+See [Spaces readiness](SPACES_READINESS.md) for the remaining work and migration
+limitations.
+
+---
+
 ## Server Endpoints
 
 ### com.atproto.server.describeServer
