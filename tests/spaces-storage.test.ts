@@ -5,6 +5,7 @@ import * as dagCbor from '@ipld/dag-cbor';
 import { CID } from 'multiformats/cid';
 import { sha256 } from 'multiformats/hashes/sha2';
 import { makeEnv } from './helpers/env';
+import { seedLegacySpaceBlobUsage } from './helpers/space-legacy';
 import { applySpaceWrites, createLocalSpace, getSpaceRecord } from '../src/db/space-store';
 import { parseSpaceRef } from '../src/db/space-ref';
 import { commitSpaceWrites, loadSpaceSnapshot } from '../src/db/space-mutation';
@@ -58,10 +59,7 @@ async function expectError(action: () => Promise<unknown>, code: string): Promis
 
 async function seedSpaceBlobUsage(env: Awaited<ReturnType<typeof makeEnv>>, space: string, cid: string, key: string): Promise<void> {
   // Existing usage rows must remain protected while blob-bearing writes are disabled.
-  await env.ALTERAN_DB.prepare(
-    `INSERT INTO space_blob_usage (space_ref, repo_did, collection, rkey, cid, key)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).bind(space, did, collection, 'private', cid, key).run();
+  await seedLegacySpaceBlobUsage(env.ALTERAN_DB, space, did, collection, 'private', cid, key);
 }
 
 describe('space storage', () => {
@@ -230,6 +228,7 @@ describe('space storage', () => {
     const replacementId = crypto.randomUUID();
     await expect(env.ALTERAN_DB.prepare('DELETE FROM space_repo WHERE space_ref = ? AND repo_did = ?')
       .bind(spaceA, did).run()).rejects.toThrow();
+    await env.ALTERAN_DB.prepare('DROP TRIGGER space_repo_fence_update').run();
     await env.ALTERAN_DB.prepare('UPDATE space_repo SET mutation_id = ? WHERE space_ref = ? AND repo_did = ?')
       .bind(replacementId, spaceA, did).run();
     expect((await commitSpaceWrites(env, ref, did, [staleWrite], snapshot)).tag).toBe('conflict');

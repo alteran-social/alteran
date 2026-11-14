@@ -14,6 +14,7 @@ import {
 import { nextSpaceRevision } from './space-tid';
 import { assertLocalSpaceRepo, parseSpaceRef } from './space-ref';
 import { ownSpaceWriteValue, spaceWriteArrayLength } from './space-write-input';
+import { EFFECT_GUARD, GUARD, RECORDS_MATCH, SPACE_AVAILABLE, WON_GUARD } from './space-mutation-sql';
 import {
   MAX_SPACE_WRITE_BYTES,
   MAX_SPACE_WRITES,
@@ -33,37 +34,6 @@ type Snapshot = {
 type CommitResult =
   | { readonly tag: 'committed'; readonly commit: SpaceCommit }
   | { readonly tag: 'conflict' | 'missingSpace' };
-
-const GUARD = `EXISTS (
-  SELECT 1 FROM space_repo
-  WHERE space_ref = ? AND repo_did = ? AND generation = ? AND mutation_id = ? AND active_epoch_id = ?
-    AND rev = ? AND set_hash = ?
-)`;
-
-const WON_GUARD = `(${GUARD} AND EXISTS (
-  SELECT 1 FROM space_commit_assertion WHERE mutation_id = ?
-))`;
-
-const EFFECT_GUARD = `(${WON_GUARD} AND EXISTS (
-  SELECT 1 FROM space_epoch e WHERE e.id = ? AND e.space_ref = ? AND e.repo_did = ? AND e.state = 'active'
-))`;
-
-const RECORDS_MATCH = `NOT EXISTS (
-  SELECT 1 FROM json_each(?) requested
-  LEFT JOIN space_record r ON r.space_ref = ? AND r.repo_did = ?
-    AND r.collection = json_extract(requested.value, '$.collection') AND r.rkey = json_extract(requested.value, '$.rkey')
-  LEFT JOIN space_record_version v ON v.epoch_id = ? AND v.space_ref = ? AND v.repo_did = ?
-    AND v.path = json_extract(requested.value, '$.path') AND v.until_generation IS NULL
-  WHERE r.cid IS NOT json_extract(requested.value, '$.cid')
-    OR v.cid IS NOT json_extract(requested.value, '$.cid')
-    OR v.from_generation IS NOT json_extract(requested.value, '$.fromGeneration')
-    OR (r.cid IS NOT NULL AND (r.value_cbor IS NOT v.value_cbor OR r.repo_rev IS NOT v.repo_rev))
-)`;
-
-const SPACE_AVAILABLE = `(
-  EXISTS (SELECT 1 FROM space WHERE space_ref = ? AND deleted_at IS NULL)
-  OR (? <> ? AND NOT EXISTS (SELECT 1 FROM space WHERE space_ref = ?))
-)`;
 
 export async function loadSpaceSnapshot(
   env: Env,
@@ -200,7 +170,7 @@ export async function commitSpaceWrites(
     } catch {
       throw new SpaceStorageError('InvalidRequest', 'Invalid encoded space record');
     }
-    if (!isPlainRecord(value) || value.$type !== collection) {
+    if (!isPlainRecord(value) || !Object.hasOwn(value, '$type') || value.$type !== collection) {
       throw new SpaceStorageError('InvalidRequest', 'Invalid encoded space record');
     }
     if (containsBlob(value)) {
@@ -270,16 +240,26 @@ export async function commitSpaceWrites(
     : env.ALTERAN_DB.prepare(
       `INSERT INTO space_repo (space_ref, repo_did, rev, set_hash, generation, mutation_id, active_epoch_id)
        SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${SPACE_AVAILABLE}
+         AND NOT EXISTS (SELECT 1 FROM space_repo WHERE space_ref = ? AND repo_did = ?)
          AND NOT EXISTS (SELECT 1 FROM space_epoch WHERE space_ref = ? AND repo_did = ?)
          AND NOT EXISTS (SELECT 1 FROM space_record WHERE space_ref = ? AND repo_did = ?)
        ON CONFLICT(space_ref, repo_did) DO NOTHING`,
-    ).bind(ref.ref, repoDid, rev, state, generation, mutationId, epochId, ...availability, ref.ref, repoDid, ref.ref, repoDid);
+    ).bind(ref.ref, repoDid, rev, state, generation, mutationId, epochId, ...availability,
+      ref.ref, repoDid, ref.ref, repoDid, ref.ref, repoDid);
 
   // Preserve a connection-local total so ignored root statements cannot hide trigger writes.
   const statements: D1PreparedStatement[] = [
     env.ALTERAN_DB.prepare(
       `INSERT INTO space_commit_assertion (mutation_id, valid)
-       SELECT ? || CAST(total_changes() + 1 AS TEXT), 1`,
+       SELECT ? || CAST(total_changes() + 2 AS TEXT), 1`,
+    ).bind(baselinePrefix),
+    env.ALTERAN_DB.prepare(
+      `INSERT INTO space_mutation_attempt (mutation_id, space_ref, repo_did, epoch_id, generation, rev, set_hash)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(mutationId, ref.ref, repoDid, epochId, generation, rev, state),
+    env.ALTERAN_DB.prepare(
+      `SELECT CASE WHEN EXISTS (SELECT 1 FROM space_commit_assertion
+         WHERE mutation_id = ? || CAST(total_changes() AS TEXT)) THEN 1 ELSE json('{') END AS valid`,
     ).bind(baselinePrefix),
     root,
     // SQLite changes() reports the direct root mutation; D1 metadata includes trigger effects.
@@ -322,12 +302,15 @@ export async function commitSpaceWrites(
          WHERE space_ref = ? AND repo_did = ? AND collection = ? AND rkey = ? AND ${EFFECT_GUARD}`,
       ).bind(...path, ...effectGuard));
     } else {
-      statements.push(env.ALTERAN_DB.prepare(
-        `INSERT INTO space_record (space_ref, repo_did, collection, rkey, cid, value_cbor, repo_rev)
-         SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${EFFECT_GUARD}
-         ON CONFLICT(space_ref, repo_did, collection, rkey) DO UPDATE
-         SET cid = excluded.cid, value_cbor = excluded.value_cbor, repo_rev = excluded.repo_rev`,
-      ).bind(...path, write.cid, new Uint8Array(write.value).buffer, rev, ...effectGuard));
+      statements.push(snapshot.records.has(pathString)
+        ? env.ALTERAN_DB.prepare(
+          `UPDATE space_record SET cid = ?, value_cbor = ?, repo_rev = ?
+           WHERE space_ref = ? AND repo_did = ? AND collection = ? AND rkey = ? AND ${EFFECT_GUARD}`,
+        ).bind(write.cid, new Uint8Array(write.value).buffer, rev, ...path, ...effectGuard)
+        : env.ALTERAN_DB.prepare(
+          `INSERT INTO space_record (space_ref, repo_did, collection, rkey, cid, value_cbor, repo_rev)
+           SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${EFFECT_GUARD}`,
+        ).bind(...path, write.cid, new Uint8Array(write.value).buffer, rev, ...effectGuard));
       statements.push(env.ALTERAN_DB.prepare(
         `INSERT INTO space_record_version
          (epoch_id, space_ref, repo_did, path, collection, rkey, from_generation, until_generation, cid, value_cbor, value_size, repo_rev)
@@ -376,9 +359,13 @@ export async function commitSpaceWrites(
     'DELETE FROM space_commit_assertion WHERE mutation_id IN (?, ?) OR mutation_id GLOB ?',
   ).bind(won, lost, baselineGlob));
   statements.push(env.ALTERAN_DB.prepare(
+    'DELETE FROM space_mutation_attempt WHERE mutation_id = ?',
+  ).bind(mutationId));
+  statements.push(env.ALTERAN_DB.prepare(
     `SELECT CASE WHEN EXISTS (SELECT 1 FROM space_commit_assertion WHERE mutation_id IN (?, ?) OR mutation_id GLOB ?)
+       OR EXISTS (SELECT 1 FROM space_mutation_attempt WHERE mutation_id = ?)
        THEN json('{') ELSE 1 END AS valid`,
-  ).bind(won, lost, baselineGlob));
+  ).bind(won, lost, baselineGlob, mutationId));
 
   await assertLocalSpaceRepo(env, repoDid);
   const results = await env.ALTERAN_DB.batch(statements);

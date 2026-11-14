@@ -105,3 +105,10 @@ For migrations `0016`–`0018`, stop any internal Space writers during the
 upgrade. Existing Space repositories are preserved in quarantined epochs and
 remain unavailable until a future verification and activation path is added.
 Keep a recoverable database backup before applying migrations.
+
+Migrations `0019` and `0020` add database fences for current Space writes and
+snapshot pruning. Deploy them in order with old Space writers quiesced. Older
+writers must not be restarted against the upgraded database. The trigger and
+batch behavior still requires validation on the target D1 deployment before
+these internal storage paths are enabled. Space operation-log pruning is not
+yet available.

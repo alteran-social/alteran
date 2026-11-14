@@ -1,4 +1,5 @@
 import { expect } from '@std/expect';
+import * as dagCbor from '@ipld/dag-cbor';
 import { describe, it } from './helpers/bdd';
 import { makeEnv } from './helpers/env';
 import { applySpaceWrites, createLocalSpace, getSpaceRecord } from '../src/db/space-store';
@@ -36,11 +37,14 @@ describe('space write input bounds', () => {
   it('captures a bounded high-level array length without invoking a proxy getter', async () => {
     const env = await makeEnv();
     await createLocalSpace(env, space);
-    const write = { action: 'create' as const, collection, rkey: 'a', record: { $type: collection } };
+    const nested = withChangingLength([{ text: 'original' }]);
+    const write = { action: 'create' as const, collection, rkey: 'a', record: { $type: collection, nested: nested.proxy } };
     const input = withChangingLength([write]);
     expect((await applySpaceWrites(env, space, did, input.proxy))!.operations).toHaveLength(1);
     expect(input.reads()).toBe(0);
-    expect(await getSpaceRecord(env, space, did, collection, 'a')).not.toBeNull();
+    expect(nested.reads()).toBe(0);
+    const stored = await getSpaceRecord(env, space, did, collection, 'a');
+    expect(dagCbor.decode(stored!.value)).toMatchObject({ nested: [{ text: 'original' }] });
     const revoked = Proxy.revocable([write], {});
     revoked.revoke();
     await expectInvalid(() => applySpaceWrites(env, space, did, revoked.proxy));
@@ -67,5 +71,23 @@ describe('space write input bounds', () => {
     const revokedBlobs = Proxy.revocable([], {});
     revokedBlobs.revoke();
     await expectInvalid(() => commitSpaceWrites(env, ref, did, [{ ...write, blobs: revokedBlobs.proxy }], snapshot));
+  });
+
+  it('does not accept a missing prepared-record type from a polluted prototype', async () => {
+    const env = await makeEnv();
+    await createLocalSpace(env, space);
+    const [cid, value] = await encodeRecordBlock({ text: 'missing type' });
+    const write = { action: 'create' as const, collection, rkey: 'a', cid: cid.toString(), value, blobs: [] };
+    const ref = parseSpaceRef(space);
+    const snapshot = await loadSpaceSnapshot(env, ref, did, [write]);
+    const original = Object.getOwnPropertyDescriptor(Object.prototype, '$type');
+    try {
+      Object.defineProperty(Object.prototype, '$type', { value: collection, configurable: true });
+      await expectInvalid(() => commitSpaceWrites(env, ref, did, [write], snapshot));
+    } finally {
+      if (original) Object.defineProperty(Object.prototype, '$type', original);
+      else Reflect.deleteProperty(Object.prototype, '$type');
+    }
+    expect(await getSpaceRecord(env, space, did, collection, 'a')).toBeNull();
   });
 });

@@ -134,6 +134,20 @@
       "when": 1794615138853,
       "tag": "0018_narrow_next_avengers",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1794618265284,
+      "tag": "0019_quiet_sunspot",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1794618274640,
+      "tag": "0020_space_write_fence",
+      "breakpoints": true
     }
   ]
 }

@@ -3,6 +3,7 @@ import * as dagCbor from '@ipld/dag-cbor';
 import type { D1PreparedStatement } from '@cloudflare/workers-types';
 import { describe, it } from './helpers/bdd';
 import { makeEnv } from './helpers/env';
+import { seedLegacySpaceBlobUsage } from './helpers/space-legacy';
 import { applySpaceWrites, createLocalSpace, getSpaceRecord } from '../src/db/space-store';
 import { acquireSpaceSnapshot, pruneExpiredSpaceSnapshotLeases, pruneSpaceRecordVersions, readSpaceSnapshotPage, releaseSpaceSnapshot } from '../src/db/space-snapshot';
 import { applySpaceSetHashChanges, spaceRecordHashElement, spaceSetHashDigest } from '../src/lib/spaces/lthash';
@@ -219,9 +220,7 @@ describe('space snapshot leases', () => {
     const env = await makeEnv();
     await createLocalSpace(env, firstSpace);
     const first = await applySpaceWrites(env, firstSpace, did, [create(collection, 'a', 'old')]);
-    await env.ALTERAN_DB.prepare(
-      'INSERT INTO space_blob_usage (space_ref, repo_did, collection, rkey, cid, key) VALUES (?, ?, ?, ?, ?, ?)',
-    ).bind(firstSpace, did, collection, 'a', 'legacy-cid', 'legacy-key').run();
+    await seedLegacySpaceBlobUsage(env.ALTERAN_DB, firstSpace, did, collection, 'a', 'legacy-cid', 'legacy-key');
     await env.ALTERAN_DB.prepare(
       `CREATE TRIGGER skip_space_blob_delete BEFORE DELETE ON space_blob_usage BEGIN SELECT RAISE(IGNORE); END`,
     ).run();
@@ -241,6 +240,7 @@ describe('space snapshot leases', () => {
     const write = { action: 'update' as const, collection, rkey: 'a', cid: cid.toString(), value, blobs: [] };
     const ref = parseSpaceRef(firstSpace);
     const snapshot = await loadSpaceSnapshot(env, ref, did, [write]);
+    await env.ALTERAN_DB.prepare('DROP TRIGGER space_record_fence_update').run();
     await env.ALTERAN_DB.prepare('UPDATE space_record SET cid = ? WHERE space_ref = ? AND repo_did = ?')
       .bind('corrupt', firstSpace, did).run();
     expect((await commitSpaceWrites(env, ref, did, [write], snapshot)).tag).toBe('conflict');

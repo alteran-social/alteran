@@ -169,20 +169,41 @@ export async function pruneSpaceRecordVersions(
   if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
     throw new SpaceStorageError('InvalidRequest', 'Invalid pruning limit');
   }
-  const result = await env.ALTERAN_DB.prepare(
+  const id = crypto.randomUUID();
+  const [, , selected] = await env.ALTERAN_DB.batch([
+    env.ALTERAN_DB.prepare(
+      `INSERT INTO space_gc_attempt (id, space_ref, repo_did, epoch_id)
+       SELECT ?, h.space_ref, h.repo_did, h.active_epoch_id FROM space_repo h
+       JOIN space_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
+         AND e.repo_did = h.repo_did AND e.state = 'active'
+       WHERE h.space_ref = ? AND h.repo_did = ?`,
+    ).bind(id, spaceRef, repoDid),
+    env.ALTERAN_DB.prepare(
     `DELETE FROM space_record_version WHERE rowid IN (
        SELECT v.rowid FROM space_record_version v
        JOIN space_repo h ON h.space_ref = v.space_ref AND h.repo_did = v.repo_did AND h.active_epoch_id = v.epoch_id
        JOIN space_epoch e ON e.id = v.epoch_id AND e.space_ref = v.space_ref AND e.repo_did = v.repo_did AND e.state = 'active'
        WHERE v.space_ref = ? AND v.repo_did = ? AND v.until_generation IS NOT NULL
+         AND EXISTS (SELECT 1 FROM space_gc_attempt g WHERE g.id = ? AND g.space_ref = v.space_ref
+           AND g.repo_did = v.repo_did AND g.epoch_id = v.epoch_id)
          AND NOT EXISTS (
            SELECT 1 FROM space_snapshot_lease l WHERE l.epoch_id = v.epoch_id AND l.space_ref = v.space_ref
              AND l.repo_did = v.repo_did AND l.expires_at > unixepoch() AND l.maximum_expires_at > unixepoch()
              AND l.generation >= v.from_generation AND l.generation < v.until_generation
          ) ORDER BY v.until_generation LIMIT ?
      )`,
-  ).bind(spaceRef, repoDid, limit).run();
-  return result.meta.changes;
+    ).bind(spaceRef, repoDid, id, limit),
+    env.ALTERAN_DB.prepare('SELECT changes() AS count'),
+    env.ALTERAN_DB.prepare('DELETE FROM space_gc_attempt WHERE id = ?').bind(id),
+    env.ALTERAN_DB.prepare(
+      `SELECT CASE WHEN EXISTS (SELECT 1 FROM space_gc_attempt WHERE id = ?) THEN json('{') ELSE 1 END AS valid`,
+    ).bind(id),
+  ]);
+  const count = (selected.results?.[0] as { count: number } | undefined)?.count;
+  if (!Number.isSafeInteger(count) || count === undefined || count < 0) {
+    throw new SpaceStorageError('InvalidRepoState', 'Invalid pruning result');
+  }
+  return count;
 }
 
 export async function pruneExpiredSpaceSnapshotLeases(

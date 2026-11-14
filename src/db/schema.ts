@@ -187,6 +187,26 @@ export const space_commit_assertion = sqliteTable('space_commit_assertion', {
   validResult: check('space_commit_assertion_valid', sql`${table.valid} = 1`),
 }));
 
+export const space_mutation_attempt = sqliteTable('space_mutation_attempt', {
+  mutationId: text('mutation_id').primaryKey().notNull(),
+  spaceRef: text('space_ref').notNull(),
+  repoDid: text('repo_did').notNull(),
+  epochId: text('epoch_id').notNull(),
+  generation: integer('generation').notNull(),
+  rev: text('rev').notNull(),
+  setHash: blob('set_hash', { mode: 'buffer' }).notNull(),
+}, (table) => ({
+  validGeneration: check('space_mutation_attempt_generation', sql`${table.generation} >= 1`),
+  hashSize: check('space_mutation_attempt_hash_size', sql`length(${table.setHash}) = 2048`),
+}));
+
+export const space_gc_attempt = sqliteTable('space_gc_attempt', {
+  id: text('id').primaryKey().notNull(),
+  spaceRef: text('space_ref').notNull(),
+  repoDid: text('repo_did').notNull(),
+  epochId: text('epoch_id').notNull(),
+});
+
 export const space_record = sqliteTable('space_record', {
   spaceRef: text('space_ref').notNull(),
   repoDid: text('repo_did').notNull(),

@@ -62,9 +62,13 @@ function copyValue(value: unknown, budget: Budget, ancestors: Set<object>, depth
     const keys = Reflect.ownKeys(value);
     if (keys.length > MAX_INPUT_NODES - budget.nodes || keys.some((key) => typeof key !== 'string')) throw invalid();
     if (Array.isArray(value)) {
-      if (value.length > MAX_INPUT_NODES - budget.nodes || keys.length !== value.length + 1) throw invalid();
+      const descriptor = Object.getOwnPropertyDescriptor(value, 'length');
+      const length = descriptor && 'value' in descriptor ? descriptor.value : undefined;
+      if (!Number.isSafeInteger(length) || length < 0 || length > MAX_INPUT_NODES - budget.nodes || keys.length !== length + 1) {
+        throw invalid();
+      }
       const copied: unknown[] = [];
-      for (let index = 0; index < value.length; index++) {
+      for (let index = 0; index < length; index++) {
         copied.push(copyValue(ownSpaceWriteValue(value, String(index)), budget, ancestors, depth + 1));
       }
       return copied;
