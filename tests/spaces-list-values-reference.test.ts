@@ -1,5 +1,6 @@
 import { isValidDid } from '@atproto/syntax-spaces';
 import { expect } from '@std/expect';
+import { isDeepStrictEqual } from 'node:util';
 import { authorizedReadFixture, COLLECTION, DID, OTHER_COLLECTION, SPACE } from './helpers/spaces-authorized-read';
 import { signResourceDpop } from './helpers/oauth';
 import { loadActiveSpaceOwner } from '../src/db/space-owner';
@@ -19,7 +20,7 @@ Deno.test({
   sanitizeResources: false,
   async fn() {
     if (!configPath) throw new Error('Missing reference configuration');
-    const config: unknown = JSON.parse(await Deno.readTextFile(configPath));
+    const config = await readReferenceConfig(configPath);
     if (!config || typeof config !== 'object') throw new Error('Invalid reference configuration');
     const fields = config as Record<string, unknown>;
     const origin = loopbackOrigin(fields.pds);
@@ -31,14 +32,10 @@ Deno.test({
     const space = `at://${repo}/space/com.example.notes/${skey}`;
     const authorization = `Bearer ${fields.accessJwt}`;
     const rpc = async (name: string, init: RequestInit = {}) => {
-      const headers = new Headers(init.headers);
-      headers.set('authorization', authorization);
-      const response = await fetch(`${origin}/xrpc/${name}`, {
-        ...init, headers, redirect: 'manual', signal: AbortSignal.timeout(10_000),
-      });
+      const response = await referenceRequest(`${origin}/xrpc/${name}`, authorization, init);
       if (!response.ok) {
-        await response.body?.cancel();
-        throw new Error(`Reference ${name.split('?')[0]} returned HTTP ${response.status}`);
+        await cancelReferenceBody(response);
+        throw new Error('Reference request returned an unsuccessful response');
       }
       return response;
     };
@@ -70,17 +67,18 @@ Deno.test({
       const created = await post('com.atproto.space.createSpace', {
         spaceType: 'com.example.notes', skey, policy: { $type: 'com.atproto.personalspace.policy' },
       });
-      expect((await created.json() as { space: string }).space).toBe(space);
+      const createdSpace = await readReferenceResponse(created);
+      expect(isObject(createdSpace) && createdSpace.space === space).toBe(true);
       for (const item of records) {
         const createdRecord = await post('com.atproto.space.createRecord', {
           space, repo, collection: item.collection, rkey: item.rkey, validate: false, record: item.record,
         });
-        await createdRecord.body?.cancel();
+        await cancelReferenceBody(createdRecord);
       }
 
       async function referencePage(params: Record<string, string>): Promise<Page> {
         const query = new URLSearchParams({ space, repo, ...params });
-        return await (await rpc(`com.atproto.space.listRecords?${query}`)).json() as Page;
+        return listPage(await readReferenceResponse(await rpc(`com.atproto.space.listRecords?${query}`)));
       }
       async function alteranPage(params: Record<string, string>): Promise<Page> {
         const query = new URLSearchParams({ space: SPACE, repo: DID, ...params });
@@ -90,7 +88,7 @@ Deno.test({
         } });
         const response = await GET({ locals: { env: fixture.env }, request, url: new URL(request.url) } as never);
         if (!response.ok) throw new Error(`Alteran listRecords returned HTTP ${response.status}`);
-        return await response.json() as Page;
+        return listPage(await readReferenceResponse(response));
       }
       for (const mode of ['default', 'false', 'true'] as const) {
         const valueMode: Record<string, string> = mode === 'default' ? {} : { excludeValues: mode };
@@ -103,11 +101,11 @@ Deno.test({
             const common: Record<string, string> = { ...valueMode, limit: '2', ...(collection ? { collection } : {}) };
             const reference = await referencePage({ ...common, ...(referenceCursor ? { cursor: referenceCursor } : {}) });
             const actual = await alteranPage({ ...common, ...(alteranCursor ? { cursor: alteranCursor } : {}) });
-            expect(actual.records).toEqual(reference.records);
+            expect(isDeepStrictEqual(actual.records, reference.records)).toBe(true);
             for (const item of actual.records) {
               expect(Object.hasOwn(item, 'value')).toBe(mode !== 'true');
             }
-            expect(cursorPath(actual.cursor, SPACE, DID)).toBe(cursorPath(reference.cursor, space, repo));
+            expect(cursorPath(actual.cursor, SPACE, DID) === cursorPath(reference.cursor, space, repo)).toBe(true);
             all.push(...actual.records);
             referenceCursor = reference.cursor;
             alteranCursor = actual.cursor;
@@ -119,15 +117,15 @@ Deno.test({
             : collection === 'com.example.note.sub' ? ['com.example.note.sub/a']
             : collection === 'com.example.empty' ? []
             : [`${OTHER_COLLECTION}/two`, `${COLLECTION}/z`, `${COLLECTION}/one`, 'com.example.note.sub/a'];
-          expect(paths).toEqual(expected);
+          expect(isDeepStrictEqual(paths, expected)).toBe(true);
           if (collection === undefined) expect(pages).toBe(2);
           if (collection === COLLECTION) expect(pages).toBe(1);
           if (mode !== 'true' && collection === undefined) {
             const record = all.find(({ collection: nsid, rkey }) => nsid === COLLECTION && rkey === 'z');
-            expect(record?.value).toEqual({
+            expect(isDeepStrictEqual(record?.value, {
               $type: COLLECTION, nested: { link: { $link: LINK }, bytes: { $bytes: 'AP8' } },
               controls: rich.controls,
-            });
+            })).toBe(true);
           }
         }
         const firstReference = await referencePage({ ...valueMode, limit: '2' });
@@ -135,25 +133,88 @@ Deno.test({
         if (!firstReference.cursor || !firstAlteran.cursor) throw new Error('Missing full-page cursor');
         const reference = await referencePage({ ...valueMode, limit: '2', collection: COLLECTION, cursor: firstReference.cursor });
         const actual = await alteranPage({ ...valueMode, limit: '2', collection: COLLECTION, cursor: firstAlteran.cursor });
-        expect(actual.records).toEqual(reference.records);
-        expect(actual.records.map(({ rkey }) => rkey)).toEqual(['one']);
-        expect(actual.cursor).toBeUndefined();
-        expect(reference.cursor).toBeUndefined();
+        expect(isDeepStrictEqual(actual.records, reference.records)).toBe(true);
+        expect(isDeepStrictEqual(actual.records.map(({ rkey }) => rkey), ['one'])).toBe(true);
+        expect(actual.cursor === undefined).toBe(true);
+        expect(reference.cursor === undefined).toBe(true);
       }
     } finally {
       if (attempted) {
-        const deleted = await fetch(`${origin}/xrpc/com.atproto.space.deleteSpace`, {
-          method: 'POST', headers: { authorization, 'content-type': 'application/json' },
-          body: JSON.stringify({ space }), redirect: 'manual', signal: AbortSignal.timeout(10_000),
+        const deleted = await referenceRequest(`${origin}/xrpc/com.atproto.space.deleteSpace`, authorization, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ space }),
         });
-        if (!deleted.ok && (await deleted.json() as { error?: string }).error !== 'SpaceNotFound') {
-          throw new Error(`Reference cleanup returned HTTP ${deleted.status}`);
-        }
-        await deleted.body?.cancel();
+        await finishReferenceCleanup(deleted);
       }
     }
   },
 });
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object';
+}
+
+function parseReferenceJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error('Invalid reference JSON');
+  }
+}
+
+async function readReferenceConfig(path: string): Promise<unknown> {
+  try {
+    return parseReferenceJson(await Deno.readTextFile(path));
+  } catch {
+    throw new Error('Invalid reference configuration');
+  }
+}
+
+async function readReferenceResponse(response: Response): Promise<unknown> {
+  try {
+    return parseReferenceJson(await response.text());
+  } catch {
+    throw new Error('Invalid reference response');
+  }
+}
+
+async function referenceRequest(url: string, authorization: string, init: RequestInit = {}): Promise<Response> {
+  try {
+    const headers = new Headers(init.headers);
+    headers.set('authorization', authorization);
+    return await fetch(url, { ...init, headers, redirect: 'manual', signal: AbortSignal.timeout(10_000) });
+  } catch {
+    throw new Error('Reference request failed');
+  }
+}
+
+async function cancelReferenceBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    throw new Error('Reference response cleanup failed');
+  }
+}
+
+async function finishReferenceCleanup(response: Response): Promise<void> {
+  if (response.ok) {
+    await cancelReferenceBody(response);
+    return;
+  }
+  const body = await readReferenceResponse(response);
+  if (!isObject(body) || body.error !== 'SpaceNotFound') throw new Error('Reference cleanup failed');
+}
+
+function listPage(value: unknown): Page {
+  if (!isObject(value) || !Array.isArray(value.records) ||
+    (value.cursor !== undefined && typeof value.cursor !== 'string') ||
+    !value.records.every((item: unknown) =>
+      isObject(item) && typeof item.collection === 'string' && typeof item.rkey === 'string' &&
+      typeof item.cid === 'string'
+    )) {
+    throw new Error('Invalid reference list page');
+  }
+  return value as Page;
+}
 
 function cursorPath(cursor: string | undefined, space: string, repo: string): string | undefined {
   if (cursor === undefined) return undefined;
@@ -164,10 +225,61 @@ function cursorPath(cursor: string | undefined, space: string, repo: string): st
 
 function loopbackOrigin(value: unknown): string {
   if (typeof value !== 'string') throw new Error('A loopback URL is required');
-  const url = new URL(value);
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('Only a loopback reference PDS origin is allowed');
+  }
   if (url.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) ||
     url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
     throw new Error('Only a loopback reference PDS origin is allowed');
   }
   return url.origin;
 }
+
+Deno.test('reference failures do not expose input in messages or stacks', async () => {
+  const sentinel = 'leakme';
+  const malformed = `{"accessJwt":${sentinel}}`;
+  const configPath = await Deno.makeTempFile();
+  try {
+    await Deno.writeTextFile(configPath, malformed);
+    const cases: Array<{ run: () => unknown; message: string }> = [
+      { run: () => parseReferenceJson(malformed), message: 'Invalid reference JSON' },
+      { run: () => readReferenceConfig(configPath), message: 'Invalid reference configuration' },
+      { run: () => readReferenceResponse(new Response(malformed)), message: 'Invalid reference response' },
+      {
+        run: () => readReferenceResponse(new Response(new ReadableStream({
+          start(controller) { controller.error(new Error(sentinel)); },
+        }))),
+        message: 'Invalid reference response',
+      },
+      { run: () => loopbackOrigin(`http://[${sentinel}`), message: 'Only a loopback reference PDS origin is allowed' },
+      { run: () => referenceRequest(`http://[${sentinel}`, ''), message: 'Reference request failed' },
+      { run: () => referenceRequest('http://127.0.0.1:1', `${sentinel}\u0000`), message: 'Reference request failed' },
+      {
+        run: () => cancelReferenceBody(new Response(new ReadableStream({
+          cancel() { throw new Error(sentinel); },
+        }))),
+        message: 'Reference response cleanup failed',
+      },
+      {
+        run: () => finishReferenceCleanup(new Response(JSON.stringify({ error: sentinel }), { status: 400 })),
+        message: 'Reference cleanup failed',
+      },
+    ];
+    for (const { run, message } of cases) {
+      let error: unknown;
+      try {
+        await run();
+      } catch (cause) {
+        error = cause;
+      }
+      expect(error instanceof Error && error.message === message).toBe(true);
+      expect(error instanceof Error && typeof error.stack === 'string' && !error.stack.includes(sentinel)).toBe(true);
+    }
+    await finishReferenceCleanup(new Response('{"error":"SpaceNotFound"}', { status: 400 }));
+  } finally {
+    await Deno.remove(configPath);
+  }
+});

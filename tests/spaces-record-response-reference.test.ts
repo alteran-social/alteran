@@ -15,7 +15,7 @@ const link = 'bafkreigh2akiscaildcw453tj2mzyv4eicv7yqmx26iubepzwcndhy6eyu';
 Deno.test({
   name: 'reference PDS: record JSON and MAC response interoperability',
   ignore: !configPath,
-  async fn() {
+  fn: withReferenceErrors(async () => {
     const config = JSON.parse(await Deno.readTextFile(configPath!));
     const pds = loopbackOrigin(config.pds), plc = loopbackOrigin(config.plc);
     if (!isValidDid(config.did)) {
@@ -68,8 +68,8 @@ Deno.test({
         record: { $type: collection, text: 'reference response', nested: { link: { $link: link }, bytes: { $bytes: 'AP8' } } } })).body?.cancel();
       const query = new URLSearchParams(identity);
       const own = await rpc(`com.atproto.space.getRecord?${query}`);
-      expect(own.headers.get('signature')).toBeNull();
-      expect(own.headers.get('vary')?.toLowerCase()).toContain('accept-signature');
+      expect(own.headers.get('signature') === null).toBe(true);
+      expect(own.headers.get('vary')?.toLowerCase().includes('accept-signature') === true).toBe(true);
       const ownBody = await own.json();
       const referenceShared = await encapsulate(kem);
       const signed = await rpc(`com.atproto.space.getRecord?${query}`, {
@@ -77,10 +77,10 @@ Deno.test({
       });
       const referenceText = await signed.text();
       const referenceJson = JSON.parse(referenceText) as {uri: string; cid: string; value: unknown};
-      expect(referenceJson).toEqual(ownBody);
+      expect(sameJson(referenceJson, ownBody)).toBe(true);
       const uri = SpaceRef.parse(space).recordUri(repo, collection, 'one').toString();
       if (!isSpaceAtUriString(uri)) throw new Error('Invalid record URI');
-      expect(referenceJson.uri).toBe(uri);
+      expect(referenceJson.uri === uri).toBe(true);
       const lex = lexParse(referenceText, { strict: true }) as {uri: string; cid: string; value: never};
       await verifyRecord(lex as never, { ...referenceShared, headers: signed.headers, uri });
       const bytes = encode(lex.value);
@@ -89,14 +89,14 @@ Deno.test({
       const actual = createSpaceRecordResponse(identity, { cid: referenceJson.cid, value: bytes }, {
         acceptSignature: formatMacRequest(RECORD_MAC_PROFILE, client.keyShare), kemKey, requireMac: true,
       });
-      expect(JSON.parse(actual.body)).toEqual(referenceJson);
-      expect(actual.headers['atproto-space-record']).toBe(signed.headers.get('atproto-space-record'));
+      expect(sameJson(JSON.parse(actual.body), referenceJson)).toBe(true);
+      expect(actual.headers['atproto-space-record'] === signed.headers.get('atproto-space-record')).toBe(true);
       expect(verifySpaceRecordResponseMac(identity, referenceJson.cid, new Headers(actual.headers), client)).toBe(true);
       await verifyRecord(lexParse(actual.body, { strict: true }) as never, { ...client, headers: new Headers(actual.headers), uri });
     } finally {
       if (attempted) await (await post('com.atproto.space.deleteSpace', { space })).body?.cancel();
     }
-  },
+  }),
 });
 
 function loopbackOrigin(input: unknown): string {
@@ -110,4 +110,56 @@ function localFetch(input: string, init: RequestInit = {}): Promise<Response> {
   const url = new URL(input); loopbackOrigin(url.origin);
   if (url.username || url.password) throw new Error('Credentials in URLs are not allowed');
   return fetch(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(10_000) });
+}
+
+
+function withReferenceErrors<T>(action: () => T | Promise<T>): () => Promise<T> {
+  return async () => {
+    try {
+      return await action();
+    } catch {
+      throw new Error('Reference interoperability failed');
+    }
+  };
+}
+
+Deno.test('reference failure output excludes private input', async () => {
+  const sentinel = 'harmless-private-sentinel';
+  const malformed = `{"accessJwt":${sentinel}}`;
+  const path = await Deno.makeTempFile();
+  try {
+    await Deno.writeTextFile(path, malformed);
+    const failures = [
+      async () => JSON.parse(await Deno.readTextFile(path)),
+      () => new URL(`http://[${sentinel}`),
+      () => new Headers({ authorization: `Bearer ${sentinel}\0` }),
+      () => JSON.parse(malformed),
+      () => { throw new Error(`server response: ${sentinel}`); },
+    ];
+    for (const failure of failures) {
+      let caught: unknown;
+      try {
+        await withReferenceErrors(failure)();
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught instanceof Error && caught.message === 'Reference interoperability failed').toBe(true);
+      expect(caught instanceof Error && typeof caught.stack === 'string' && !caught.stack.includes(sentinel)).toBe(true);
+    }
+  } finally {
+    await Deno.remove(path);
+  }
+});
+
+function sameJson(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object' ||
+    Array.isArray(left) !== Array.isArray(right)) return false;
+  if (Array.isArray(left) && Array.isArray(right) && left.length !== right.length) return false;
+  const leftFields = left as Record<string, unknown>;
+  const rightFields = right as Record<string, unknown>;
+  const keys = Object.keys(leftFields);
+  return keys.length === Object.keys(rightFields).length && keys.every((key) =>
+    Object.hasOwn(rightFields, key) && sameJson(leftFields[key], rightFields[key])
+  );
 }

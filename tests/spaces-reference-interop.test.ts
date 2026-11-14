@@ -43,7 +43,7 @@ const configPath = Deno.env.get("ALTERAN_REFERENCE_INTEROP_CONFIG");
 Deno.test({
   name: "reference PDS: STAR import/export and response MAC interoperability",
   ignore: !configPath,
-  async fn() {
+  fn: withReferenceErrors(async () => {
     const config = JSON.parse(await Deno.readTextFile(configPath!));
     const pds = loopbackOrigin(config.pds);
     const plc = loopbackOrigin(config.plc);
@@ -67,7 +67,7 @@ Deno.test({
       });
       if (!response.ok) {
         await response.body?.cancel();
-        throw new Error(`${nsid} returned HTTP ${response.status}`);
+        throw new Error(`Reference request returned HTTP ${response.status}`);
       }
       return response;
     };
@@ -125,14 +125,12 @@ Deno.test({
       return { response, ...shared };
     };
 
-    let createdSpace = false;
-    try {
+    await withFixtureCleanup(async () => {
       const creation = await postJson("com.atproto.space.createSpace", {
         spaceType: "com.example.note",
         skey,
         policy: { $type: "com.atproto.personalspace.policy" },
       });
-      createdSpace = true;
       const created = await creation.json() as { space?: string };
       if (created.space !== space) {
         throw new Error("Reference PDS created an unexpected space");
@@ -217,8 +215,8 @@ Deno.test({
         headers: received.response.headers,
         uri,
       });
-      expect(record.cid).toBe(added.cid);
-      expect(record.value.text).toBe("Alteran archive fixture");
+      expect(record.cid === added.cid).toBe(true);
+      expect(record.value.text === "Alteran archive fixture").toBe(true);
 
       const delegation = await (await rpc(
         `com.atproto.space.getDelegationToken?${new URLSearchParams({
@@ -316,7 +314,7 @@ Deno.test({
         headers: credentialResponse.headers,
         uri,
       });
-      expect(credentialRecord.cid).toBe(added.cid);
+      expect(credentialRecord.cid === added.cid).toBe(true);
 
       const missingProofHeaders = new Headers(credentialHeaders);
       missingProofHeaders.delete("signature");
@@ -365,7 +363,8 @@ Deno.test({
         space: commit.space,
         repo: commit.repo,
       });
-      expect(finalCommit.data).toEqual(data);
+      expect(finalCommit.data.length === data.length &&
+        finalCommit.data.every((byte, index) => byte === data[index])).toBe(true);
       expect(() =>
         verifyCommit({ ...finalCommit, data: new Uint8Array(32) }, {
           ...latest,
@@ -374,13 +373,26 @@ Deno.test({
           repo: commit.repo,
         })
       ).toThrow();
-    } finally {
-      if (createdSpace) {
-        await postJson("com.atproto.space.deleteSpace", { space });
+    }, async () => {
+      const response = await localFetch(`${pds}/xrpc/com.atproto.space.deleteSpace`, {
+        method: "POST", headers: { Authorization: authorization, "Content-Type": "application/json" },
+        body: JSON.stringify({ space }), signal: AbortSignal.timeout(10_000),
+      });
+      if (response.ok) await response.body?.cancel();
+      else {
+        const result = await response.json() as { error?: unknown };
+        if (response.status !== 400 || !result || result.error !== "SpaceNotFound") {
+          throw new Error("Reference cleanup failed");
+        }
       }
-    }
-  },
+    });
+  }),
 });
+
+async function withFixtureCleanup(action: () => Promise<void>, cleanup: () => Promise<void>): Promise<void> {
+  let attempted = false;
+  try { attempted = true; await action(); } finally { if (attempted) await cleanup(); }
+}
 
 function loopbackOrigin(value: unknown): string {
   if (typeof value !== "string") throw new Error("A loopback URL is required");
@@ -436,5 +448,44 @@ Deno.test("reference interop requests do not follow redirects", async () => {
   } finally {
     await source.shutdown();
     await target.shutdown();
+  }
+});
+
+
+function withReferenceErrors<T>(action: () => T | Promise<T>): () => Promise<T> {
+  return async () => {
+    try {
+      return await action();
+    } catch {
+      throw new Error('Reference interoperability failed');
+    }
+  };
+}
+
+Deno.test('reference failure output excludes private input', async () => {
+  const sentinel = 'harmless-private-sentinel';
+  const malformed = `{"accessJwt":${sentinel}}`;
+  const path = await Deno.makeTempFile();
+  try {
+    await Deno.writeTextFile(path, malformed);
+    const failures = [
+      async () => JSON.parse(await Deno.readTextFile(path)),
+      () => new URL(`http://[${sentinel}`),
+      () => new Headers({ authorization: `Bearer ${sentinel}\0` }),
+      () => JSON.parse(malformed),
+      () => { throw new Error(`server response: ${sentinel}`); },
+    ];
+    for (const failure of failures) {
+      let caught: unknown;
+      try {
+        await withReferenceErrors(failure)();
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught instanceof Error && caught.message === 'Reference interoperability failed').toBe(true);
+      expect(caught instanceof Error && typeof caught.stack === 'string' && !caught.stack.includes(sentinel)).toBe(true);
+    }
+  } finally {
+    await Deno.remove(path);
   }
 });

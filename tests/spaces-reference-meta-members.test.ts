@@ -15,7 +15,7 @@ Deno.test({
   ignore: !configPath,
   sanitizeOps: false,
   sanitizeResources: false,
-  async fn() {
+  fn: withRedactedReferenceErrors(async () => {
     if (!configPath) throw new Error("Missing reference configuration");
     const config: unknown = JSON.parse(await Deno.readTextFile(configPath));
     if (!config || typeof config !== "object") {
@@ -159,7 +159,7 @@ Deno.test({
         }
       }
     }
-  },
+  }),
 });
 
 function loopbackOrigin(value: unknown): string {
@@ -175,3 +175,54 @@ function loopbackOrigin(value: unknown): string {
   }
   return url.origin;
 }
+
+function withRedactedReferenceErrors<T>(
+  action: () => T | Promise<T>,
+): () => Promise<T> {
+  return async () => {
+    try {
+      return await action();
+    } catch {
+      throw new Error("Reference interoperability test failed");
+    }
+  };
+}
+
+Deno.test("reference failures do not expose sensitive values", async () => {
+  const sentinel = "harmless-token-sentinel";
+  const failures: Array<() => unknown | Promise<unknown>> = [
+    () => JSON.parse(`{"accessJwt":${sentinel}}`),
+    () => new URL(`http://[${sentinel}`),
+    () => new Headers({ authorization: `Bearer ${sentinel}\0` }),
+    () => expect(sentinel).toEqual("unexpected"),
+    () =>
+      new Response(
+        new ReadableStream({
+          pull(controller) {
+            controller.error(new Error(sentinel));
+          },
+        }),
+      ).text(),
+    () =>
+      new Response(
+        new ReadableStream({
+          cancel() {
+            throw new Error(sentinel);
+          },
+        }),
+      ).body?.cancel(),
+  ];
+  for (const fail of failures) {
+    let error: unknown;
+    try {
+      await withRedactedReferenceErrors(fail)();
+    } catch (caught) {
+      error = caught;
+    }
+    if (
+      !(error instanceof Error) ||
+      error.message !== "Reference interoperability test failed" ||
+      !error.stack || error.stack.includes(sentinel)
+    ) throw new Error("Reference test error redaction failed");
+  }
+});

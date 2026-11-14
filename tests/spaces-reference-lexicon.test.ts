@@ -6,7 +6,7 @@ const configPath = Deno.env.get("ALTERAN_REFERENCE_INTEROP_CONFIG");
 Deno.test({
   name: "reference PDS: prove a published Space Lexicon",
   ignore: !configPath,
-  async fn() {
+  fn: withReferenceErrors(async () => {
     const config = JSON.parse(await Deno.readTextFile(configPath!));
     const pds = loopbackOrigin(config.pds);
     const plc = loopbackOrigin(config.plc);
@@ -40,8 +40,9 @@ Deno.test({
       return response;
     };
 
-    let created = false;
+    let attempted = false;
     try {
+      attempted = true;
       await post("com.atproto.repo.createRecord", {
         repo: did,
         collection,
@@ -60,7 +61,6 @@ Deno.test({
           },
         },
       });
-      created = true;
       let txtQueries = 0;
       // The disposable services use loopback HTTP; the adapter maps their
       // identity and PDS to test HTTPS origins while retaining real signed CARs.
@@ -109,14 +109,14 @@ Deno.test({
       });
       expect(result.tag).toBe("proven");
       if (result.tag === "proven") {
-        expect(result.main.spaceType).toBe(nsid);
-        expect(result.main.publisherDid).toBe(did);
-        expect(result.main.collections).toEqual(["com.example.note"]);
+        expect(result.main.spaceType === nsid).toBe(true);
+        expect(result.main.publisherDid === did).toBe(true);
+        expect(result.main.collections.length === 1 && result.main.collections[0] === "com.example.note").toBe(true);
         expect(result.definitions).toBe("main-only");
       }
       expect(txtQueries).toBe(2);
     } finally {
-      if (created) {
+      if (attempted) {
         await post("com.atproto.repo.deleteRecord", {
           repo: did,
           collection,
@@ -124,7 +124,7 @@ Deno.test({
         });
       }
     }
-  },
+  }),
 });
 
 function loopbackOrigin(value: unknown): string {
@@ -142,3 +142,42 @@ function loopbackOrigin(value: unknown): string {
   }
   return url.origin;
 }
+
+
+function withReferenceErrors<T>(action: () => T | Promise<T>): () => Promise<T> {
+  return async () => {
+    try {
+      return await action();
+    } catch {
+      throw new Error('Reference interoperability failed');
+    }
+  };
+}
+
+Deno.test('reference failure output excludes private input', async () => {
+  const sentinel = 'harmless-private-sentinel';
+  const malformed = `{"accessJwt":${sentinel}}`;
+  const path = await Deno.makeTempFile();
+  try {
+    await Deno.writeTextFile(path, malformed);
+    const failures = [
+      async () => JSON.parse(await Deno.readTextFile(path)),
+      () => new URL(`http://[${sentinel}`),
+      () => new Headers({ authorization: `Bearer ${sentinel}\0` }),
+      () => JSON.parse(malformed),
+      () => { throw new Error(`server response: ${sentinel}`); },
+    ];
+    for (const failure of failures) {
+      let caught: unknown;
+      try {
+        await withReferenceErrors(failure)();
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught instanceof Error && caught.message === 'Reference interoperability failed').toBe(true);
+      expect(caught instanceof Error && typeof caught.stack === 'string' && !caught.stack.includes(sentinel)).toBe(true);
+    }
+  } finally {
+    await Deno.remove(path);
+  }
+});
