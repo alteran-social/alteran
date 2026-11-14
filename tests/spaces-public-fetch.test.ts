@@ -64,7 +64,7 @@ describe("public HTTPS transport", () => {
     const headers = new Headers(received?.headers);
     expect([...headers.keys()].sort()).toEqual(["accept", "cache-control"]);
     expect(headers.get("accept")).toBe(
-      "application/json, application/did+ld+json, application/vnd.ipld.car",
+      "application/json, application/did+json, application/did+ld+json, application/vnd.ipld.car",
     );
     expect(headers.get("cache-control")).toBe("no-cache");
     expect(headers.has("authorization")).toBe(false);

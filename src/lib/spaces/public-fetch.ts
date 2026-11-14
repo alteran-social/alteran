@@ -191,7 +191,7 @@ export async function fetchPublicHttps(
         cache: "no-store",
         headers: {
           accept:
-            "application/json, application/did+ld+json, application/vnd.ipld.car",
+            "application/json, application/did+json, application/did+ld+json, application/vnd.ipld.car",
           "cache-control": "no-cache",
         },
         signal: controller.signal,
