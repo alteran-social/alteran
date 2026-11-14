@@ -11,6 +11,7 @@
     "npm:@atproto/api@~0.17.7": "0.17.7",
     "npm:@atproto/crypto@0.0.0-spaces-alpha-20261113224550": "0.0.0-spaces-alpha-20261113224550",
     "npm:@atproto/crypto@~0.4.5": "0.4.5",
+    "npm:@atproto/did@0.0.0-spaces-alpha-20261113224550": "0.0.0-spaces-alpha-20261113224550",
     "npm:@atproto/lex-cbor@0.0.0-spaces-alpha-20261113224550": "0.0.0-spaces-alpha-20261113224550",
     "npm:@atproto/lex-document@0.0.0-spaces-alpha-20261113224550": "0.0.0-spaces-alpha-20261113224550",
     "npm:@atproto/repo@0.0.0-spaces-alpha-20261113224550": "0.0.0-spaces-alpha-20261113224550",
@@ -225,6 +226,12 @@
         "@noble/curves",
         "@noble/hashes@1.8.0",
         "uint8arrays@3.0.0"
+      ]
+    },
+    "@atproto/did@0.0.0-spaces-alpha-20261113224550": {
+      "integrity": "sha512-Q6WXHVBbs7qjPc7CMIj9GtYiY2rxEDpMWjmJGVsh58XyrBJuGRmV228W4gHQ3Np7LE9JPdG0Ack/jihudSlUnw==",
+      "dependencies": [
+        "zod@3.25.76"
       ]
     },
     "@atproto/lex-cbor@0.0.0-spaces-alpha-20261113224550": {
@@ -4126,6 +4133,7 @@
         "npm:@atproto/api@~0.17.7",
         "npm:@atproto/crypto@0.0.0-spaces-alpha-20261113224550",
         "npm:@atproto/crypto@~0.4.5",
+        "npm:@atproto/did@0.0.0-spaces-alpha-20261113224550",
         "npm:@atproto/lex-cbor@0.0.0-spaces-alpha-20261113224550",
         "npm:@atproto/lex-document@0.0.0-spaces-alpha-20261113224550",
         "npm:@atproto/repo@0.0.0-spaces-alpha-20261113224550",

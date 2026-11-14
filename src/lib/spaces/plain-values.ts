@@ -26,6 +26,36 @@ export function copyPlainRecord(
   }
 }
 
+/** Preserve bounded extension fields without evaluating their values. */
+export function copyPlainRecordWithExtensions(
+  value: unknown,
+  limit: number,
+): Record<string, unknown> | null {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return null;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return null;
+    const keys = Reflect.ownKeys(value);
+    if (keys.length > limit) return null;
+    const result: Record<string, unknown> = Object.create(null);
+    let totalKeyBytes = 0;
+    for (const key of keys) {
+      if (typeof key !== "string") return null;
+      if (key.length > 8192) return null;
+      totalKeyBytes += new TextEncoder().encode(key).byteLength;
+      if (totalKeyBytes > 65_536) return null;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor?.enumerable || !("value" in descriptor)) return null;
+      result[key] = descriptor.value;
+    }
+    return result;
+  } catch {
+    return null;
+  }
+}
+
 /** Reject holes, custom methods and accessors, then copy each element once. */
 export function copyPlainArray(
   value: unknown,
