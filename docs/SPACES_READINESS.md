@@ -109,6 +109,14 @@ and egress there, and establish a freshness policy for DID documents and repo
 heads. Matching head responses cannot rule out consistent stale responses from
 the publisher's PDS or a cache.
 
+The internal local KEM identity resolver checks the configured key and PDS
+origin against a bounded DID-document response, then rereads the configuration.
+It supports `did:plc` and hostname-only `did:web`; it is not wired to HTTP and
+does not prove current PLC state, DNS-to-connect safety or continued key
+freshness. It has the same public-egress prerequisites as the Lexicon resolver.
+Before using it for signed responses, establish authoritative identity freshness,
+rotation handling and binding to the authenticated account incarnation.
+
 The experimental request-wide scope resolver permits at most two distinct
 declaration-backed Space types per request, resolved serially under one
 deadline. This deliberately limits interoperability until aggregate Worker
