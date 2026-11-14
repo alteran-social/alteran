@@ -57,6 +57,21 @@ Deno.test({
       expect(response.status).toBe(200);
       expect((await response.json() as { value: unknown }).value).toEqual({ $type: config.collection, text: 'worker context' });
       checkPrivateCors(response);
+      const listPath = 'https://pds.example/xrpc/com.atproto.space.listRecords';
+      const listQuery = new URLSearchParams({ space: config.space, repo: config.repo, excludeValues: 'true' });
+      const listProof = await new SignJWT({ htm: 'GET', htu: listPath, iat: Math.floor(Date.now() / 1000),
+        jti: crypto.randomUUID(), nonce: config.nonce, ath })
+        .setProtectedHeader({ typ: 'dpop+jwt', alg: 'ES256', jwk: config.publicJwk }).sign(privateKey);
+      const listed = await worker.dispatchFetch(`${listPath}?${listQuery}`, {
+        headers: { authorization: `DPoP ${config.access}`, dpop: listProof, origin: 'https://client.example' },
+      });
+      expect(listed.status).toBe(200);
+      const listBody = await listed.json() as { records: { collection: string; rkey: string; cid: string }[] };
+      expect(listBody.records).toHaveLength(1);
+      expect(listBody.records[0].collection).toBe(config.collection);
+      expect(listBody.records[0].rkey).toBe('one');
+      expect(Object.keys(listBody.records[0]).sort()).toEqual(['cid', 'collection', 'rkey']);
+      checkPrivateCors(listed);
       const bad = await worker.dispatchFetch(`${path}?${query}`, {
         headers: { authorization: `DPoP ${config.access}`, dpop: 'bad', origin: 'https://client.example' },
       });

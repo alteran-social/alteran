@@ -1,6 +1,6 @@
 # AT Protocol Spaces readiness
 
-Alteran has limited Space foundations and an owner-only record read; it is not
+Alteran has limited Space foundations and restricted owner-only reads; it is not
 yet a Spaces-capable PDS. The AT Protocol team's
 [beta announcement](https://atproto.com/blog/getting-ready-for-the-spaces-public-beta)
 schedules the public beta and reference-PDS rollout to start on December 1,
@@ -25,6 +25,16 @@ records or advertised as encrypted.
   are not exposed; other Space grants remain unavailable. An independently
   granted `transition:generic` scope continues to authorize its existing
   public-repository operations.
+- `com.atproto.space.listRecords` supports the same owner and grant checks for
+  metadata-only pages when `excludeValues=true`. Pages contain at most 50
+  records and are ordered by full record URI, descending. Cursors must belong
+  to the requested Space and repository, and every page is reauthorized; pages
+  are not a single snapshot. The reader compares at most 4 MiB of stored values
+  within D1 and asks clients to reduce the limit when the page exceeds that
+  bound. It checks current-version consistency but does not rehash values to
+  verify their CIDs. Listing record values, pages of up to the reference
+  maximum of 1,000, cross-prefix cursors and credential access remain unsupported.
+  A Space without an active local epoch is denied rather than listed as empty.
 - `com.atproto.sync.getBlob` authorizes public downloads using public record
   usage and sends public, immutable cache headers. The public blob usage path
   must never treat a space-only reference as public authorization.
@@ -87,7 +97,7 @@ retain missing-blob associations until their bytes are uploaded.
 The `spaces-reference-interop.test.ts`, `spaces-reference-lexicon.test.ts`,
 `spaces-reference-policy.test.ts`, `spaces-reference-ops.test.ts`,
 `spaces-reference-export.test.ts`, `spaces-reference-meta-archive.test.ts` and
-`spaces-reference-meta-members.test.ts`
+`spaces-reference-meta-members.test.ts` and `spaces-list-reference.test.ts`
 tests can exercise a disposable local reference PDS. Set
 `ALTERAN_REFERENCE_INTEROP_CONFIG` to a JSON file containing
 `pds`, `plc`, `did`, and `accessJwt` for a test account. Both service URLs must
@@ -102,6 +112,8 @@ before uploading and does not test streaming HTTP transport.
 The metadata test imports and exports a memberspace policy, member, and writer.
 The member-mapping test checks a paginated reference member list against a
 separately exported metadata archive.
+The list test compares metadata, CIDs, cursor paths and filtered pagination
+against the reference PDS for matching test records.
 An interrupted request may leave test data behind. Keep the configuration file
 private because it contains an access token. The Lexicon test injects DNS and
 maps test HTTPS origins to the local services; it does not establish live DNS or

@@ -2,6 +2,7 @@ import setup from './spaces-worker-context';
 import { onRequest } from '../../src/middleware';
 import { normalizePdsRequestForAstro } from '../../src/worker/normalize-request';
 import { ALL, GET, HEAD } from '../../src/pages/xrpc/com.atproto.space.getRecord';
+import { ALL as listAll, GET as listGet, HEAD as listHead } from '../../src/pages/xrpc/com.atproto.space.listRecords';
 import { GET as jwks } from '../../src/pages/oauth/jwks';
 import type { Env } from '../../src/env';
 
@@ -31,9 +32,10 @@ export default {
         'access-control-expose-headers': mode === 'wildcard' ? '*' : 'X-Existing, dPoP-Nonce',
         'dpop-nonce': 'nonce', vary: mode === 'wildcard' ? '*' : 'Origin, accept-signature',
       } });
-      if (normalized.method === 'HEAD') return HEAD();
-      if (normalized.method !== 'GET') return ALL();
-      return GET(context as never);
+      const list = new URL(normalized.url).pathname === '/xrpc/com.atproto.space.listRecords';
+      if (normalized.method === 'HEAD') return list ? listHead() : HEAD();
+      if (normalized.method !== 'GET') return list ? listAll() : ALL();
+      return list ? listGet(context as never) : GET(context as never);
     });
     if (mode !== 'throw' && mode !== 'returned-500' && mode !== 'jwks-real') return run();
     const originalLog = console.log;
