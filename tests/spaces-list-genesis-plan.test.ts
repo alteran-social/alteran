@@ -45,7 +45,7 @@ Deno.test('genesis witness follows authorization and uses indexed probes', async
   for (const [index, statement] of completions.entries()) {
     const completionPlan = await db.prepare(`EXPLAIN QUERY PLAN ${statement.sql}`).bind(...statement.values)
       .all<{ detail: string }>();
-    const details = completionPlan.results.map((row) => row.detail);
+    const details: string[] = completionPlan.results.map((row: { detail: string }) => row.detail);
     const session = details.findIndex((line) => line.includes('SEARCH session USING INDEX sqlite_autoindex_oauth_session_1'));
     const authorized = index === 0 ? session : details.findIndex((line) => line === 'SCAN authorized');
     const history = details.findIndex((line) => line.includes('space_epoch_space_owner'));
@@ -59,7 +59,7 @@ Deno.test('genesis witness follows authorization and uses indexed probes', async
   expect(liveFinal.results).toHaveLength(1);
   if (!sql) throw new Error('Missing list selection');
   const plan = await db.prepare(`EXPLAIN QUERY PLAN ${sql}`).bind(...values).all<{ detail: string }>();
-  const details = plan.results.map((row) => row.detail);
+  const details: string[] = plan.results.map((row: { detail: string }) => row.detail);
   const genesis = details.findIndex((line) => line.includes('MATERIALIZE genesis'));
   const authorized = details.findIndex((line, index) => index > genesis && line === 'SCAN authorized');
   const policy = details.findIndex((line, index) => index > genesis &&

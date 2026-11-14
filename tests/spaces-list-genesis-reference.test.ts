@@ -39,8 +39,9 @@ Deno.test({
         const local = await policyFixture();
         const refCursor = captureRecordIdentity({ space, repo, collection: 'com.example.note', rkey: 'one' }).uri;
         const localCursor = captureRecordIdentity({ space: EMPTY, repo: DID, collection: 'com.example.note', rkey: 'one' }).uri;
-        for (const options of [{}, { excludeValues: 'true' }, { excludeValues: 'false', limit: '1' },
-          { collection: 'com.example.note', limit: '50', cursor: refCursor }]) {
+        const cases: Record<string, string>[] = [{}, { excludeValues: 'true' }, { excludeValues: 'false', limit: '1' },
+          { collection: 'com.example.note', limit: '50', cursor: refCursor }];
+        for (const options of cases) {
           const params = new URLSearchParams({ space, repo, ...options });
           const reference = await rpc(`com.atproto.space.listRecords?${params}`);
           if (!reference.ok) throw new Error();

@@ -15,8 +15,9 @@ describe('fresh personal Space list', () => {
   it('returns empty pages for value and metadata requests with filters and cursors', async () => {
     const f = await policyFixture();
     const cursor = captureRecordIdentity({ space: EMPTY, repo: DID, collection: 'com.example.note', rkey: 'one' }).uri;
-    for (const query of [{}, { excludeValues: 'true' }, { excludeValues: 'false', limit: '1' },
-      { collection: 'com.example.note', cursor, limit: '50' }]) {
+    const queries: Record<string, string>[] = [{}, { excludeValues: 'true' }, { excludeValues: 'false', limit: '1' },
+      { collection: 'com.example.note', cursor, limit: '50' }];
+    for (const query of queries) {
       const request = await signedGenesisRequest(f, { query });
       const response = await GET(listContext(f.env, request));
       expect(response.status).toBe(200);
@@ -45,7 +46,7 @@ describe('fresh personal Space list', () => {
       expect(result.tag).toBe('found');
       if (result.tag !== 'found') throw new Error('Expected empty list');
       expect(result.records).toEqual([]);
-      const request = mode === 'request' ? current.request.clone() : current.request;
+      const request = mode === 'request' ? current.request.clone() as unknown as typeof current.request : current.request;
       const database = mode === 'database' ? new Proxy(f.env.ALTERAN_DB, {}) : f.env.ALTERAN_DB;
       expect(await result.complete(request, database)).toBe(mode === 'valid');
       expect(await result.complete(current.request, f.env.ALTERAN_DB)).toBe(false);
