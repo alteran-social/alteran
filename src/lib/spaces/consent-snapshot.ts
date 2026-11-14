@@ -3,6 +3,7 @@ import { isLexiconUri } from "./lexicon-uri";
 import {
   copyIssuedSpacePermission,
   type IssuedSpacePermission,
+  materializeCollectionFreeReadSelf,
   materializeSpacePermission,
   parseSpacePermission,
 } from "./oauth-scopes";
@@ -161,6 +162,12 @@ function copyGrant(
   const requested = parseSpacePermission(fields.requestedScope);
   const permission = copyIssuedSpacePermission(fields.permission);
   if (!requested || !permission) return null;
+  if (permission.collectionSource === "none") {
+    const expected = materializeCollectionFreeReadSelf(requested, subject);
+    const canonical = expected && copyIssuedSpacePermission(expected);
+    if (!canonical || JSON.stringify(canonical) !== JSON.stringify(permission)) return null;
+    return { grant: { requestedScope: fields.requestedScope, permission } };
+  }
   const declarationType =
     requested.collections.tag === "declaration" && requested.spaceType !== "*"
       ? requested.spaceType

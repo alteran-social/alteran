@@ -81,13 +81,34 @@ describe("explicit Space consent binding", () => {
 
   it("rejects default, mixed, duplicated, undeclared and oversized values", async () => {
     for (const value of [
-      "atproto space:com.example.forum?action=read_self",
       `${requested}&action=create`,
       `${requested}&manage=update`,
       `${requested} ${requested.split(" ")[1]}`,
       `atproto unsupported ${requested.split(" ")[1]}`,
       `atproto ${"x".repeat(17_000)}`,
     ]) expect(await createExplicitSpaceConsent(binding, value)).toBeNull();
+  });
+
+  it("seals and restores collection-free read_self without declaration evidence", async () => {
+    const scope = "atproto space:com.example.forum?action=read_self";
+    const consent = await createExplicitSpaceConsent(binding, scope);
+    if (!consent) throw new Error("Expected consent snapshot");
+    expect(consent.grants[0].permission.collectionSource).toBe("none");
+    expect(consent.grants[0].permission.collections.values).toEqual([]);
+    expect(consent.tokenScope).toContain("action=read_self");
+    expect(consent.tokenScope).not.toContain("collection=");
+    expect((await restoreExplicitSpaceConsent(consent.serialized, consent.digest, binding, consent.tokenScope))?.grants)
+      .toEqual(consent.grants);
+  });
+
+  it("continues to restore the saved explicit-collection snapshot exactly", async () => {
+    const saved = (await Deno.readTextFile(new URL("./fixtures/spaces-explicit-consent-v1.json", import.meta.url))).trimEnd();
+    const digest = "de08deb47cdb2637ffc48e484cd779cf2cd85dc6d670c38e34a2ba9fac361d08";
+    const consent = await createExplicitSpaceConsent(binding, requested);
+    if (!consent) throw new Error("Expected consent snapshot");
+    expect(consent.serialized).toBe(saved);
+    expect(consent.digest).toBe(digest);
+    expect(await restoreExplicitSpaceConsent(saved, digest, binding, consent.tokenScope)).not.toBeNull();
   });
 
   it("requires key provenance for confidential clients", async () => {

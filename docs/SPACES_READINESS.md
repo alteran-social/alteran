@@ -17,9 +17,10 @@ records or advertised as encrypted.
   public sync and the firehose. Internal space storage and protocol helpers are
   under development; no space repositories or space host are accessible yet.
 - Space and policy XRPC namespaces return `NotImplemented`. OAuth can issue an
-  explicitly requested `read_self` Space grant, but no public Space endpoint
-  accepts it yet. The grant covers every collection in the user's own repo for
-  matching Spaces, even when the request names a collection. Other Space grants
+  explicitly requested `read_self` Space grant, with or without a collection
+  parameter, but no public Space endpoint accepts it yet. The grant covers every
+  collection in the user's own repo for matching Spaces, even when the request
+  names a collection. Other Space grants
   remain unavailable. An independently granted `transition:generic` scope
   continues to authorize its existing public-repository operations.
 - `com.atproto.sync.getBlob` authorizes public downloads using public record
@@ -155,7 +156,9 @@ freshness and consent rechecks are required before it can grant scopes.
 
 Drain older Workers when deploying the OAuth approval changes: older versions
 can issue a code without the new atomic PAR consumption. Approvals rendered by
-an older version must be restarted after the cutover.
+an older version must be restarted after the cutover. Workers must also be
+drained before issuing collection-free `read_self` grants: older code cannot
+restore their consent snapshots.
 
 The internal incremental-repo reader requires a known starting revision and
 returns a full-sync result when history is uncertain. Its operation log is

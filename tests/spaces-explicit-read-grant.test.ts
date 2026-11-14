@@ -4,7 +4,7 @@ import {
   materializeExplicitSpaceReadGrant,
   parseExplicitSpaceReadGrant,
 } from "../src/lib/spaces/explicit-read-grant";
-import { allowsSpacePermission } from "../src/lib/spaces/oauth-scopes";
+import { allowsSpacePermission, copyIssuedSpacePermission } from "../src/lib/spaces/oauth-scopes";
 
 const subject = "did:plc:alice";
 const scope = "space:com.example.forum?collection=com.example.post&action=read_self";
@@ -21,7 +21,6 @@ describe("explicit Space read grants", () => {
   it("does not silently narrow default, mixed-action or management requests", () => {
     for (const value of [
       "space:com.example.forum",
-      "space:com.example.forum?action=read_self",
       "space:com.example.forum?collection=com.example.post",
       "space:com.example.forum?collection=com.example.post&action=read",
       `${scope}&action=create`,
@@ -29,6 +28,26 @@ describe("explicit Space read grants", () => {
       "space:com.example.forum?collection=&action=read_self",
       "repo:com.example.post",
     ]) expect(parseExplicitSpaceReadGrant(value)).toBeNull();
+  });
+
+  it("permits explicit read_self without a declaration or collection", () => {
+    const requested = "space:com.example.forum?authority=self&skey=general&action=read_self";
+    const grant = materializeExplicitSpaceReadGrant(requested, subject);
+    if (!grant) throw new Error("Expected collection-free grant");
+    expect(grant.permission.collectionSource).toBe("none");
+    expect(grant.permission.collections.values).toEqual([]);
+    expect(grant.permission.authority).toBe(subject);
+    const target = { spaceType: "com.example.forum", authority: subject, skey: "general" };
+    expect(allowsSpacePermission(grant.permission, target, { action: "read_self" })).toBe(true);
+    expect(allowsSpacePermission(grant.permission, target, { action: "read" })).toBe(false);
+    expect(allowsSpacePermission(grant.permission, target, { action: "create", collection: "com.example.post" })).toBe(false);
+    expect(allowsSpacePermission(grant.permission, target, { manage: "create" })).toBe(false);
+    expect(allowsSpacePermission(grant.permission, { ...target, skey: "other" }, { action: "read_self" })).toBe(false);
+    expect(allowsSpacePermission(grant.permission, { ...target, authority: "did:plc:bob" }, { action: "read_self" })).toBe(false);
+    for (const changes of [
+      { actions: ["read"] }, { actions: ["read_self", "create"] }, { manage: ["create"] },
+      { collections: { tag: "explicit", values: ["com.example.post"] } },
+    ]) expect(copyIssuedSpacePermission({ ...grant.permission, ...changes })).toBeNull();
   });
 
   it("matches the whole owned repository for wildcard targets", () => {

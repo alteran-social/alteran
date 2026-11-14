@@ -20,7 +20,7 @@ export type SpacePermission = {
 
 export type IssuedSpacePermission = Omit<SpacePermission, "collections"> & {
   readonly tag: "issued";
-  readonly collectionSource: "declaration" | "explicit";
+  readonly collectionSource: "declaration" | "explicit" | "none";
   readonly collections: Extract<SpaceCollections, { readonly tag: "explicit" }>;
 };
 
@@ -97,6 +97,28 @@ export function materializeSpacePermission(
     actions: [...permission.actions],
     manage: [...permission.manage],
   };
+}
+
+/** Read-self does not depend on the Space type's declared write collections. */
+export function materializeCollectionFreeReadSelf(
+  value: SpacePermission,
+  grantingDid: string,
+): IssuedSpacePermission | null {
+  const fields = copyPlainRecord(value, [
+    "spaceType", "authority", "skey", "collections", "actions", "manage",
+  ]);
+  const permission = fields && copyPermissionFields(fields);
+  if (
+    !permission || permission.collections.tag !== "declaration" ||
+    permission.actions.length !== 1 || permission.actions[0] !== "read_self" ||
+    permission.manage.length !== 0
+  ) return null;
+  const declaration = permission.spaceType === "*" ? undefined : {
+    spaceType: permission.spaceType,
+    collections: [],
+  };
+  const issued = materializeSpacePermission(permission, grantingDid, declaration);
+  return issued ? { ...issued, collectionSource: "none" } : null;
 }
 
 const ACTIONS: ReadonlySet<string> = new Set([
@@ -266,7 +288,7 @@ export function copyIssuedSpacePermission(
   if (
     !fields || fields.tag !== "issued" ||
     (fields.collectionSource !== "declaration" &&
-      fields.collectionSource !== "explicit")
+      fields.collectionSource !== "explicit" && fields.collectionSource !== "none")
   ) return null;
   const permission = copyPermissionFields(fields);
   if (
@@ -276,6 +298,11 @@ export function copyIssuedSpacePermission(
   if (
     fields.collectionSource === "explicit" &&
     permission.collections.values.length === 0
+  ) return null;
+  if (
+    fields.collectionSource === "none" &&
+    (permission.collections.values.length !== 0 || permission.actions.length !== 1 ||
+      permission.actions[0] !== "read_self" || permission.manage.length !== 0)
   ) return null;
   if (
     fields.collectionSource === "declaration" &&

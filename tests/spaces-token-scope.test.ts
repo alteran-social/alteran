@@ -8,6 +8,7 @@ import {
 import {
   allowsSpacePermission,
   type IssuedSpacePermission,
+  materializeCollectionFreeReadSelf,
   materializeSpacePermission,
   parseSpacePermission,
 } from "../src/lib/spaces/oauth-scopes";
@@ -49,6 +50,24 @@ function wire(permission: IssuedSpacePermission) {
 }
 
 describe("materialized Space token scopes", () => {
+  it("formats collection-free read_self with the pinned reference semantics", () => {
+    const requested = parseSpacePermission(`space:${TYPE}?skey=general&action=read_self`);
+    if (!requested) throw new Error("Expected request");
+    const permission = materializeCollectionFreeReadSelf(requested, DID);
+    if (!permission) throw new Error("Expected collection-free grant");
+    const { reference, scope } = wire(permission);
+    expect(scope).not.toContain("collection=");
+    const target = { spaceType: TYPE, authority: DID, skey: "general" } as const;
+    for (const operation of [
+      { action: "read_self" }, { action: "read" },
+      { action: "create", collection: THREAD }, { manage: "create" },
+    ] as const) {
+      expect(reference.matches({ ...target, ...operation })).toBe(allowsSpacePermission(permission, target, operation));
+    }
+    expect(reference.matches({ ...target, action: "read_self" })).toBe(true);
+    expect(reference.matches({ ...target, skey: "other", action: "read_self" })).toBe(false);
+  });
+
   it("matches the pinned reference for reads, writes, management and targets", () => {
     const permission = issued(
       `space:${TYPE}?authority=*&skey=general&collection=${THREAD}&collection=${REPLY}&action=read&action=create&action=delete&manage=update`,
