@@ -58,8 +58,8 @@ export async function listAuthorizedSpaceRecords(
     const collectionUpper = `${target.collection}0`;
     const upper = target.cursorPath !== null && target.cursorPath < collectionUpper
       ? target.cursorPath : collectionUpper;
-    filter.push(`${path} >= ? COLLATE BINARY`, `${path} < ? COLLATE BINARY`, 'record.collection = ?');
-    filters.push(`${target.collection}/`, upper, target.collection);
+    filter.push(`${path} >= ? COLLATE BINARY`, `${path} < ? COLLATE BINARY`);
+    filters.push(`${target.collection}/`, upper);
   } else if (target.cursorPath !== null) {
     filter.push(`${path} < ? COLLATE BINARY`);
     filters.push(target.cursorPath);
