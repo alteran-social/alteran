@@ -6,6 +6,7 @@ import {
 } from '../../lib/oauth/resource';
 import { mergeHeaderTokens } from '../../lib/http-headers';
 import { parseSpaceListRequest } from '../../lib/spaces/list-records-request';
+import { createSpaceListResponse, SpaceListResponseTooLarge } from '../../lib/spaces/list-record-response';
 
 export const prerender = false;
 
@@ -54,12 +55,14 @@ export async function GET({ locals, request }: APIContext): Promise<Response> {
     let response: Response;
     try {
       if (result.tag === 'invalid') response = error('InternalServerError', 'Internal server error', 500);
-      else if (result.tag === 'tooLarge') response = error('InvalidRequest', 'Requested page is too large; reduce limit', 400);
-      else response = new Response(JSON.stringify({ records: result.records, ...(result.cursor ? { cursor: result.cursor } : {}) }), {
+      else if (result.tag === 'tooLarge') response = error('InvalidRequest', 'Requested page exceeds supported size or complexity', 400);
+      else response = new Response(createSpaceListResponse(parsed.target, result.records, result.cursor), {
         status: 200, headers: { 'content-type': 'application/json' },
       });
-    } catch {
-      response = error('InternalServerError', 'Internal server error', 500);
+    } catch (cause) {
+      response = cause instanceof SpaceListResponseTooLarge
+        ? error('InvalidRequest', 'Requested page exceeds supported size or complexity', 400)
+        : error('InternalServerError', 'Internal server error', 500);
     }
     let allowed = false;
     try {

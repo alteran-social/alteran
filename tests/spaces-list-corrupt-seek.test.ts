@@ -21,8 +21,8 @@ Deno.test('filtered Space listing bounds work when stored paths are corrupt', as
   const env = { ...f.env, ALTERAN_DB: wrapped };
   const endpoint = 'https://pds.example/xrpc/com.atproto.space.listRecords';
   const cursor = captureRecordIdentity({ space: SPACE, repo: DID, collection: COLLECTION, rkey: 'zzzzzz' }).uri;
-  async function read(withCursor: boolean, expected: 'found' | 'invalid') {
-    const query = new URLSearchParams({ space: SPACE, repo: DID, collection: COLLECTION, limit: '1', excludeValues: 'true',
+  async function read(excludeValues: string, withCursor: boolean, expected: 'found' | 'invalid') {
+    const query = new URLSearchParams({ space: SPACE, repo: DID, collection: COLLECTION, limit: '1', excludeValues,
       ...(withCursor ? { cursor } : {}) });
     const request = new Request(`${endpoint}?${query}`, { headers: {
       authorization: `DPoP ${f.tokens.accessJwt}`,
@@ -36,15 +36,17 @@ Deno.test('filtered Space listing bounds work when stored paths are corrupt', as
     expect(await result.complete(request, wrapped)).toBe(true);
     return reads;
   }
-  const before = [await read(false, 'found'), await read(true, 'found')];
+  const cases = [['true', false], ['true', true], ['false', false], ['false', true]] as const;
+  const before = [];
+  for (const [excludeValues, withCursor] of cases) before.push(await read(excludeValues, withCursor, 'found'));
   await db.prepare('DROP TRIGGER space_record_fence_insert').run();
   await db.prepare(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i < 3000)
     INSERT INTO space_record(space_ref, repo_did, collection, rkey, cid, value_cbor, repo_rev)
     SELECT r.space_ref, r.repo_did, 'com.example.note/zzzz', printf('r%08d',n.i), r.cid, r.value_cbor, r.repo_rev
     FROM space_record r CROSS JOIN n WHERE r.space_ref = ? AND r.repo_did = ? AND r.collection = ? AND r.rkey = 'one'`)
     .bind(SPACE, DID, COLLECTION).run();
-  for (const [index, withCursor] of [false, true].entries()) {
-    const after = await read(withCursor, 'invalid');
+  for (const [index, [excludeValues, withCursor]] of cases.entries()) {
+    const after = await read(excludeValues, withCursor, 'invalid');
     expect(after).toBeLessThan(before[index] + 100);
   }
 });

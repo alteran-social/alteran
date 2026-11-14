@@ -18,15 +18,19 @@ export { verifySpaceRecordResponseMac, type SpaceRecordMacOptions } from './reco
 
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 
+type RecordToSerialize = { readonly cid: string; readonly value: Uint8Array; readonly rev?: string };
+export type SerializedSpaceRecordValue = {
+  readonly uri: ReturnType<typeof captureRecordIdentity>['uri']; readonly cid: string; readonly valueJson: string;
+};
+
 /**
- * Serialize bytes from the verified, authorized record reader. This does not
- * establish access, key identity, or compliance with the storage policy.
+ * Validate a record's identity and bytes and produce its Lex JSON value.
+ * This does not establish access, key identity or storage-policy compliance.
  */
-export function createSpaceRecordResponse(
+export function serializeSpaceRecordValue(
   identity: SpaceRecordResponseIdentity,
-  record: { readonly cid: string; readonly value: Uint8Array; readonly rev?: string },
-  mac: SpaceRecordMacOptions,
-): { readonly body: string; readonly headers: Readonly<Record<string, string>> } {
+  record: RecordToSerialize,
+): SerializedSpaceRecordValue {
   const captured = captureRecordIdentity(identity);
   const fields = copyPlainRecord(record, ['cid', 'value']) ?? copyPlainRecord(record, ['cid', 'value', 'rev']);
   if (!fields || (fields.rev !== undefined && !isValidTid(fields.rev))) throw invalidRecord();
@@ -54,11 +58,21 @@ export function createSpaceRecordResponse(
     if (error instanceof SpaceRecordResponseError) throw error;
     throw invalidRecord();
   }
-  const body = `{"uri":${JSON.stringify(captured.uri)},"cid":${JSON.stringify(cid.toString())},"value":${json}}`;
+  return { uri: captured.uri, cid: cid.toString(), valueJson: json };
+}
+
+/** Serialize a response from the verified, authorized record reader. */
+export function createSpaceRecordResponse(
+  identity: SpaceRecordResponseIdentity,
+  record: RecordToSerialize,
+  mac: SpaceRecordMacOptions,
+): { readonly body: string; readonly headers: Readonly<Record<string, string>> } {
+  const serialized = serializeSpaceRecordValue(identity, record);
+  const body = `{"uri":${JSON.stringify(serialized.uri)},"cid":${JSON.stringify(serialized.cid)},"value":${serialized.valueJson}}`;
   if (body.length > MAX_RESPONSE_BYTES || new TextEncoder().encode(body).byteLength > MAX_RESPONSE_BYTES) {
     throw new SpaceRecordResponseError('ResponseTooLarge', 'Space record response is too large');
   }
-  const headers = recordResponseMacHeaders(captured.uri, cid, mac);
+  const headers = recordResponseMacHeaders(serialized.uri, captureRecordCid(serialized.cid), mac);
   return { body, headers: Object.freeze({ 'content-type': 'application/json', 'cache-control': 'private, no-store', ...headers }) };
 }
 

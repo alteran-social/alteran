@@ -72,6 +72,18 @@ Deno.test({
       expect(listBody.records[0].rkey).toBe('one');
       expect(Object.keys(listBody.records[0]).sort()).toEqual(['cid', 'collection', 'rkey']);
       checkPrivateCors(listed);
+      const valueQuery = new URLSearchParams({ space: config.space, repo: config.repo });
+      const valueProof = await new SignJWT({ htm: 'GET', htu: listPath, iat: Math.floor(Date.now() / 1000),
+        jti: crypto.randomUUID(), nonce: config.nonce, ath })
+        .setProtectedHeader({ typ: 'dpop+jwt', alg: 'ES256', jwk: config.publicJwk }).sign(privateKey);
+      const values = await worker.dispatchFetch(`${listPath}?${valueQuery}`, {
+        headers: { authorization: `DPoP ${config.access}`, dpop: valueProof, origin: 'https://client.example' },
+      });
+      expect(values.status).toBe(200);
+      const valueBody = await values.json() as { records: { value: unknown }[] };
+      expect(valueBody.records).toHaveLength(1);
+      expect(valueBody.records[0].value).toEqual({ $type: config.collection, text: 'worker context' });
+      checkPrivateCors(values);
       const bad = await worker.dispatchFetch(`${path}?${query}`, {
         headers: { authorization: `DPoP ${config.access}`, dpop: 'bad', origin: 'https://client.example' },
       });

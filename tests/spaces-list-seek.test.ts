@@ -9,7 +9,7 @@ import { captureRecordIdentity } from '../src/lib/spaces/record-response-input';
 const ENDPOINT = 'https://pds.example/xrpc/com.atproto.space.listRecords';
 
 describe('Space list seek bounds', () => {
-  it('seeks a bounded page for the first page and a collection cursor', async () => {
+  it('seeks bounded metadata and value pages with each filter and cursor combination', async () => {
     const f = await authorizedReadFixture();
     const db = f.env.ALTERAN_DB;
     let sql = '';
@@ -34,8 +34,11 @@ describe('Space list seek bounds', () => {
     const env = { ...f.env, ALTERAN_DB: wrapped };
     const cursor = captureRecordIdentity({ space: SPACE, repo: DID, collection: COLLECTION, rkey: 'r00000010' }).uri;
     const queries: { sql: string; values: unknown[]; before: number }[] = [];
-    for (const extra of [{}, { collection: COLLECTION, cursor }]) {
-      const params = new URLSearchParams({ space: SPACE, repo: DID, excludeValues: 'true', limit: '1', ...extra });
+    for (const [excludeValues, extra] of [
+      ['true', {}], ['true', { collection: COLLECTION }], ['true', { cursor }], ['true', { collection: COLLECTION, cursor }],
+      ['false', {}], ['false', { collection: COLLECTION }], ['false', { cursor }], ['false', { collection: COLLECTION, cursor }],
+    ] as const) {
+      const params = new URLSearchParams({ space: SPACE, repo: DID, excludeValues, limit: '1', ...extra });
       const request = new Request(`${ENDPOINT}?${params}`, { headers: {
         authorization: `DPoP ${f.tokens.accessJwt}`,
         dpop: await signResourceDpop(env, f.key, 'GET', ENDPOINT, f.tokens.accessJwt),

@@ -4,16 +4,20 @@ import type { Env } from '../env';
 import { DPOP_PROOF_FUTURE_SKEW_SEC, DPOP_PROOF_MAX_AGE_SEC } from '../lib/oauth/dpop-window';
 import type { VerifiedSpacePrincipal } from '../lib/oauth/space-principal';
 import { parseSpaceListRequest } from '../lib/spaces/list-records-request';
+import { inspectRecordCborBounds, MAX_RECORD_CBOR_ITEMS } from '../lib/spaces/record-cbor-bounds';
 import { captureRecordIdentity } from '../lib/spaces/record-response-input';
 import { parseCanonicalRepoCid } from '../lib/spaces/repo-cid';
 import { ASSERT_CLOCK, REFRESH_CLOCK } from './oauth-replay';
 import { parseSpaceRef } from './space-ref';
 import { SpaceStorageError } from './space-types';
+import { decodeSpaceRecord, type SpaceRecordRow, type StoredSpaceRecord } from './space-record-projection';
 import { authorizationSql, authorizationValues, authorizeSpaceRead, completion, consumeSpaceRead,
   windowIsLive, windowIsLiveAt } from './space-read-auth';
 
 type CompleteRead = (request: Request, database: D1Database) => Promise<boolean>;
-export type ListedSpaceRecord = { readonly collection: string; readonly rkey: string; readonly cid: string };
+export type ListedSpaceRecord = {
+  readonly collection: string; readonly rkey: string; readonly cid: string; readonly record?: StoredSpaceRecord;
+};
 export type AuthorizedSpaceListResult =
   | { readonly tag: 'found'; readonly records: readonly ListedSpaceRecord[]; readonly cursor?: string; readonly complete: CompleteRead }
   | { readonly tag: 'tooLarge'; readonly complete: CompleteRead }
@@ -22,11 +26,12 @@ export type AuthorizedSpaceListResult =
 
 type ListRow = {
   collection: unknown; rkey: unknown; cid: unknown; repo_rev: unknown; head_rev: unknown;
-  consistent: unknown; epoch_id: unknown; sentinel: unknown; session_expires_at: unknown; too_large: unknown;
+  consistent: unknown; epoch_id: unknown; sentinel: unknown; session_expires_at: unknown; too_large: unknown; value_cbor?: unknown;
 };
 const MAX_PAGE_COMPARE_BYTES = 4 * 1024 * 1024;
+const MAX_PAGE_VALUE_BYTES = MAX_RECORD_SIZE;
 
-/** Return only bounded record metadata under the exact verified Space grant. */
+/** Read bounded record pages under the exact verified Space grant. */
 export async function listAuthorizedSpaceRecords(
   env: Env, principal: VerifiedSpacePrincipal, request: Request,
 ): Promise<AuthorizedSpaceListResult> {
@@ -44,6 +49,11 @@ export async function listAuthorizedSpaceRecords(
   const nonce = crypto.randomUUID().replaceAll('-', '');
   const authorization = authorizationSql('nonce');
   const authValues = authorizationValues(principal, nonce);
+  const maxPageBytes = target.excludeValues ? MAX_PAGE_COMPARE_BYTES : MAX_PAGE_VALUE_BYTES;
+  const valueProjection = target.excludeValues ? '' : `, CASE WHEN budget.total <= ${MAX_PAGE_VALUE_BYTES}
+    AND typeof(record.value_cbor) = 'blob' AND length(record.value_cbor) BETWEEN 1 AND ${MAX_RECORD_SIZE}
+    THEN record.value_cbor END AS value_cbor`;
+  const valueSentinel = target.excludeValues ? '' : ', NULL';
   const activeEpoch = `SELECT CASE WHEN typeof(e.id) = 'text' AND length(CAST(e.id AS BLOB)) BETWEEN 1 AND 128
       THEN e.id END FROM space s JOIN space_repo h ON h.space_ref = s.space_ref AND h.repo_did = ?
       JOIN space_owned_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
@@ -104,7 +114,7 @@ export async function listAuthorizedSpaceRecords(
             AND typeof(v.from_generation) = 'integer' AND v.from_generation BETWEEN 1 AND h.generation
             THEN 1 ELSE 0 END ELSE 0 END AS consistent,
         CASE WHEN typeof(e.id) = 'text' AND length(CAST(e.id AS BLOB)) BETWEEN 1 AND 128 THEN e.id END AS epoch_id,
-        0 AS sentinel, NULL AS session_expires_at, 0 AS too_large
+        0 AS sentinel, NULL AS session_expires_at, 0 AS too_large${valueProjection}
       FROM candidates candidate CROSS JOIN budget CROSS JOIN space_record record NOT INDEXED
         JOIN space s ON s.space_ref = record.space_ref AND s.deleted_at IS NULL
         JOIN space_repo h ON h.space_ref = record.space_ref AND h.repo_did = record.repo_did
@@ -120,11 +130,11 @@ export async function listAuthorizedSpaceRecords(
         AND e.owner_incarnation = ? AND EXISTS (SELECT 1 FROM authorized)
     ) SELECT * FROM page
     UNION ALL SELECT NULL, NULL, NULL, NULL, NULL, 0, (${activeEpoch}), 1, session_expires_at,
-      (SELECT CASE WHEN total > ? THEN 1 ELSE 0 END FROM budget) FROM authorized`)
+      (SELECT CASE WHEN total > ? THEN 1 ELSE 0 END FROM budget)${valueSentinel} FROM authorized`)
       .bind(...authValues, MAX_RECORD_SIZE, MAX_PAGE_COMPARE_BYTES + 1, ref.ref, target.repo, ref.authorityDid,
         ref.spaceType, ref.skey, principal.grant.accountIncarnation, ...filters, target.limit,
-        MAX_RECORD_SIZE, MAX_PAGE_COMPARE_BYTES, ref.ref, target.repo,
-        ref.authorityDid, ref.spaceType, ref.skey, principal.grant.accountIncarnation, ...epochValues, MAX_PAGE_COMPARE_BYTES);
+        MAX_RECORD_SIZE, maxPageBytes, ref.ref, target.repo,
+        ref.authorityDid, ref.spaceType, ref.skey, principal.grant.accountIncarnation, ...epochValues, maxPageBytes);
     return db.batch([
       db.prepare(`UPDATE oauth_replay_clock SET seconds = MAX(seconds, unixepoch(), ?), nonce = ?
         WHERE id = 1 AND typeof(seconds) = 'integer' AND seconds BETWEEN 0 AND 9007199254740991`).bind(now, nonce),
@@ -193,6 +203,32 @@ export async function listAuthorizedSpaceRecords(
       return { collection: row.collection, rkey: row.rkey, cid: row.cid };
     });
   } catch { return failure('invalid'); }
+  if (!target.excludeValues) {
+    try {
+      let totalBytes = 0;
+      let totalItems = 0;
+      for (const row of records) {
+        const bytes = row.value_cbor;
+        if (!Array.isArray(bytes) || bytes.length < 1 || bytes.length > MAX_RECORD_SIZE) return failure('invalid');
+        totalBytes += bytes.length;
+        if (totalBytes > MAX_PAGE_VALUE_BYTES) return failure('tooLarge');
+        for (let index = 0; index < bytes.length; index++) {
+          const byte = bytes[index];
+          if (!Object.hasOwn(bytes, index) || typeof byte !== 'number' || !Number.isInteger(byte) || byte < 0 || byte > 255) {
+            return failure('invalid');
+          }
+        }
+        const inspected = inspectRecordCborBounds(Uint8Array.from(bytes), MAX_RECORD_CBOR_ITEMS - totalItems);
+        if (inspected.tag !== 'valid') return failure(inspected.tag === 'unsupported' ? 'tooLarge' : 'invalid');
+        totalItems += inspected.items;
+        if (totalItems > MAX_RECORD_CBOR_ITEMS) return failure('tooLarge');
+      }
+      entries = records.map((row, index) => ({
+        ...entries[index],
+        record: decodeSpaceRecord(row as SpaceRecordRow, entries[index].collection),
+      }));
+    } catch { return failure('invalid'); }
+  }
   const after = Math.floor(Date.now() / 1000);
   if (request.signal.aborted || !windowIsLiveAt(principal, after) || expiry <= after) return { tag: 'unauthorized' };
   const complete = completion(handle, epoch);

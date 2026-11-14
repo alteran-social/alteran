@@ -25,16 +25,19 @@ records or advertised as encrypted.
   are not exposed; other Space grants remain unavailable. An independently
   granted `transition:generic` scope continues to authorize its existing
   public-repository operations.
-- `com.atproto.space.listRecords` supports the same owner and grant checks for
-  metadata-only pages when `excludeValues=true`. Pages contain at most 50
-  records and are ordered by full record URI, descending. Cursors must belong
-  to the requested Space and repository, and every page is reauthorized; pages
-  are not a single snapshot. The reader compares at most 4 MiB of stored values
-  within D1 and asks clients to reduce the limit when the page exceeds that
-  bound. It checks current-version consistency but does not rehash values to
-  verify their CIDs. Listing record values, pages of up to the reference
-  maximum of 1,000, cross-prefix cursors and credential access remain unsupported.
-  A Space without an active local epoch is denied rather than listed as empty.
+- `com.atproto.space.listRecords` supports the same owner and grant checks.
+  It includes record values by default; `excludeValues=true` returns metadata
+  only. Pages contain at most 50 records and are ordered by full record URI,
+  descending. Cursors must belong to the requested Space and repository, and
+  every page is reauthorized; pages are not a single snapshot. A value-bearing
+  page is limited to 1 MiB of CBOR and 131,072 CBOR items in total. Metadata
+  pages compare at most 4 MiB of stored values in D1. An over-budget page is
+  rejected in full: a smaller limit can help for multi-record pages, but a
+  single record can exceed the supported complexity. Value reads validate
+  record bytes and CIDs; metadata-only reads check current-version consistency
+  without rehashing. Pages larger than 50 (the reference maximum is 1,000),
+  cross-prefix cursors and credential access remain unsupported. A Space
+  without an active local epoch is denied rather than listed as empty.
 - `com.atproto.sync.getBlob` authorizes public downloads using public record
   usage and sends public, immutable cache headers. The public blob usage path
   must never treat a space-only reference as public authorization.
@@ -100,8 +103,9 @@ Space request identifiers.
 
 The `spaces-reference-interop.test.ts`, `spaces-reference-lexicon.test.ts`,
 `spaces-reference-policy.test.ts`, `spaces-reference-ops.test.ts`,
-`spaces-reference-export.test.ts`, `spaces-reference-meta-archive.test.ts` and
-`spaces-reference-meta-members.test.ts` and `spaces-list-reference.test.ts`
+`spaces-reference-export.test.ts`, `spaces-reference-meta-archive.test.ts`,
+`spaces-reference-meta-members.test.ts`, `spaces-list-reference.test.ts` and
+`spaces-list-values-reference.test.ts`
 tests can exercise a disposable local reference PDS. Set
 `ALTERAN_REFERENCE_INTEROP_CONFIG` to a JSON file containing
 `pds`, `plc`, `did`, and `accessJwt` for a test account. Both service URLs must
@@ -118,6 +122,8 @@ The member-mapping test checks a paginated reference member list against a
 separately exported metadata archive.
 The list test compares metadata, CIDs, cursor paths and filtered pagination
 against the reference PDS for matching test records.
+The value-list test also compares default, explicit value and metadata modes,
+including Lex JSON links, bytes and escaped text.
 An interrupted request may leave test data behind. Keep the configuration file
 private because it contains an access token. The Lexicon test injects DNS and
 maps test HTTPS origins to the local services; it does not establish live DNS or
@@ -209,6 +215,12 @@ and previously verified state for untouched records. The record JSON helper
 cannot losslessly serialize integers outside JavaScript's safe range. Before
 exposure, measure worst-case concurrent decoding, D1 response expansion and
 serialization against the target Worker's CPU and memory limits.
+
+Value-bearing list pages are fully buffered before the authorization completion
+check. D1 returns CBOR blobs as arrays of numbers, which expand in memory. The
+per-page limits do not bound memory across concurrent or slow responses in the
+same Worker isolate. Establish an effective in-flight limit or validate that
+workload on the target deployment before enabling value reads.
 
 The internal metadata archive codec is limited to 16 MiB and normalizes the
 reference PDS's supported policy and member fields; it is not a lossless backup
