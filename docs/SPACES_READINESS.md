@@ -92,6 +92,10 @@ uploads. Public and Space associations must be checked separately; access to one
 Space must not reveal a blob referenced only by another. Imports also need to
 retain missing-blob associations until their bytes are uploaded.
 
+A D1 failure while selecting a private record or page is returned as a generic
+authorization denial. Monitor D1 health separately without recording private
+Space request identifiers.
+
 ## Development and deployment
 
 The `spaces-reference-interop.test.ts`, `spaces-reference-lexicon.test.ts`,

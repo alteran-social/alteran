@@ -60,37 +60,39 @@ export async function readAuthorizedSpaceRecord(
       WHERE s.space_ref = ? AND s.authority_did = ? AND s.space_type = ? AND s.skey = ?
         AND s.deleted_at IS NULL AND e.owner_incarnation = ?`;
   const epochValues = [repo, ref.ref, ref.authorityDid, ref.spaceType, ref.skey, principal.grant.accountIncarnation];
-  const read = db.prepare(`${authorization}
-    SELECT ${SPACE_RECORD_COLUMNS}, 0 AS sentinel, NULL AS session_expires_at,
-      CASE WHEN typeof(e.id) = 'text' AND length(CAST(e.id AS BLOB)) BETWEEN 1 AND 128
-        THEN e.id END AS epoch_id ${SPACE_RECORD_TABLES}
-    WHERE record.space_ref = ? AND record.repo_did = ? AND record.collection = ? AND record.rkey = ?
-      AND space.authority_did = ? AND space.space_type = ? AND space.skey = ?
-      AND EXISTS (SELECT 1 FROM authorized)
-      AND EXISTS (SELECT 1 FROM space_owned_epoch owned WHERE owned.id = e.id AND owned.space_ref = e.space_ref
-        AND owned.repo_did = e.repo_did AND owned.owner_incarnation = ?)
-    UNION ALL SELECT NULL, NULL, NULL, NULL, 0, 1, session_expires_at, (${activeEpoch}) FROM authorized`)
-    .bind(...authValues, MAX_RECORD_SIZE, MAX_RECORD_SIZE,
-      ref.ref, repo, collection, rkey, ref.authorityDid, ref.spaceType, ref.skey,
-      principal.grant.accountIncarnation, ...epochValues);
-  const result = await db.batch([
-    db.prepare(`UPDATE oauth_replay_clock SET seconds = MAX(seconds, unixepoch(), ?), nonce = ?
-      WHERE id = 1 AND typeof(seconds) = 'integer' AND seconds BETWEEN 0 AND 9007199254740991`).bind(now, nonce),
-    db.prepare(ASSERT_CLOCK).bind(nonce),
-    read,
-    db.prepare(REFRESH_CLOCK).bind(nonce),
-    db.prepare(ASSERT_CLOCK).bind(nonce),
-    db.prepare(`${authorization}
-      SELECT clock.seconds, (SELECT session_expires_at FROM authorized) AS session_expires_at,
-        EXISTS (SELECT 1 FROM space s JOIN space_repo h ON h.space_ref = s.space_ref AND h.repo_did = ?
-          JOIN space_owned_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
-            AND e.repo_did = h.repo_did AND e.state = 'active'
-          WHERE s.space_ref = ? AND s.authority_did = ? AND s.space_type = ? AND s.skey = ?
-            AND s.deleted_at IS NULL AND e.owner_incarnation = ?) AS space_active,
-        (${activeEpoch}) AS epoch_id FROM clock`)
-      .bind(...authValues, repo, ref.ref, ref.authorityDid, ref.spaceType, ref.skey, principal.grant.accountIncarnation,
-        ...epochValues),
-  ]);
+  const result = await (async () => {
+    const read = db.prepare(`${authorization}
+      SELECT ${SPACE_RECORD_COLUMNS}, 0 AS sentinel, NULL AS session_expires_at,
+        CASE WHEN typeof(e.id) = 'text' AND length(CAST(e.id AS BLOB)) BETWEEN 1 AND 128
+          THEN e.id END AS epoch_id ${SPACE_RECORD_TABLES}
+      WHERE record.space_ref = ? AND record.repo_did = ? AND record.collection = ? AND record.rkey = ?
+        AND space.authority_did = ? AND space.space_type = ? AND space.skey = ?
+        AND EXISTS (SELECT 1 FROM authorized)
+        AND EXISTS (SELECT 1 FROM space_owned_epoch owned WHERE owned.id = e.id AND owned.space_ref = e.space_ref
+          AND owned.repo_did = e.repo_did AND owned.owner_incarnation = ?)
+      UNION ALL SELECT NULL, NULL, NULL, NULL, 0, 1, session_expires_at, (${activeEpoch}) FROM authorized`)
+      .bind(...authValues, MAX_RECORD_SIZE, MAX_RECORD_SIZE,
+        ref.ref, repo, collection, rkey, ref.authorityDid, ref.spaceType, ref.skey,
+        principal.grant.accountIncarnation, ...epochValues);
+    return db.batch([
+      db.prepare(`UPDATE oauth_replay_clock SET seconds = MAX(seconds, unixepoch(), ?), nonce = ?
+        WHERE id = 1 AND typeof(seconds) = 'integer' AND seconds BETWEEN 0 AND 9007199254740991`).bind(now, nonce),
+      db.prepare(ASSERT_CLOCK).bind(nonce),
+      read,
+      db.prepare(REFRESH_CLOCK).bind(nonce),
+      db.prepare(ASSERT_CLOCK).bind(nonce),
+      db.prepare(`${authorization}
+        SELECT clock.seconds, (SELECT session_expires_at FROM authorized) AS session_expires_at,
+          EXISTS (SELECT 1 FROM space s JOIN space_repo h ON h.space_ref = s.space_ref AND h.repo_did = ?
+            JOIN space_owned_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
+              AND e.repo_did = h.repo_did AND e.state = 'active'
+            WHERE s.space_ref = ? AND s.authority_did = ? AND s.space_type = ? AND s.skey = ?
+              AND s.deleted_at IS NULL AND e.owner_incarnation = ?) AS space_active,
+          (${activeEpoch}) AS epoch_id FROM clock`)
+        .bind(...authValues, repo, ref.ref, ref.authorityDid, ref.spaceType, ref.skey, principal.grant.accountIncarnation,
+          ...epochValues),
+    ]);
+  })().catch(() => null);
   if (!Array.isArray(result) || result.length !== 6 || result.some((entry: { success?: unknown } | null) => entry?.success !== true) ||
     !clockAssertionPassed(result[1]?.results) || !clockAssertionPassed(result[4]?.results)) {
     return { tag: 'unauthorized' };

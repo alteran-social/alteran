@@ -64,76 +64,78 @@ export async function listAuthorizedSpaceRecords(
     filter.push(`${path} < ? COLLATE BINARY`);
     filters.push(target.cursorPath);
   }
-  const page = db.prepare(`${authorization}, candidates AS MATERIALIZED (
-    SELECT record.rowid AS record_id,
-      CASE WHEN typeof(record.value_cbor) = 'blob' AND length(record.value_cbor) BETWEEN 1 AND ?
-        THEN length(record.value_cbor) ELSE ? END AS value_size
-    FROM space_record record INDEXED BY space_record_path_idx
-      JOIN space s ON s.space_ref = record.space_ref AND s.deleted_at IS NULL
-      JOIN space_repo h ON h.space_ref = record.space_ref AND h.repo_did = record.repo_did
-      JOIN space_owned_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
-        AND e.repo_did = h.repo_did AND e.state = 'active'
-    WHERE record.space_ref = ? AND record.repo_did = ? AND s.authority_did = ? AND s.space_type = ? AND s.skey = ?
-      AND e.owner_incarnation = ? AND EXISTS (SELECT 1 FROM authorized)
-      ${filter.length ? `AND ${filter.join(' AND ')}` : ''}
-    ORDER BY ${path} DESC LIMIT ?
-  ), budget AS MATERIALIZED (SELECT COALESCE(SUM(value_size), 0) AS total FROM candidates),
-  page AS MATERIALIZED (
-    SELECT CASE WHEN typeof(record.collection) = 'text' AND length(CAST(record.collection AS BLOB)) BETWEEN 1 AND 317
-        THEN record.collection END AS collection,
-      CASE WHEN typeof(record.rkey) = 'text' AND length(CAST(record.rkey AS BLOB)) BETWEEN 1 AND 512 THEN record.rkey END AS rkey,
-      CASE WHEN typeof(record.cid) = 'text' AND length(CAST(record.cid AS BLOB)) BETWEEN 1 AND 128 THEN record.cid END AS cid,
-      CASE WHEN typeof(record.repo_rev) = 'text' AND length(CAST(record.repo_rev AS BLOB)) = 13 THEN record.repo_rev END AS repo_rev,
-      CASE WHEN typeof(h.rev) = 'text' AND length(CAST(h.rev AS BLOB)) = 13 THEN h.rev END AS head_rev,
-      CASE WHEN budget.total > ${MAX_PAGE_COMPARE_BYTES} THEN 0
-        WHEN typeof(record.value_cbor) = 'blob' AND length(record.value_cbor) BETWEEN 1 AND ?
-          AND typeof(v.value_cbor) = 'blob' AND length(v.value_cbor) = length(record.value_cbor)
-          AND typeof(record.cid) = 'text' AND length(CAST(record.cid AS BLOB)) BETWEEN 1 AND 128
-          AND typeof(v.cid) = 'text' AND length(CAST(v.cid AS BLOB)) BETWEEN 1 AND 128
-          AND typeof(record.repo_rev) = 'text' AND length(CAST(record.repo_rev AS BLOB)) = 13
-          AND typeof(v.repo_rev) = 'text' AND length(CAST(v.repo_rev AS BLOB)) = 13
-          AND typeof(record.collection) = 'text' AND length(CAST(record.collection AS BLOB)) BETWEEN 1 AND 317
-          AND typeof(v.collection) = 'text' AND length(CAST(v.collection AS BLOB)) BETWEEN 1 AND 317
-          AND typeof(record.rkey) = 'text' AND length(CAST(record.rkey AS BLOB)) BETWEEN 1 AND 512
-          AND typeof(v.rkey) = 'text' AND length(CAST(v.rkey AS BLOB)) BETWEEN 1 AND 512
-        THEN CASE WHEN v.value_cbor IS record.value_cbor
-          AND v.cid IS record.cid AND v.repo_rev IS record.repo_rev AND v.value_size = length(record.value_cbor)
-          AND v.collection IS record.collection AND v.rkey IS record.rkey
-          AND typeof(h.generation) = 'integer' AND h.generation BETWEEN 1 AND 9007199254740991
-          AND typeof(v.from_generation) = 'integer' AND v.from_generation BETWEEN 1 AND h.generation
-          THEN 1 ELSE 0 END ELSE 0 END AS consistent,
-      CASE WHEN typeof(e.id) = 'text' AND length(CAST(e.id AS BLOB)) BETWEEN 1 AND 128 THEN e.id END AS epoch_id,
-      0 AS sentinel, NULL AS session_expires_at, 0 AS too_large
-    FROM candidates candidate CROSS JOIN budget CROSS JOIN space_record record NOT INDEXED
-      JOIN space s ON s.space_ref = record.space_ref AND s.deleted_at IS NULL
-      JOIN space_repo h ON h.space_ref = record.space_ref AND h.repo_did = record.repo_did
-      JOIN space_owned_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
-        AND e.repo_did = h.repo_did AND e.state = 'active'
-      LEFT JOIN space_record_version v ON v.epoch_id = e.id AND v.space_ref = record.space_ref
-        AND v.repo_did = record.repo_did AND v.path = CASE
-          WHEN typeof(record.collection) = 'text' AND length(CAST(record.collection AS BLOB)) BETWEEN 1 AND 317
+  const result = await (async () => {
+    const page = db.prepare(`${authorization}, candidates AS MATERIALIZED (
+      SELECT record.rowid AS record_id,
+        CASE WHEN typeof(record.value_cbor) = 'blob' AND length(record.value_cbor) BETWEEN 1 AND ?
+          THEN length(record.value_cbor) ELSE ? END AS value_size
+      FROM space_record record INDEXED BY space_record_path_idx
+        JOIN space s ON s.space_ref = record.space_ref AND s.deleted_at IS NULL
+        JOIN space_repo h ON h.space_ref = record.space_ref AND h.repo_did = record.repo_did
+        JOIN space_owned_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
+          AND e.repo_did = h.repo_did AND e.state = 'active'
+      WHERE record.space_ref = ? AND record.repo_did = ? AND s.authority_did = ? AND s.space_type = ? AND s.skey = ?
+        AND e.owner_incarnation = ? AND EXISTS (SELECT 1 FROM authorized)
+        ${filter.length ? `AND ${filter.join(' AND ')}` : ''}
+      ORDER BY ${path} DESC LIMIT ?
+    ), budget AS MATERIALIZED (SELECT COALESCE(SUM(value_size), 0) AS total FROM candidates),
+    page AS MATERIALIZED (
+      SELECT CASE WHEN typeof(record.collection) = 'text' AND length(CAST(record.collection AS BLOB)) BETWEEN 1 AND 317
+          THEN record.collection END AS collection,
+        CASE WHEN typeof(record.rkey) = 'text' AND length(CAST(record.rkey AS BLOB)) BETWEEN 1 AND 512 THEN record.rkey END AS rkey,
+        CASE WHEN typeof(record.cid) = 'text' AND length(CAST(record.cid AS BLOB)) BETWEEN 1 AND 128 THEN record.cid END AS cid,
+        CASE WHEN typeof(record.repo_rev) = 'text' AND length(CAST(record.repo_rev AS BLOB)) = 13 THEN record.repo_rev END AS repo_rev,
+        CASE WHEN typeof(h.rev) = 'text' AND length(CAST(h.rev AS BLOB)) = 13 THEN h.rev END AS head_rev,
+        CASE WHEN budget.total > ${MAX_PAGE_COMPARE_BYTES} THEN 0
+          WHEN typeof(record.value_cbor) = 'blob' AND length(record.value_cbor) BETWEEN 1 AND ?
+            AND typeof(v.value_cbor) = 'blob' AND length(v.value_cbor) = length(record.value_cbor)
+            AND typeof(record.cid) = 'text' AND length(CAST(record.cid AS BLOB)) BETWEEN 1 AND 128
+            AND typeof(v.cid) = 'text' AND length(CAST(v.cid AS BLOB)) BETWEEN 1 AND 128
+            AND typeof(record.repo_rev) = 'text' AND length(CAST(record.repo_rev AS BLOB)) = 13
+            AND typeof(v.repo_rev) = 'text' AND length(CAST(v.repo_rev AS BLOB)) = 13
+            AND typeof(record.collection) = 'text' AND length(CAST(record.collection AS BLOB)) BETWEEN 1 AND 317
+            AND typeof(v.collection) = 'text' AND length(CAST(v.collection AS BLOB)) BETWEEN 1 AND 317
             AND typeof(record.rkey) = 'text' AND length(CAST(record.rkey AS BLOB)) BETWEEN 1 AND 512
-          THEN record.collection || '/' || record.rkey END AND v.until_generation IS NULL
-    WHERE budget.total <= ? AND record.rowid = candidate.record_id
-      AND record.space_ref = ? AND record.repo_did = ? AND s.authority_did = ? AND s.space_type = ? AND s.skey = ?
-      AND e.owner_incarnation = ? AND EXISTS (SELECT 1 FROM authorized)
-  ) SELECT * FROM page
-  UNION ALL SELECT NULL, NULL, NULL, NULL, NULL, 0, (${activeEpoch}), 1, session_expires_at,
-    (SELECT CASE WHEN total > ? THEN 1 ELSE 0 END FROM budget) FROM authorized`)
-    .bind(...authValues, MAX_RECORD_SIZE, MAX_PAGE_COMPARE_BYTES + 1, ref.ref, target.repo, ref.authorityDid,
-      ref.spaceType, ref.skey, principal.grant.accountIncarnation, ...filters, target.limit,
-      MAX_RECORD_SIZE, MAX_PAGE_COMPARE_BYTES, ref.ref, target.repo,
-      ref.authorityDid, ref.spaceType, ref.skey, principal.grant.accountIncarnation, ...epochValues, MAX_PAGE_COMPARE_BYTES);
-  const result = await db.batch([
-    db.prepare(`UPDATE oauth_replay_clock SET seconds = MAX(seconds, unixepoch(), ?), nonce = ?
-      WHERE id = 1 AND typeof(seconds) = 'integer' AND seconds BETWEEN 0 AND 9007199254740991`).bind(now, nonce),
-    db.prepare(ASSERT_CLOCK).bind(nonce),
-    page,
-    db.prepare(REFRESH_CLOCK).bind(nonce),
-    db.prepare(ASSERT_CLOCK).bind(nonce),
-    db.prepare(`${authorization} SELECT clock.seconds, (SELECT session_expires_at FROM authorized) AS session_expires_at,
-      (${activeEpoch}) AS epoch_id FROM clock`).bind(...authValues, ...epochValues),
-  ]);
+            AND typeof(v.rkey) = 'text' AND length(CAST(v.rkey AS BLOB)) BETWEEN 1 AND 512
+          THEN CASE WHEN v.value_cbor IS record.value_cbor
+            AND v.cid IS record.cid AND v.repo_rev IS record.repo_rev AND v.value_size = length(record.value_cbor)
+            AND v.collection IS record.collection AND v.rkey IS record.rkey
+            AND typeof(h.generation) = 'integer' AND h.generation BETWEEN 1 AND 9007199254740991
+            AND typeof(v.from_generation) = 'integer' AND v.from_generation BETWEEN 1 AND h.generation
+            THEN 1 ELSE 0 END ELSE 0 END AS consistent,
+        CASE WHEN typeof(e.id) = 'text' AND length(CAST(e.id AS BLOB)) BETWEEN 1 AND 128 THEN e.id END AS epoch_id,
+        0 AS sentinel, NULL AS session_expires_at, 0 AS too_large
+      FROM candidates candidate CROSS JOIN budget CROSS JOIN space_record record NOT INDEXED
+        JOIN space s ON s.space_ref = record.space_ref AND s.deleted_at IS NULL
+        JOIN space_repo h ON h.space_ref = record.space_ref AND h.repo_did = record.repo_did
+        JOIN space_owned_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
+          AND e.repo_did = h.repo_did AND e.state = 'active'
+        LEFT JOIN space_record_version v ON v.epoch_id = e.id AND v.space_ref = record.space_ref
+          AND v.repo_did = record.repo_did AND v.path = CASE
+            WHEN typeof(record.collection) = 'text' AND length(CAST(record.collection AS BLOB)) BETWEEN 1 AND 317
+              AND typeof(record.rkey) = 'text' AND length(CAST(record.rkey AS BLOB)) BETWEEN 1 AND 512
+            THEN record.collection || '/' || record.rkey END AND v.until_generation IS NULL
+      WHERE budget.total <= ? AND record.rowid = candidate.record_id
+        AND record.space_ref = ? AND record.repo_did = ? AND s.authority_did = ? AND s.space_type = ? AND s.skey = ?
+        AND e.owner_incarnation = ? AND EXISTS (SELECT 1 FROM authorized)
+    ) SELECT * FROM page
+    UNION ALL SELECT NULL, NULL, NULL, NULL, NULL, 0, (${activeEpoch}), 1, session_expires_at,
+      (SELECT CASE WHEN total > ? THEN 1 ELSE 0 END FROM budget) FROM authorized`)
+      .bind(...authValues, MAX_RECORD_SIZE, MAX_PAGE_COMPARE_BYTES + 1, ref.ref, target.repo, ref.authorityDid,
+        ref.spaceType, ref.skey, principal.grant.accountIncarnation, ...filters, target.limit,
+        MAX_RECORD_SIZE, MAX_PAGE_COMPARE_BYTES, ref.ref, target.repo,
+        ref.authorityDid, ref.spaceType, ref.skey, principal.grant.accountIncarnation, ...epochValues, MAX_PAGE_COMPARE_BYTES);
+    return db.batch([
+      db.prepare(`UPDATE oauth_replay_clock SET seconds = MAX(seconds, unixepoch(), ?), nonce = ?
+        WHERE id = 1 AND typeof(seconds) = 'integer' AND seconds BETWEEN 0 AND 9007199254740991`).bind(now, nonce),
+      db.prepare(ASSERT_CLOCK).bind(nonce),
+      page,
+      db.prepare(REFRESH_CLOCK).bind(nonce),
+      db.prepare(ASSERT_CLOCK).bind(nonce),
+      db.prepare(`${authorization} SELECT clock.seconds, (SELECT session_expires_at FROM authorized) AS session_expires_at,
+        (${activeEpoch}) AS epoch_id FROM clock`).bind(...authValues, ...epochValues),
+    ]);
+  })().catch(() => null);
   if (!Array.isArray(result) || result.length !== 6 || result.some((entry: { success?: unknown } | null) => entry?.success !== true) ||
     !clockAssertionPassed(result[1]?.results) || !clockAssertionPassed(result[4]?.results) || !windowIsLive(principal)) {
     return { tag: 'unauthorized' };
