@@ -78,14 +78,16 @@ retain missing-blob associations until their bytes are uploaded.
 
 ## Development and deployment
 
-The `spaces-reference-interop.test.ts`, `spaces-reference-lexicon.test.ts` and
-`spaces-reference-policy.test.ts`
+The `spaces-reference-interop.test.ts`, `spaces-reference-lexicon.test.ts`,
+`spaces-reference-policy.test.ts` and `spaces-reference-ops.test.ts`
 tests can exercise a disposable local reference PDS. Set
 `ALTERAN_REFERENCE_INTEROP_CONFIG` to a JSON file containing
 `pds`, `plc`, `did`, and `accessJwt` for a test account. Both service URLs must
 be loopback HTTP origins. The archive and policy tests create uniquely named
 spaces and then attempt to delete them. The archive test also exchanges a STAR
-archive and verifies response MACs.
+archive and verifies response MACs. The operation-log comparison runs the same
+writes against local D1 and the reference PDS, then compares paginated
+operations and the final digest.
 An interrupted request may leave test data behind. Keep the configuration file
 private because it contains an access token. The Lexicon test injects DNS and
 maps test HTTPS origins to the local services; it does not establish live DNS or
@@ -109,6 +111,12 @@ freshness and consent rechecks are required before it can grant scopes.
 Drain older Workers when deploying the OAuth approval changes: older versions
 can issue a code without the new atomic PAR consumption. Approvals rendered by
 an older version must be restarted after the cutover.
+
+The internal incremental-repo reader requires a known starting revision and
+returns a full-sync result when history is uncertain. Its operation log is
+currently immutable and unpruned; imports, pruning, and epoch replacement need
+an atomic history fence before this reader can be exposed. Callers must still
+authorize the request, authenticate the commit, and compare the final digest.
 
 Apply database migrations `0014` and `0015` in order before deploying code that
 uses them. Public blob cleanup queries consult the new private-usage table, so
