@@ -119,6 +119,23 @@ invalidate outstanding PARs, approvals and codes, advance the replay clock,
 and fence pre-restore proof and client-assertion windows before reopening.
 An incarnation stored in the same restored database is not a restore fence.
 
+The recovery procedure must also invalidate restored sessions and refresh
+families or reconcile them against current, independently authenticated state:
+new identifiers do not prevent a previously revoked session from being restored
+as active. Include all writers and credentials, such as old Worker versions,
+service bindings, queues, and scheduled jobs, in the isolation plan. Cloudflare's
+[D1 Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/)
+restores the same database in place and cancels queries in flight, but an old
+invocation could submit another query afterward. A write abandoned by a
+caller-side timeout can also
+[complete later](https://developers.cloudflare.com/d1/observability/debug-d1/#d1-binding-timeout-behavior).
+Cancellation or a waiting period alone is therefore not a demonstrated fence.
+Exporting and importing into a separately bound database may provide a different
+isolation boundary, but Time Travel cannot itself fork a historical database.
+The export source must be safely isolated and verified, and import, credentials,
+bindings, and cutover must be validated for the target deployment. No complete
+restore automation is provided here.
+
 A database clock that jumps forward can cause valid requests to be rejected
 until real time catches up. Moving the stored clock backwards would re-enable
 previously expired proofs and is prohibited.

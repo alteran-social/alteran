@@ -355,6 +355,16 @@ Space identities and tombstones are retained until a separately fenced recovery
 and retention procedure is available. Verify the migration and restore process
 on the target D1 deployment before enabling Space reads.
 
+Restoring D1 and its account incarnations can also restore obsolete Space policy
+or membership decisions. Restored private data must remain unavailable until its
+current authorization is reconciled against independently authenticated state
+or re-established. Reconcile the database with private R2 objects and KEM
+secrets as well: restoring D1 does not restore those resources atomically.
+Follow the isolation and credential
+fences in [the OAuth recovery notes](OAUTH_REPLAY_CLOCK.md); a new identifier
+or signing key alone cannot reconstruct policy changes made after the backup.
+These are recovery requirements, not an implemented restore procedure.
+
 The login and consent lockout uses the Cloudflare-provided `CF-Connecting-IP`
 header; absent or invalid values share an `unknown` bucket. This assumes the
 header comes from a trusted edge. A successful app-password login can clear
