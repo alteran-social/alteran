@@ -106,6 +106,10 @@ CPU, memory and concurrent DNS work can be bounded and measured. It is not
 connected to OAuth; authenticated PAR and session binding, declaration
 freshness and consent rechecks are required before it can grant scopes.
 
+Drain older Workers when deploying the OAuth approval changes: older versions
+can issue a code without the new atomic PAR consumption. Approvals rendered by
+an older version must be restarted after the cutover.
+
 Apply database migrations `0014` and `0015` in order before deploying code that
 uses them. Public blob cleanup queries consult the new private-usage table, so
 deploying the Worker first would break those cleanup operations.

@@ -1,5 +1,6 @@
 import type { APIContext } from 'astro';
-import { deletePar, loadPar, saveCode, saveConsent, consumeConsent } from '../../lib/oauth/store';
+import { deleteParSnapshot, loadParSnapshot, saveConsent, consumeConsent } from '../../lib/oauth/store';
+import { issueAuthorizationCode } from '../../lib/oauth/issue-code';
 import {
   authenticateSingleUserPassword,
   checkConsentPasswordLockout,
@@ -33,17 +34,18 @@ export async function GET({ locals, request }: APIContext) {
   if (!id) {
     return new Response('Invalid OAuth request', { status: 400 });
   }
-  const par = await loadPar(env, id);
-  if (!par) {
+  const snapshot = await loadParSnapshot(env, id);
+  if (!snapshot) {
     return new Response('OAuth request expired', { status: 400 });
   }
+  const par = snapshot.record;
   const issuer = publicPdsOrigin(env, request);
   if ((par.prompt || '').split(' ').filter(Boolean).includes('none')) {
-    await deletePar(env, id);
+    await deleteParSnapshot(env, id, snapshot.value);
     return redirectWithOAuthError(par.redirect_uri, 'login_required', par.state, issuer);
   }
   if (!(await loginHintMatchesSingleUser(env, par.login_hint))) {
-    await deletePar(env, id);
+    await deleteParSnapshot(env, id, snapshot.value);
     return redirectWithOAuthError(par.redirect_uri, 'login_required', par.state, issuer, 'login_hint does not match this PDS account');
   }
 
@@ -69,7 +71,7 @@ export async function GET({ locals, request }: APIContext) {
     : '';
 
   const csrf = crypto.randomUUID().replace(/-/g, '');
-  await saveConsent(env, id, csrf, Math.floor(Date.now() / 1000) + 300);
+  await saveConsent(env, id, csrf, Math.floor(Date.now() / 1000) + 300, snapshot.value);
 
   const body = `<!doctype html>
 <html lang="en">
@@ -127,7 +129,8 @@ export async function POST({ locals, request }: APIContext) {
   const request_uri = form.get('request_uri');
   const id = parseRequestUri(request_uri);
   const csrf = form.get('csrf') || '';
-  if (!id || !(await consumeConsent(env, id, csrf))) {
+  const consent = id ? await consumeConsent(env, id, csrf) : null;
+  if (!id || !consent) {
     return new Response(JSON.stringify({ error: 'invalid_request', error_description: 'invalid csrf' }), {
       status: 403,
       headers: { 'Content-Type': 'application/json' },
@@ -135,32 +138,33 @@ export async function POST({ locals, request }: APIContext) {
   }
 
   const issuer = publicPdsOrigin(env, request);
-  const par = await loadPar(env, id);
-  if (!par) {
+  const snapshot = await loadParSnapshot(env, id);
+  if (!snapshot || snapshot.value !== consent.parValue) {
     return new Response(JSON.stringify({ error: 'invalid_request_uri' }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' },
     });
   }
+  const par = snapshot.record;
 
   if ((form.get('client_id') || '') !== par.client_id) {
-    await deletePar(env, id);
+    await deleteParSnapshot(env, id, snapshot.value);
     return redirectWithOAuthError(par.redirect_uri, 'invalid_request', par.state, issuer, 'client_id mismatch');
   }
 
   if ((par.prompt || '').split(' ').filter(Boolean).includes('none')) {
-    await deletePar(env, id);
+    await deleteParSnapshot(env, id, snapshot.value);
     return redirectWithOAuthError(par.redirect_uri, 'login_required', par.state, issuer);
   }
 
   if (!(await loginHintMatchesSingleUser(env, par.login_hint))) {
-    await deletePar(env, id);
+    await deleteParSnapshot(env, id, snapshot.value);
     return redirectWithOAuthError(par.redirect_uri, 'login_required', par.state, issuer, 'login_hint does not match this PDS account');
   }
 
   const decision = form.get('decision') || '';
   if (decision !== 'allow') {
-    await deletePar(env, id);
+    await deleteParSnapshot(env, id, snapshot.value);
     return redirectWithOAuthError(par.redirect_uri, 'access_denied', par.state, issuer);
   }
 
@@ -168,32 +172,23 @@ export async function POST({ locals, request }: APIContext) {
   if (lockout) return lockout;
   const reservedAttempt = await reserveConsentPasswordAttempt(env, request);
   if (reservedAttempt) {
-    await deletePar(env, id);
+    await deleteParSnapshot(env, id, snapshot.value);
     return reservedAttempt;
   }
 
   const account = await authenticateSingleUserPassword(env, form.get('password') || '');
   if (!account) {
-    await deletePar(env, id);
+    await deleteParSnapshot(env, id, snapshot.value);
     return redirectWithOAuthError(par.redirect_uri, 'access_denied', par.state, issuer, 'invalid credentials');
   }
   await clearConsentPasswordFailures(env, request);
 
-  const code = crypto.randomUUID().replace(/-/g, '');
-  const now = Math.floor(Date.now() / 1000);
-  await saveCode(env, code, {
-    code,
-    client_id: par.client_id,
-    redirect_uri: par.redirect_uri,
-    code_challenge: par.code_challenge,
-    scope: par.scope,
-    dpopJkt: par.dpopJkt,
-    clientAuthMethod: par.clientAuthMethod,
-    clientAuthKeyId: par.clientAuthKeyId ?? null,
-    did: account.did,
-    createdAt: now,
-    expiresAt: now + 300,
-  });
-  await deletePar(env, id);
+  const code = await issueAuthorizationCode(env, id, snapshot, consent, account.did);
+  if (!code) {
+    return new Response(JSON.stringify({ error: 'invalid_request_uri' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
   return redirectWithCode(par.redirect_uri, code, par.state, issuer);
 }
