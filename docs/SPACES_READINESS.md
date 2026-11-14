@@ -117,6 +117,28 @@ freshness. It has the same public-egress prerequisites as the Lexicon resolver.
 Before using it for signed responses, establish authoritative identity freshness,
 rotation handling and binding to the authenticated account incarnation.
 
+On Linux, `scripts/space-kem-key.ts` can create a new local P-256 KEM key in
+an owner-only directory outside any Git worktree. The destination must not
+already exist. The script writes and verifies an owner-only private file, syncs
+the file and directory, and prints only its public `did:key`. It takes an
+advisory lock; ensure no other process can write the file while it runs. The
+printed key reflects the last verification and can become stale if the file
+changes afterward. For example:
+
+```sh
+deno run --allow-read --allow-write --allow-sys=uid scripts/space-kem-key.ts create /secure/alteran/space-kem.key
+```
+
+If output is lost, run the same command with `public` in place of `create` to
+verify the existing file and recover its public key. A failed or interrupted
+creation may leave a partial file: inspect it rather than overwriting it. Use a
+trusted local filesystem, directory and ancestor paths; filesystem sync is not
+a guarantee against storage failure. Back up the private key independently and
+install it securely as `PDS_SPACE_KEM_KEY` before considering any DID update.
+The tool does not install a secret, verify an existing PLC key, publish a DID
+update or perform account migration. Do not replace an already published KEM
+key without a verified migration and rotation procedure.
+
 Space XRPC query strings contain private identifiers. The supplied Wrangler
 configuration disables automatic invocation logs and traces while retaining
 application logs; verify those settings in every deployed environment. Audit
