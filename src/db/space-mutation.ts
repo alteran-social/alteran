@@ -282,9 +282,9 @@ export async function commitSpaceWrites(
   }
   statements.push(env.ALTERAN_DB.prepare(
       `INSERT INTO space (space_ref, authority_did, space_type, skey, created_at)
-       SELECT ?, ?, ?, ?, ? WHERE ${EFFECT_GUARD}
+       SELECT ?, ?, ?, ?, ? WHERE ${EFFECT_GUARD} AND NOT EXISTS (SELECT 1 FROM space WHERE space_ref = ?)
        ON CONFLICT(space_ref) DO NOTHING`,
-    ).bind(ref.ref, ref.authorityDid, ref.spaceType, ref.skey, Date.now(), ...effectGuard));
+    ).bind(ref.ref, ref.authorityDid, ref.spaceType, ref.skey, Date.now(), ...effectGuard, ref.ref));
   for (const [pathString, write] of finalWrites) {
     const path = [ref.ref, repoDid, write.collection, write.rkey] as const;
     statements.push(env.ALTERAN_DB.prepare(
