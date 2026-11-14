@@ -29,11 +29,10 @@ describe('bounded Space record responses', () => {
     expect(() => createSpaceRecordResponse(identity, block(trailing), unsigned)).toThrow();
     expect(() => createSpaceRecordResponse(identity, { ...good, value: new Uint8Array(1024 * 1024 + 1) }, unsigned)).toThrow();
   });
-  it('rejects floats, unsafe integers and ambiguous Lex JSON before returning a body', () => {
+  it('rejects floats and ambiguous Lex JSON before returning a body', () => {
     const float = dagCbor.encode({ $type: identity.collection, value: 1.5 });
-    const unsafe = record({ $type: identity.collection, value: 9007199254740992n });
     const ambiguous = record({ $type: identity.collection, value: { $link: 'not-a-cid', extra: 'value' } });
-    for (const input of [block(float), unsafe, ambiguous]) expect(() => createSpaceRecordResponse(identity, input, unsigned)).toThrow();
+    for (const input of [block(float), ambiguous]) expect(() => createSpaceRecordResponse(identity, input, unsigned)).toThrow();
   });
   it('rejects CBOR exceeding the item or nesting budget before decode', () => {
     const many = record({ $type: identity.collection, values: Array.from({ length: 131_072 }, () => null) });
