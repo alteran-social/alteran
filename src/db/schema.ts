@@ -469,3 +469,25 @@ export type AppPasswordRow = typeof app_password.$inferSelect;
 
 export type RecordRow = typeof record.$inferSelect;
 export type NewRecordRow = typeof record.$inferInsert;
+
+export const private_blob_staging = sqliteTable('private_blob_staging', {
+  id: text('id').primaryKey().notNull(),
+  token: text('token').notNull(),
+  repoDid: text('repo_did').notNull(),
+  accountIncarnation: text('account_incarnation').notNull(),
+  objectKey: text('object_key').notNull(),
+  state: text('state').notNull(),
+  reservedBytes: integer('reserved_bytes').notNull(),
+  claimNonce: text('claim_nonce'),
+  cid: text('cid'),
+  digest: text('digest'),
+  size: integer('size'),
+  mimeType: text('mime_type'),
+  r2Version: text('r2_version'),
+  etag: text('etag'),
+}, (table) => ({
+  objectKey: uniqueIndex('private_blob_staging_object_key').on(table.objectKey),
+  owner: index('private_blob_staging_owner').on(table.repoDid),
+  state: check('private_blob_staging_state', sql`${table.state} IN ('reserved', 'putting', 'ready', 'uncertain')`),
+  charge: check('private_blob_staging_charge', sql`typeof(${table.reservedBytes}) = 'integer' AND ${table.reservedBytes} = 5242880`),
+}));

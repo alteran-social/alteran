@@ -1,0 +1,2691 @@
+{
+  "id": "0498192a-773b-4ba9-bd64-76261e5494ea",
+  "prevId": "a4a3478a-2677-4595-9ba7-ee12bc785465",
+  "version": "6",
+  "dialect": "sqlite",
+  "tables": {
+    "account": {
+      "name": "account",
+      "columns": {
+        "did": {
+          "name": "did",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "handle": {
+          "name": "handle",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "password_scrypt": {
+          "name": "password_scrypt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "space_incarnation": {
+          "name": "space_incarnation",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "account_handle_unique": {
+          "name": "account_handle_unique",
+          "columns": [
+            "handle"
+          ],
+          "isUnique": true
+        },
+        "account_space_incarnation_unique": {
+          "name": "account_space_incarnation_unique",
+          "columns": [
+            "space_incarnation"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "account_space_incarnation_init": {
+      "name": "account_space_incarnation_init",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "did": {
+          "name": "did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "incarnation": {
+          "name": "incarnation",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "account_space_incarnation_init_singleton": {
+          "name": "account_space_incarnation_init_singleton",
+          "value": "\"account_space_incarnation_init\".\"id\" = 1"
+        }
+      }
+    },
+    "account_state": {
+      "name": "account_state",
+      "columns": {
+        "did": {
+          "name": "did",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "active": {
+          "name": "active",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "suspended_until": {
+          "name": "suspended_until",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "app_password": {
+      "name": "app_password",
+      "columns": {
+        "did": {
+          "name": "did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "password_scrypt": {
+          "name": "password_scrypt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "privileged": {
+          "name": "privileged",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "app_password_did_idx": {
+          "name": "app_password_did_idx",
+          "columns": [
+            "did"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "app_password_did_name_pk": {
+          "columns": [
+            "did",
+            "name"
+          ],
+          "name": "app_password_did_name_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "blob_quota": {
+      "name": "blob_quota",
+      "columns": {
+        "did": {
+          "name": "did",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "total_bytes": {
+          "name": "total_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "blob_count": {
+          "name": "blob_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "blob": {
+      "name": "blob",
+      "columns": {
+        "cid": {
+          "name": "cid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "did": {
+          "name": "did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "mime": {
+          "name": "mime",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "size": {
+          "name": "size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "uploaded_at": {
+          "name": "uploaded_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        }
+      },
+      "indexes": {
+        "blob_key_idx": {
+          "name": "blob_key_idx",
+          "columns": [
+            "key"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "blob_did_cid_pk": {
+          "columns": [
+            "did",
+            "cid"
+          ],
+          "name": "blob_did_cid_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "blob_usage": {
+      "name": "blob_usage",
+      "columns": {
+        "did": {
+          "name": "did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "record_uri": {
+          "name": "record_uri",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cid": {
+          "name": "cid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "repo_rev": {
+          "name": "repo_rev",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "blob_usage_record_uri_idx": {
+          "name": "blob_usage_record_uri_idx",
+          "columns": [
+            "did",
+            "record_uri"
+          ],
+          "isUnique": false
+        },
+        "blob_usage_did_key_idx": {
+          "name": "blob_usage_did_key_idx",
+          "columns": [
+            "did",
+            "key"
+          ],
+          "isUnique": false
+        },
+        "blob_usage_did_repo_rev_cid_idx": {
+          "name": "blob_usage_did_repo_rev_cid_idx",
+          "columns": [
+            "did",
+            "repo_rev",
+            "cid"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "blob_usage_did_record_uri_key_pk": {
+          "columns": [
+            "did",
+            "record_uri",
+            "key"
+          ],
+          "name": "blob_usage_did_record_uri_key_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "blockstore": {
+      "name": "blockstore",
+      "columns": {
+        "cid": {
+          "name": "cid",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "bytes": {
+          "name": "bytes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "commit_log": {
+      "name": "commit_log",
+      "columns": {
+        "seq": {
+          "name": "seq",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cid": {
+          "name": "cid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rev": {
+          "name": "rev",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "data": {
+          "name": "data",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sig": {
+          "name": "sig",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ts": {
+          "name": "ts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "commit_log_seq_idx": {
+          "name": "commit_log_seq_idx",
+          "columns": [
+            "seq"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "login_attempts": {
+      "name": "login_attempts",
+      "columns": {
+        "ip": {
+          "name": "ip",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "locked_until": {
+          "name": "locked_until",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_attempt": {
+          "name": "last_attempt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reservation_nonce": {
+          "name": "reservation_nonce",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "oauth_replay_clock": {
+      "name": "oauth_replay_clock",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "seconds": {
+          "name": "seconds",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "nonce": {
+          "name": "nonce",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "oauth_replay_clock_singleton": {
+          "name": "oauth_replay_clock_singleton",
+          "value": "\"oauth_replay_clock\".\"id\" = 1"
+        },
+        "oauth_replay_clock_seconds": {
+          "name": "oauth_replay_clock_seconds",
+          "value": "typeof(\"oauth_replay_clock\".\"seconds\") = 'integer' AND \"oauth_replay_clock\".\"seconds\" BETWEEN 0 AND 9007199254740991"
+        },
+        "oauth_replay_clock_nonce": {
+          "name": "oauth_replay_clock_nonce",
+          "value": "length(\"oauth_replay_clock\".\"nonce\") = 32"
+        }
+      }
+    },
+    "oauth_session": {
+      "name": "oauth_session",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "did": {
+          "name": "did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "client_id": {
+          "name": "client_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "client_auth_method": {
+          "name": "client_auth_method",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "client_auth_key_id": {
+          "name": "client_auth_key_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "client_auth_key_binding": {
+          "name": "client_auth_key_binding",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "dpop_jkt": {
+          "name": "dpop_jkt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "current_refresh_token_id": {
+          "name": "current_refresh_token_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "access_jti": {
+          "name": "access_jti",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "oauth_session_client_idx": {
+          "name": "oauth_session_client_idx",
+          "columns": [
+            "client_id"
+          ],
+          "isUnique": false
+        },
+        "oauth_session_current_refresh_idx": {
+          "name": "oauth_session_current_refresh_idx",
+          "columns": [
+            "current_refresh_token_id"
+          ],
+          "isUnique": false
+        },
+        "oauth_session_access_jti_idx": {
+          "name": "oauth_session_access_jti_idx",
+          "columns": [
+            "access_jti"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "oauth_space_grant": {
+      "name": "oauth_space_grant",
+      "columns": {
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "snapshot": {
+          "name": "snapshot",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "digest": {
+          "name": "digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "oauth_space_grant_session_id_oauth_session_id_fk": {
+          "name": "oauth_space_grant_session_id_oauth_session_id_fk",
+          "tableFrom": "oauth_space_grant",
+          "columnsFrom": [
+            "session_id"
+          ],
+          "tableTo": "oauth_session",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "oauth_space_grant_session_size": {
+          "name": "oauth_space_grant_session_size",
+          "value": "length(CAST(\"oauth_space_grant\".\"session_id\" AS BLOB)) BETWEEN 1 AND 128"
+        },
+        "oauth_space_grant_snapshot": {
+          "name": "oauth_space_grant_snapshot",
+          "value": "length(CAST(\"oauth_space_grant\".\"snapshot\" AS BLOB)) BETWEEN 1 AND 65536 AND json_valid(\"oauth_space_grant\".\"snapshot\")"
+        },
+        "oauth_space_grant_digest": {
+          "name": "oauth_space_grant_digest",
+          "value": "length(\"oauth_space_grant\".\"digest\") = 64 AND \"oauth_space_grant\".\"digest\" NOT GLOB '*[^0-9a-f]*'"
+        },
+        "oauth_space_grant_created": {
+          "name": "oauth_space_grant_created",
+          "value": "typeof(\"oauth_space_grant\".\"created_at\") = 'integer' AND \"oauth_space_grant\".\"created_at\" BETWEEN 0 AND 9007199254740991"
+        }
+      }
+    },
+    "private_blob_staging": {
+      "name": "private_blob_staging",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "token": {
+          "name": "token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "repo_did": {
+          "name": "repo_did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "account_incarnation": {
+          "name": "account_incarnation",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "object_key": {
+          "name": "object_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reserved_bytes": {
+          "name": "reserved_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "claim_nonce": {
+          "name": "claim_nonce",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "cid": {
+          "name": "cid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "digest": {
+          "name": "digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "size": {
+          "name": "size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mime_type": {
+          "name": "mime_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "r2_version": {
+          "name": "r2_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "etag": {
+          "name": "etag",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "private_blob_staging_object_key": {
+          "name": "private_blob_staging_object_key",
+          "columns": [
+            "object_key"
+          ],
+          "isUnique": true
+        },
+        "private_blob_staging_owner": {
+          "name": "private_blob_staging_owner",
+          "columns": [
+            "repo_did"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "private_blob_staging_state": {
+          "name": "private_blob_staging_state",
+          "value": "\"private_blob_staging\".\"state\" IN ('reserved', 'putting', 'ready', 'uncertain')"
+        },
+        "private_blob_staging_charge": {
+          "name": "private_blob_staging_charge",
+          "value": "typeof(\"private_blob_staging\".\"reserved_bytes\") = 'integer' AND \"private_blob_staging\".\"reserved_bytes\" = 5242880"
+        }
+      }
+    },
+    "record": {
+      "name": "record",
+      "columns": {
+        "uri": {
+          "name": "uri",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "did": {
+          "name": "did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cid": {
+          "name": "cid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "json": {
+          "name": "json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": 0
+        }
+      },
+      "indexes": {
+        "record_did_idx": {
+          "name": "record_did_idx",
+          "columns": [
+            "did"
+          ],
+          "isUnique": false
+        },
+        "record_cid_idx": {
+          "name": "record_cid_idx",
+          "columns": [
+            "cid"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "refresh_token": {
+      "name": "refresh_token",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "did": {
+          "name": "did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "app_password_name": {
+          "name": "app_password_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "next_id": {
+          "name": "next_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "token_kind": {
+          "name": "token_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'legacy'"
+        },
+        "oauth_session_id": {
+          "name": "oauth_session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "client_id": {
+          "name": "client_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "client_auth_method": {
+          "name": "client_auth_method",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "client_auth_key_id": {
+          "name": "client_auth_key_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "dpop_jkt": {
+          "name": "dpop_jkt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "oauth_scope": {
+          "name": "oauth_scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "access_jti": {
+          "name": "access_jti",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "refresh_token_did_idx": {
+          "name": "refresh_token_did_idx",
+          "columns": [
+            "did"
+          ],
+          "isUnique": false
+        },
+        "refresh_token_oauth_session_idx": {
+          "name": "refresh_token_oauth_session_idx",
+          "columns": [
+            "oauth_session_id"
+          ],
+          "isUnique": false
+        },
+        "refresh_token_access_jti_idx": {
+          "name": "refresh_token_access_jti_idx",
+          "columns": [
+            "access_jti"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "repo_root": {
+      "name": "repo_root",
+      "columns": {
+        "did": {
+          "name": "did",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "commit_cid": {
+          "name": "commit_cid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rev": {
+          "name": "rev",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "secret": {
+      "name": "secret",
+      "columns": {
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "value": {
+          "name": "value",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "oauth_replay_expiry": {
+          "name": "oauth_replay_expiry",
+          "columns": [
+            "(CASE WHEN json_valid(\"value\") THEN CASE\n    WHEN \"key\" GLOB 'oauth:dpop:jti:*'\n      AND json_type(\"value\", '$.exp') IN ('integer', 'real')\n      AND json_type(\"value\", '$.iat') IN ('integer', 'real')\n      THEN MAX(CAST(json_extract(\"value\", '$.exp') AS REAL), CAST(json_extract(\"value\", '$.iat') AS REAL) + 300)\n    WHEN \"key\" GLOB 'oauth:client-assertion:jti:*'\n      AND json_type(\"value\", '$.exp') IN ('integer', 'real')\n      THEN CAST(json_extract(\"value\", '$.exp') AS REAL)\n    ELSE NULL END ELSE NULL END)",
+            "key"
+          ],
+          "where": "\"secret\".\"key\" GLOB 'oauth:dpop:jti:*' OR \"secret\".\"key\" GLOB 'oauth:client-assertion:jti:*'",
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "space": {
+      "name": "space",
+      "columns": {
+        "space_ref": {
+          "name": "space_ref",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "authority_did": {
+          "name": "authority_did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "space_type": {
+          "name": "space_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "skey": {
+          "name": "skey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "space_authority_type_idx": {
+          "name": "space_authority_type_idx",
+          "columns": [
+            "authority_did",
+            "space_type",
+            "space_ref"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "space_blob_usage": {
+      "name": "space_blob_usage",
+      "columns": {
+        "space_ref": {
+          "name": "space_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "repo_did": {
+          "name": "repo_did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "collection": {
+          "name": "collection",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rkey": {
+          "name": "rkey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cid": {
+          "name": "cid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "space_blob_usage_retention_idx": {
+          "name": "space_blob_usage_retention_idx",
+          "columns": [
+            "repo_did",
+            "key"
+          ],
+          "isUnique": false
+        },
+        "space_blob_usage_cid_retention_idx": {
+          "name": "space_blob_usage_cid_retention_idx",
+          "columns": [
+            "repo_did",
+            "cid"
+          ],
+          "isUnique": false
+        },
+        "space_blob_usage_space_cid_idx": {
+          "name": "space_blob_usage_space_cid_idx",
+          "columns": [
+            "space_ref",
+            "repo_did",
+            "cid"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "space_blob_usage_space_ref_repo_did_collection_rkey_cid_pk": {
+          "columns": [
+            "space_ref",
+            "repo_did",
+            "collection",
+            "rkey",
+            "cid"
+          ],
+          "name": "space_blob_usage_space_ref_repo_did_collection_rkey_cid_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "space_commit_assertion": {
+      "name": "space_commit_assertion",
+      "columns": {
+        "mutation_id": {
+          "name": "mutation_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "valid": {
+          "name": "valid",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "space_commit_assertion_valid": {
+          "name": "space_commit_assertion_valid",
+          "value": "\"space_commit_assertion\".\"valid\" = 1"
+        }
+      }
+    },
+    "space_epoch": {
+      "name": "space_epoch",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "space_ref": {
+          "name": "space_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "repo_did": {
+          "name": "repo_did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "verified_job_id": {
+          "name": "verified_job_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "activation_nonce": {
+          "name": "activation_nonce",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "space_epoch_active_owner": {
+          "name": "space_epoch_active_owner",
+          "columns": [
+            "space_ref",
+            "repo_did"
+          ],
+          "where": "\"space_epoch\".\"state\" = 'active'",
+          "isUnique": true
+        },
+        "space_epoch_space_owner": {
+          "name": "space_epoch_space_owner",
+          "columns": [
+            "space_ref",
+            "repo_did",
+            "id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "space_epoch_state": {
+          "name": "space_epoch_state",
+          "value": "\"space_epoch\".\"state\" in ('active', 'quarantined', 'retired', 'deleting')"
+        }
+      }
+    },
+    "space_gc_attempt": {
+      "name": "space_gc_attempt",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "space_ref": {
+          "name": "space_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "repo_did": {
+          "name": "repo_did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "epoch_id": {
+          "name": "epoch_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "space_mutation_attempt": {
+      "name": "space_mutation_attempt",
+      "columns": {
+        "mutation_id": {
+          "name": "mutation_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "space_ref": {
+          "name": "space_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "repo_did": {
+          "name": "repo_did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "epoch_id": {
+          "name": "epoch_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "generation": {
+          "name": "generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rev": {
+          "name": "rev",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "set_hash": {
+          "name": "set_hash",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "space_mutation_attempt_owner": {
+          "name": "space_mutation_attempt_owner",
+          "columns": [
+            "space_ref",
+            "repo_did"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "space_mutation_attempt_generation": {
+          "name": "space_mutation_attempt_generation",
+          "value": "\"space_mutation_attempt\".\"generation\" >= 1"
+        },
+        "space_mutation_attempt_hash_size": {
+          "name": "space_mutation_attempt_hash_size",
+          "value": "length(\"space_mutation_attempt\".\"set_hash\") = 2048"
+        }
+      }
+    },
+    "space_op": {
+      "name": "space_op",
+      "columns": {
+        "space_ref": {
+          "name": "space_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "repo_did": {
+          "name": "repo_did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rev": {
+          "name": "rev",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ordinal": {
+          "name": "ordinal",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "collection": {
+          "name": "collection",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rkey": {
+          "name": "rkey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cid": {
+          "name": "cid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "prev": {
+          "name": "prev",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "space_op_space_ref_repo_did_rev_ordinal_pk": {
+          "columns": [
+            "space_ref",
+            "repo_did",
+            "rev",
+            "ordinal"
+          ],
+          "name": "space_op_space_ref_repo_did_rev_ordinal_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "space_personal_creation_attempt": {
+      "name": "space_personal_creation_attempt",
+      "columns": {
+        "nonce": {
+          "name": "nonce",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "space_ref": {
+          "name": "space_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "authority_did": {
+          "name": "authority_did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "space_type": {
+          "name": "space_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "skey": {
+          "name": "skey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "space_personal_creation_attempt_space": {
+          "name": "space_personal_creation_attempt_space",
+          "columns": [
+            "space_ref"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "space_personal_deletion_attempt": {
+      "name": "space_personal_deletion_attempt",
+      "columns": {
+        "nonce": {
+          "name": "nonce",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "job_nonce": {
+          "name": "job_nonce",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "space_ref": {
+          "name": "space_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "authority_did": {
+          "name": "authority_did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "epoch_id": {
+          "name": "epoch_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "phase": {
+          "name": "phase",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sequence": {
+          "name": "sequence",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "maximum_count": {
+          "name": "maximum_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expected_count": {
+          "name": "expected_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expected_bytes": {
+          "name": "expected_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "space_personal_deletion_attempt_job": {
+          "name": "space_personal_deletion_attempt_job",
+          "columns": [
+            "job_nonce"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "space_personal_deletion_attempt_status": {
+          "name": "space_personal_deletion_attempt_status",
+          "value": "\"space_personal_deletion_attempt\".\"status\" IN ('building', 'sealed')"
+        },
+        "space_personal_deletion_attempt_counts": {
+          "name": "space_personal_deletion_attempt_counts",
+          "value": "\"space_personal_deletion_attempt\".\"sequence\" >= 0 AND \"space_personal_deletion_attempt\".\"maximum_count\" BETWEEN 1 AND 32 AND \"space_personal_deletion_attempt\".\"expected_count\" BETWEEN 0 AND \"space_personal_deletion_attempt\".\"maximum_count\" AND \"space_personal_deletion_attempt\".\"expected_bytes\" BETWEEN 0 AND 4194304"
+        }
+      }
+    },
+    "space_personal_deletion_candidate": {
+      "name": "space_personal_deletion_candidate",
+      "columns": {
+        "attempt_nonce": {
+          "name": "attempt_nonce",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "row_id": {
+          "name": "row_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "byte_size": {
+          "name": "byte_size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "space_personal_deletion_candidate_attempt_nonce_row_id_pk": {
+          "columns": [
+            "attempt_nonce",
+            "row_id"
+          ],
+          "name": "space_personal_deletion_candidate_attempt_nonce_row_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "space_personal_deletion_candidate_bytes": {
+          "name": "space_personal_deletion_candidate_bytes",
+          "value": "\"space_personal_deletion_candidate\".\"byte_size\" BETWEEN 0 AND 1048576"
+        }
+      }
+    },
+    "space_personal_deletion_job": {
+      "name": "space_personal_deletion_job",
+      "columns": {
+        "nonce": {
+          "name": "nonce",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "space_ref": {
+          "name": "space_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "authority_did": {
+          "name": "authority_did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "epoch_id": {
+          "name": "epoch_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "phase": {
+          "name": "phase",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sequence": {
+          "name": "sequence",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "last_step_nonce": {
+          "name": "last_step_nonce",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_step_phase": {
+          "name": "last_step_phase",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_step_count": {
+          "name": "last_step_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "space_personal_deletion_job_space": {
+          "name": "space_personal_deletion_job_space",
+          "columns": [
+            "space_ref"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "space_personal_deletion_job_status": {
+          "name": "space_personal_deletion_job_status",
+          "value": "\"space_personal_deletion_job\".\"status\" IN ('deleting', 'complete')"
+        },
+        "space_personal_deletion_job_phase": {
+          "name": "space_personal_deletion_job_phase",
+          "value": "\"space_personal_deletion_job\".\"phase\" IN ('records', 'versions', 'ops', 'done')"
+        },
+        "space_personal_deletion_job_counts": {
+          "name": "space_personal_deletion_job_counts",
+          "value": "\"space_personal_deletion_job\".\"sequence\" >= 0 AND \"space_personal_deletion_job\".\"last_step_count\" BETWEEN 0 AND 32"
+        }
+      }
+    },
+    "space_personal_policy": {
+      "name": "space_personal_policy",
+      "columns": {
+        "space_ref": {
+          "name": "space_ref",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "authority_did": {
+          "name": "authority_did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "policy_type": {
+          "name": "policy_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "creation_nonce": {
+          "name": "creation_nonce",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "notification_state": {
+          "name": "notification_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "space_personal_policy_creation_nonce": {
+          "name": "space_personal_policy_creation_nonce",
+          "columns": [
+            "creation_nonce"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "space_personal_policy_type": {
+          "name": "space_personal_policy_type",
+          "value": "\"space_personal_policy\".\"policy_type\" = 'com.atproto.personalspace.policy'"
+        },
+        "space_personal_policy_notifications": {
+          "name": "space_personal_policy_notifications",
+          "value": "\"space_personal_policy\".\"notification_state\" = 'none'"
+        }
+      }
+    },
+    "space_quarantine_job": {
+      "name": "space_quarantine_job",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "token": {
+          "name": "token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "renewal_nonce": {
+          "name": "renewal_nonce",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "space_ref": {
+          "name": "space_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "repo_did": {
+          "name": "repo_did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "epoch_id": {
+          "name": "epoch_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "authority_did": {
+          "name": "authority_did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "space_type": {
+          "name": "space_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "skey": {
+          "name": "skey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "generation": {
+          "name": "generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "mutation_id": {
+          "name": "mutation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rev": {
+          "name": "rev",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expected_hash": {
+          "name": "expected_hash",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "accumulated_hash": {
+          "name": "accumulated_hash",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cursor": {
+          "name": "cursor",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sequence": {
+          "name": "sequence",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "record_count": {
+          "name": "record_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "lease_until": {
+          "name": "lease_until",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "activation_nonce": {
+          "name": "activation_nonce",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "failure_reason": {
+          "name": "failure_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "space_quarantine_job_owner_epoch": {
+          "name": "space_quarantine_job_owner_epoch",
+          "columns": [
+            "space_ref",
+            "repo_did",
+            "epoch_id"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "space_quarantine_job_hashes": {
+          "name": "space_quarantine_job_hashes",
+          "value": "length(\"space_quarantine_job\".\"expected_hash\") = 2048 AND length(\"space_quarantine_job\".\"accumulated_hash\") = 2048"
+        },
+        "space_quarantine_job_counts": {
+          "name": "space_quarantine_job_counts",
+          "value": "\"space_quarantine_job\".\"generation\" >= 1 AND \"space_quarantine_job\".\"sequence\" >= 0 AND \"space_quarantine_job\".\"record_count\" >= 0"
+        },
+        "space_quarantine_job_status": {
+          "name": "space_quarantine_job_status",
+          "value": "\"space_quarantine_job\".\"status\" IN ('running', 'complete', 'activating', 'active', 'failed')"
+        }
+      }
+    },
+    "space_record": {
+      "name": "space_record",
+      "columns": {
+        "space_ref": {
+          "name": "space_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "repo_did": {
+          "name": "repo_did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "collection": {
+          "name": "collection",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rkey": {
+          "name": "rkey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cid": {
+          "name": "cid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "value_cbor": {
+          "name": "value_cbor",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "repo_rev": {
+          "name": "repo_rev",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "space_record_cid_idx": {
+          "name": "space_record_cid_idx",
+          "columns": [
+            "space_ref",
+            "repo_did",
+            "cid"
+          ],
+          "isUnique": false
+        },
+        "space_record_path_idx": {
+          "name": "space_record_path_idx",
+          "columns": [
+            "space_ref",
+            "repo_did",
+            "(\"collection\" || '/' || \"rkey\") COLLATE BINARY"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "space_record_space_ref_repo_did_collection_rkey_pk": {
+          "columns": [
+            "space_ref",
+            "repo_did",
+            "collection",
+            "rkey"
+          ],
+          "name": "space_record_space_ref_repo_did_collection_rkey_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "space_record_version": {
+      "name": "space_record_version",
+      "columns": {
+        "epoch_id": {
+          "name": "epoch_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "space_ref": {
+          "name": "space_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "repo_did": {
+          "name": "repo_did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "path": {
+          "name": "path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "collection": {
+          "name": "collection",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rkey": {
+          "name": "rkey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "from_generation": {
+          "name": "from_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "until_generation": {
+          "name": "until_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "cid": {
+          "name": "cid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "value_cbor": {
+          "name": "value_cbor",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "value_size": {
+          "name": "value_size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "repo_rev": {
+          "name": "repo_rev",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "space_record_version_current_path": {
+          "name": "space_record_version_current_path",
+          "columns": [
+            "epoch_id",
+            "path"
+          ],
+          "where": "\"space_record_version\".\"until_generation\" IS NULL",
+          "isUnique": true
+        },
+        "space_record_version_gc_candidates": {
+          "name": "space_record_version_gc_candidates",
+          "columns": [
+            "epoch_id",
+            "space_ref",
+            "repo_did",
+            "until_generation",
+            "path",
+            "from_generation"
+          ],
+          "where": "\"space_record_version\".\"until_generation\" IS NOT NULL",
+          "isUnique": false
+        },
+        "space_record_version_space_owner_epoch": {
+          "name": "space_record_version_space_owner_epoch",
+          "columns": [
+            "space_ref",
+            "repo_did",
+            "epoch_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "space_record_version_epoch_id_path_from_generation_pk": {
+          "columns": [
+            "epoch_id",
+            "path",
+            "from_generation"
+          ],
+          "name": "space_record_version_epoch_id_path_from_generation_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "space_record_version_interval": {
+          "name": "space_record_version_interval",
+          "value": "\"space_record_version\".\"from_generation\" >= 1 AND (\"space_record_version\".\"until_generation\" IS NULL OR \"space_record_version\".\"until_generation\" > \"space_record_version\".\"from_generation\")"
+        },
+        "space_record_version_path": {
+          "name": "space_record_version_path",
+          "value": "\"space_record_version\".\"path\" = \"space_record_version\".\"collection\" || '/' || \"space_record_version\".\"rkey\""
+        },
+        "space_record_version_size": {
+          "name": "space_record_version_size",
+          "value": "\"space_record_version\".\"value_size\" = length(\"space_record_version\".\"value_cbor\") AND \"space_record_version\".\"value_size\" > 0 AND \"space_record_version\".\"value_size\" <= 1048576"
+        }
+      }
+    },
+    "space_repo": {
+      "name": "space_repo",
+      "columns": {
+        "space_ref": {
+          "name": "space_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "repo_did": {
+          "name": "repo_did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rev": {
+          "name": "rev",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "set_hash": {
+          "name": "set_hash",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "generation": {
+          "name": "generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "mutation_id": {
+          "name": "mutation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "active_epoch_id": {
+          "name": "active_epoch_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "space_repo_space_ref_repo_did_pk": {
+          "columns": [
+            "space_ref",
+            "repo_did"
+          ],
+          "name": "space_repo_space_ref_repo_did_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "space_repo_hash_size": {
+          "name": "space_repo_hash_size",
+          "value": "length(\"space_repo\".\"set_hash\") = 2048"
+        }
+      }
+    },
+    "space_snapshot_lease": {
+      "name": "space_snapshot_lease",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "token": {
+          "name": "token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "renewal_nonce": {
+          "name": "renewal_nonce",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "space_ref": {
+          "name": "space_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "repo_did": {
+          "name": "repo_did",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "epoch_id": {
+          "name": "epoch_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "generation": {
+          "name": "generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rev": {
+          "name": "rev",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "set_hash": {
+          "name": "set_hash",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "maximum_expires_at": {
+          "name": "maximum_expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "space_snapshot_lease_epoch_expiry": {
+          "name": "space_snapshot_lease_epoch_expiry",
+          "columns": [
+            "epoch_id",
+            "expires_at",
+            "generation"
+          ],
+          "isUnique": false
+        },
+        "space_snapshot_lease_epoch_generation": {
+          "name": "space_snapshot_lease_epoch_generation",
+          "columns": [
+            "epoch_id",
+            "space_ref",
+            "repo_did",
+            "generation"
+          ],
+          "isUnique": false
+        },
+        "space_snapshot_lease_owner_expiry": {
+          "name": "space_snapshot_lease_owner_expiry",
+          "columns": [
+            "space_ref",
+            "repo_did",
+            "expires_at",
+            "id"
+          ],
+          "isUnique": false
+        },
+        "space_snapshot_lease_owner_maximum_expiry": {
+          "name": "space_snapshot_lease_owner_maximum_expiry",
+          "columns": [
+            "space_ref",
+            "repo_did",
+            "maximum_expires_at",
+            "id"
+          ],
+          "isUnique": false
+        },
+        "space_snapshot_lease_expiry": {
+          "name": "space_snapshot_lease_expiry",
+          "columns": [
+            "expires_at",
+            "id"
+          ],
+          "isUnique": false
+        },
+        "space_snapshot_lease_maximum_expiry": {
+          "name": "space_snapshot_lease_maximum_expiry",
+          "columns": [
+            "maximum_expires_at",
+            "id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "space_snapshot_lease_hash_size": {
+          "name": "space_snapshot_lease_hash_size",
+          "value": "length(\"space_snapshot_lease\".\"set_hash\") = 2048"
+        }
+      }
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  },
+  "internal": {
+    "indexes": {
+      "oauth_replay_expiry": {
+        "columns": {
+          "(CASE WHEN json_valid(\"value\") THEN CASE\n    WHEN \"key\" GLOB 'oauth:dpop:jti:*'\n      AND json_type(\"value\", '$.exp') IN ('integer', 'real')\n      AND json_type(\"value\", '$.iat') IN ('integer', 'real')\n      THEN MAX(CAST(json_extract(\"value\", '$.exp') AS REAL), CAST(json_extract(\"value\", '$.iat') AS REAL) + 300)\n    WHEN \"key\" GLOB 'oauth:client-assertion:jti:*'\n      AND json_type(\"value\", '$.exp') IN ('integer', 'real')\n      THEN CAST(json_extract(\"value\", '$.exp') AS REAL)\n    ELSE NULL END ELSE NULL END)": {
+            "isExpression": true
+          }
+        }
+      },
+      "space_record_path_idx": {
+        "columns": {
+          "(\"collection\" || '/' || \"rkey\") COLLATE BINARY": {
+            "isExpression": true
+          }
+        }
+      }
+    }
+  }
+}

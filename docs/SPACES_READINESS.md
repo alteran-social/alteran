@@ -169,6 +169,24 @@ copies and database backups. Exposing deletion requires those contracts and a
 recovery path for unfinished cleanup. Incremental sync must also handle its
 history boundary; pruning the operation log for live Spaces remains unsupported.
 
+The internal private-blob ledger is not connected to an upload or download
+route. Its caller must authenticate the owner, retain the server-created
+reservation handle across retries, and supply a dedicated R2 bucket with no
+public access; the binding does not reveal the bucket's identity to the
+helper. Apply migrations `0040` and `0041` before running this code and keep
+older Workers drained during the upgrade. Reservations are tied to an account
+incarnation, limited to 64 per DID across incarnations and 256 globally, and
+each permanently reserves 5 MiB, even for failed or empty uploads. They are
+separate from the public blob quota. There is no release or cleanup path: normal
+use eventually exhausts these slots, and a timed-out PUT may still complete
+after a negative read. A staged status is a historical receipt, not a check
+that the object is still present. The ledger assumes the installed D1 trigger
+set and R2 binding are trusted; an unexpected trigger can consume permanent
+capacity within the caps. Validate create-only PUT and checksum/version
+metadata on the target R2 service before relying on this foundation. Public
+promotion, Space associations, snapshot retention, missing-blob import,
+deletion and safe recovery remain unimplemented.
+
 Apply database migrations `0014` and `0015` in order before deploying code that
 uses them. Public blob cleanup queries consult the new private-usage table, so
 deploying the Worker first would break those cleanup operations.

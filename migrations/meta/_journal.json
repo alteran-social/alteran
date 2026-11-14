@@ -281,6 +281,20 @@
       "when": 1794635912114,
       "tag": "0039_login_attempt_reservation_nonce",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1794637499060,
+      "tag": "0040_closed_garia",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1794637503589,
+      "tag": "0041_private_blob_staging_guards",
+      "breakpoints": true
     }
   ]
 }

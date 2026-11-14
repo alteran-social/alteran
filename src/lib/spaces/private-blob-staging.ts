@@ -1,80 +1,29 @@
-import type { D1Database, R2Bucket, R2Object } from "@cloudflare/workers-types";
-import { isSpaceDid } from "./space-did";
-import { sha256 } from "@noble/hashes/sha2.js";
-import { CID } from "multiformats/cid";
-import { create as createDigest } from "multiformats/hashes/digest";
-import { copyPlainRecord } from "./plain-values";
+import type { D1Database, R2Bucket, R2Object } from '@cloudflare/workers-types';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { CID } from 'multiformats/cid';
+import { create as createDigest } from 'multiformats/hashes/digest';
+import {
+  ACTIVE_PRIVATE_BLOB_OWNER, capturePrivateBlobReservation, getPrivateBlobStatus,
+  isPrivateBlobMime, PRIVATE_BLOB_MAX_BYTES, privateBlobKey, randomHex,
+  type PrivateBlobReservation,
+} from './private-blob-reservation';
 
-export const PRIVATE_BLOB_MAX_BYTES = 5 * 1024 * 1024;
-export const PRIVATE_BLOB_MAX_RESERVATIONS = 64;
-
-export type PrivateBlobReservation = {
-  readonly id: string;
-  readonly token: string;
-  readonly repoDid: string;
-};
-
-export type PrivateBlobReservationResult =
-  | { readonly tag: "reserved"; readonly reservation: PrivateBlobReservation }
-  | { readonly tag: "invalid" | "quota-exceeded" | "unavailable" };
+export {
+  getPrivateBlobStatus, preparePrivateBlobReservation, reservePrivateBlob,
+  PRIVATE_BLOB_MAX_BYTES, PRIVATE_BLOB_MAX_GLOBAL_RESERVATIONS, PRIVATE_BLOB_MAX_RESERVATIONS,
+  type PrivateBlobReservation, type PrivateBlobReservationResult, type PrivateBlobStatus,
+} from './private-blob-reservation';
 
 export type PrivateBlobStageResult =
-  | {
-    readonly tag: "staged";
-    readonly cid: string;
-    readonly size: number;
-    readonly mimeType: string;
-  }
-  | { readonly tag: "invalid" | "unavailable" | "uncertain" };
+  | { readonly tag: 'staged'; readonly cid: string; readonly size: number; readonly mimeType: string }
+  | { readonly tag: 'invalid' | 'unavailable' | 'uncertain' };
 
-type ClaimedJob = { object_key: string };
+type PutReceipt = { readonly version: string; readonly etag: string };
 
 /**
- * Internal staging foundation. Callers authenticate and bind repoDid before
- * reserving; these helpers do not authorize a Space or expose an HTTP route.
- * The isolated test schema is not a production quota or migration. Every job
- * permanently reserves one full-size slot, including failed or uncertain PUTs.
- */
-export async function reservePrivateBlob(
-  database: D1Database,
-  repoDid: string,
-): Promise<PrivateBlobReservationResult> {
-  if (!isSpaceDid(repoDid)) return { tag: "invalid" };
-  const id = crypto.randomUUID();
-  const token = crypto.randomUUID();
-  const key = `space-staging/${crypto.randomUUID()}`;
-  try {
-    await database.prepare(
-      `INSERT INTO private_blob_staging (id, token, repo_did, object_key, state, reserved_bytes)
-       SELECT ?, ?, ?, ?, 'reserved', ? WHERE
-         (SELECT COUNT(*) FROM private_blob_staging WHERE repo_did = ?) < ?`,
-    ).bind(
-      id,
-      token,
-      repoDid,
-      key,
-      PRIVATE_BLOB_MAX_BYTES,
-      repoDid,
-      PRIVATE_BLOB_MAX_RESERVATIONS,
-    ).run();
-    const row = await database.prepare(
-      `SELECT id FROM private_blob_staging
-       WHERE id = ? AND token = ? AND repo_did = ? AND object_key = ? AND state = 'reserved'`,
-    ).bind(id, token, repoDid, key).first<{ id: string }>();
-    if (!row) return { tag: "quota-exceeded" };
-    return {
-      tag: "reserved",
-      reservation: Object.freeze({ id, token, repoDid }),
-    };
-  } catch {
-    return { tag: "unavailable" };
-  }
-}
-
-/**
- * Consume a reservation once. The caller must reserve before reading a request
- * body; this bounded helper accepts an already-buffered copy, not a stream.
- * A PUT with an unknown outcome is never retried, deleted, or uncharged here.
+ * The caller authenticates the owner and supplies a trusted dedicated private
+ * bucket. This internal helper has no upload route, cleanup, or quota release.
+ * A PUT with an ambiguous outcome is never retried or treated as absent.
  */
 export async function stagePrivateBlob(
   database: D1Database,
@@ -83,177 +32,132 @@ export async function stagePrivateBlob(
   body: Uint8Array,
   mimeType: string,
 ): Promise<PrivateBlobStageResult> {
-  const reservation = copyPlainRecord(input, ["id", "token", "repoDid"]);
-  if (
-    !reservation || !validUuid(reservation.id) ||
-    !validUuid(reservation.token) ||
-    !isSpaceDid(reservation.repoDid) || !validMime(mimeType)
-  ) return { tag: "invalid" };
-  let bytes: Uint8Array;
-  try {
-    if (
-      !ArrayBuffer.isView(body) || !(body instanceof Uint8Array) ||
-      Object.getPrototypeOf(body) !== Uint8Array.prototype ||
-      Object.hasOwn(body, "byteLength") ||
-      body.byteLength > PRIVATE_BLOB_MAX_BYTES
-    ) return { tag: "invalid" };
-    bytes = new Uint8Array(body);
-  } catch {
-    return { tag: "invalid" };
-  }
+  const handle = capturePrivateBlobReservation(input);
+  if (!handle || !isPrivateBlobMime(mimeType)) return { tag: 'invalid' };
+  const bytes = copyUploadBytes(body);
+  if (!bytes) return { tag: 'invalid' };
   const digest = sha256(bytes);
   const cid = CID.createV1(0x55, createDigest(0x12, digest)).toString();
   const digestHex = hex(digest);
-  const claim = crypto.randomUUID();
-  const { id, token, repoDid } = reservation;
-  let job: ClaimedJob | undefined;
+  const claim = randomHex();
+  const key = privateBlobKey(handle);
+  const identity = [handle.id, handle.token, handle.repoDid, handle.accountIncarnation] as const;
+  const payload = [claim, cid, digestHex, bytes.byteLength, mimeType] as const;
   try {
-    const [, selected] = await database.batch([
-      database.prepare(
-        `UPDATE private_blob_staging SET state = 'putting', claim_nonce = ?, cid = ?,
+    const result = await database.batch([
+      database.prepare(`UPDATE private_blob_staging SET state = 'putting', claim_nonce = ?, cid = ?,
           digest = ?, size = ?, mime_type = ?
-         WHERE id = ? AND token = ? AND repo_did = ? AND state = 'reserved'`,
-      ).bind(
-        claim,
-        cid,
-        digestHex,
-        bytes.byteLength,
-        mimeType,
-        id,
-        token,
-        repoDid,
-      ),
-      database.prepare(
-        `SELECT object_key FROM private_blob_staging
-         WHERE id = ? AND token = ? AND repo_did = ? AND state = 'putting' AND claim_nonce = ?
-           AND cid = ? AND digest = ? AND size = ? AND mime_type = ?`,
-      ).bind(
-        id,
-        token,
-        repoDid,
-        claim,
-        cid,
-        digestHex,
-        bytes.byteLength,
-        mimeType,
-      ),
+        WHERE id = ? AND token = ? AND repo_did = ? AND account_incarnation = ? AND object_key = ?
+          AND state = 'reserved' AND ${ACTIVE_PRIVATE_BLOB_OWNER}`)
+        .bind(...payload, ...identity, key, handle.repoDid, handle.accountIncarnation),
+      database.prepare(`SELECT CASE WHEN EXISTS (SELECT 1 FROM private_blob_staging
+        WHERE id = ? AND token = ? AND repo_did = ? AND account_incarnation = ? AND object_key = ?
+          AND state = 'putting' AND claim_nonce = ? AND cid = ? AND digest = ? AND size = ? AND mime_type = ?
+          AND ${ACTIVE_PRIVATE_BLOB_OWNER}) THEN 1 ELSE json('{') END AS valid`)
+        .bind(...identity, key, ...payload, handle.repoDid, handle.accountIncarnation),
     ]);
-    job = selected.results?.[0] as ClaimedJob | undefined;
+    if (!validBatch(result, 2) || result[1].results?.[0]?.valid !== 1) return { tag: 'unavailable' };
   } catch {
-    return { tag: "unavailable" };
+    return await stageAfterFailure(database, handle, cid, bytes.byteLength, mimeType);
   }
-  if (!job || typeof job.object_key !== "string") return { tag: "invalid" };
 
-  let metadata: { readonly version: string; readonly etag: string };
+  let receipt: PutReceipt;
   try {
-    const object = await bucket.put(job.object_key, bytes, {
-      sha256: new Uint8Array(digest),
-      onlyIf: { etagDoesNotMatch: "*" },
-    });
-    const checked = checkedPut(
-      object,
-      job.object_key,
-      bytes.byteLength,
-      digest,
-    );
+    const object = await bucket.put(key, bytes, { sha256: new Uint8Array(digest), onlyIf: { etagDoesNotMatch: '*' } });
+    const checked = checkedPut(object, key, bytes.byteLength, digest);
     if (!checked) {
-      await markUncertain(database, id, token, repoDid, claim);
-      return { tag: "uncertain" };
+      await markUncertain(database, handle, claim);
+      return { tag: 'uncertain' };
     }
-    metadata = checked;
+    receipt = checked;
   } catch {
-    await markUncertain(database, id, token, repoDid, claim);
-    return { tag: "uncertain" };
+    await markUncertain(database, handle, claim);
+    return { tag: 'uncertain' };
   }
+
   try {
-    const identity = [
-      id,
-      token,
-      repoDid,
-      claim,
-      job.object_key,
-      cid,
-      digestHex,
-      bytes.byteLength,
-      mimeType,
-    ] as const;
-    const [, checked] = await database.batch([
-      database.prepare(
-        `UPDATE private_blob_staging SET state = 'ready', r2_version = ?, etag = ?
-         WHERE id = ? AND token = ? AND repo_did = ? AND state = 'putting' AND claim_nonce = ?
-           AND object_key = ? AND cid = ? AND digest = ? AND size = ? AND mime_type = ?`,
-      ).bind(metadata.version, metadata.etag, ...identity),
-      database.prepare(
-        `SELECT CASE WHEN EXISTS (
-           SELECT 1 FROM private_blob_staging WHERE id = ? AND token = ? AND repo_did = ?
-             AND state = 'ready' AND claim_nonce = ? AND object_key = ? AND cid = ?
-             AND digest = ? AND size = ? AND mime_type = ? AND r2_version = ? AND etag = ?
-         ) THEN 1 ELSE json('{') END AS valid`,
-      ).bind(...identity, metadata.version, metadata.etag),
+    const result = await database.batch([
+      database.prepare(`UPDATE private_blob_staging SET state = 'ready', r2_version = ?, etag = ?
+        WHERE id = ? AND token = ? AND repo_did = ? AND account_incarnation = ? AND object_key = ?
+          AND state = 'putting' AND claim_nonce = ? AND cid = ? AND digest = ? AND size = ? AND mime_type = ?`)
+        .bind(receipt.version, receipt.etag, ...identity, key, ...payload),
+      database.prepare(`SELECT CASE WHEN EXISTS (SELECT 1 FROM private_blob_staging
+        WHERE id = ? AND token = ? AND repo_did = ? AND account_incarnation = ? AND object_key = ?
+          AND state = 'ready' AND claim_nonce = ? AND cid = ? AND digest = ? AND size = ? AND mime_type = ?
+          AND r2_version = ? AND etag = ?) THEN 1 ELSE json('{') END AS valid`)
+        .bind(...identity, key, ...payload, receipt.version, receipt.etag),
+      database.prepare(`SELECT ${ACTIVE_PRIVATE_BLOB_OWNER} AS active`).bind(handle.repoDid, handle.accountIncarnation),
     ]);
-    if (checked.results?.[0]?.valid !== 1) return { tag: "uncertain" };
-    return { tag: "staged", cid, size: bytes.byteLength, mimeType };
+    if (!validBatch(result, 3) || result[1].results?.[0]?.valid !== 1) return { tag: 'uncertain' };
+    const rows = result[2].results;
+    if (!rows || rows.length !== 1 || (rows[0].active !== 0 && rows[0].active !== 1)) return { tag: 'uncertain' };
+    if (rows[0].active !== 1) return { tag: 'invalid' };
+    return { tag: 'staged', cid, size: bytes.byteLength, mimeType };
   } catch {
-    return { tag: "uncertain" };
+    return await stageAfterFailure(database, handle, cid, bytes.byteLength, mimeType);
   }
 }
 
-async function markUncertain(
-  database: D1Database,
-  id: unknown,
-  token: unknown,
-  repoDid: unknown,
-  claim: string,
-): Promise<void> {
+async function stageAfterFailure(
+  database: D1Database, handle: PrivateBlobReservation, cid: string, size: number, mimeType: string,
+): Promise<PrivateBlobStageResult> {
+  const status = await getPrivateBlobStatus(database, handle);
+  if (status.tag === 'staged' && status.cid === cid && status.size === size && status.mimeType === mimeType) return status;
+  if (status.tag === 'putting' || status.tag === 'uncertain') return { tag: 'uncertain' };
+  if (status.tag === 'invalid') return { tag: 'invalid' };
+  return { tag: 'unavailable' };
+}
+
+async function markUncertain(database: D1Database, handle: PrivateBlobReservation, claim: string): Promise<void> {
   try {
-    await database.prepare(
-      `UPDATE private_blob_staging SET state = 'uncertain'
-       WHERE id = ? AND token = ? AND repo_did = ? AND state = 'putting' AND claim_nonce = ?`,
-    ).bind(id, token, repoDid, claim).run();
+    const identity = [handle.id, handle.token, handle.repoDid, handle.accountIncarnation, claim] as const;
+    await database.batch([
+      database.prepare(`UPDATE private_blob_staging SET state = 'uncertain' WHERE id = ? AND token = ?
+        AND repo_did = ? AND account_incarnation = ? AND claim_nonce = ? AND state = 'putting'`).bind(...identity),
+      database.prepare(`SELECT CASE WHEN EXISTS (SELECT 1 FROM private_blob_staging WHERE id = ? AND token = ?
+        AND repo_did = ? AND account_incarnation = ? AND claim_nonce = ? AND state = 'uncertain')
+        THEN 1 ELSE json('{') END AS valid`).bind(...identity),
+    ]);
   } catch {
-    // A remaining putting row retains the full quota charge.
+    // An unchanged putting row retains its full charge.
   }
 }
 
-function checkedPut(
-  object: R2Object | null,
-  key: string,
-  size: number,
-  digest: Uint8Array,
-): { readonly version: string; readonly etag: string } | null {
+function copyUploadBytes(input: unknown): Uint8Array | null {
+  if (!ArrayBuffer.isView(input) || !(input instanceof Uint8Array)) return null;
+  try {
+    const prototype = Object.getPrototypeOf(Uint8Array.prototype);
+    const length = Object.getOwnPropertyDescriptor(prototype, 'byteLength')?.get?.call(input);
+    const offset = Object.getOwnPropertyDescriptor(prototype, 'byteOffset')?.get?.call(input);
+    const buffer = Object.getOwnPropertyDescriptor(prototype, 'buffer')?.get?.call(input);
+    if (!Number.isSafeInteger(length) || length < 0 || length > PRIVATE_BLOB_MAX_BYTES ||
+      !Number.isSafeInteger(offset) || offset < 0 || !(buffer instanceof ArrayBuffer)) return null;
+    return new Uint8Array(buffer, offset, length).slice();
+  } catch {
+    return null;
+  }
+}
+
+function checkedPut(object: R2Object | null, key: string, size: number, digest: Uint8Array): PutReceipt | null {
   if (!object) return null;
-  const actualKey = object.key;
-  const actualSize = object.size;
-  const version = object.version;
-  const etag = object.etag;
+  const actualKey = object.key, actualSize = object.size, version = object.version, etag = object.etag;
   const checksum = object.checksums?.sha256;
-  if (
-    actualKey !== key || actualSize !== size ||
-    typeof version !== "string" || !version ||
-    typeof etag !== "string" || !etag ||
-    !(checksum instanceof ArrayBuffer)
-  ) return null;
+  if (actualKey !== key || actualSize !== size || !validMetadata(version) || !validMetadata(etag) ||
+    !(checksum instanceof ArrayBuffer)) return null;
   const actual = new Uint8Array(checksum);
-  if (
-    actual.length !== digest.length ||
-    !actual.every((value, index) => value === digest[index])
-  ) return null;
+  if (actual.length !== digest.length || !actual.every((value, index) => value === digest[index])) return null;
   return { version, etag };
 }
 
-function validUuid(value: unknown): value is string {
-  return typeof value === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
-      .test(value);
+function validMetadata(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 512 && !value.includes('\0') &&
+    new TextEncoder().encode(value).byteLength <= 512;
 }
 
-function validMime(value: unknown): value is string {
-  return typeof value === "string" && value.length <= 255 &&
-    /^[A-Za-z0-9!#$%&'+.^_`|~-]+\/[A-Za-z0-9!#$%&'+.^_`|~-]+$/.test(value);
+function validBatch(results: { success?: boolean }[], count: number): boolean {
+  return Array.isArray(results) && results.length === count && results.every((entry) => entry?.success === true);
 }
 
 function hex(value: Uint8Array): string {
-  return Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join(
-    "",
-  );
+  return Array.from(value, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
