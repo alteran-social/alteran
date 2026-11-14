@@ -1,9 +1,10 @@
+import { createOAuthSession } from './helpers/oauth-store';
 import { describe, it } from "./helpers/bdd";
 import { expect } from "@std/expect";
 import { SignJWT } from 'jose';
 import { makeEnv } from './helpers/env';
 import { makeDpopKey, signResourceDpop } from './helpers/oauth';
-import { createOAuthSession, getSecret, storeRefreshToken } from '../src/db/account';
+import { getSecret, storeRefreshToken } from '../src/db/account';
 import { setAccountState } from '../src/db/dal';
 import { authenticateRequest } from '../src/lib/auth';
 import { AuthScope, bearerAccessContext, isOAuthScope, oauthAccessContext } from '../src/lib/auth-scope';

@@ -7,38 +7,40 @@
  * handler reduce to a single switch, and lets us unit-test every
  * decision branch without an HTTP layer.
  */
-import type { Env } from '../env';
-import { InvalidToken } from './errors';
-import { getRuntimeString } from './secrets';
+import type { Env } from "../env";
+import { errors as joseErrors } from "jose";
+import { InvalidToken } from "./errors";
+import { getRuntimeString } from "./secrets";
 import {
   getAccountByIdentifier,
   getRefreshToken,
   markRefreshTokenRotated,
-  storeRefreshToken,
   type RefreshTokenRow,
-} from '../db/account';
-import { findAppPasswordByName } from '../db/app-password';
+  storeRefreshToken,
+} from "../db/account";
+import { findAppPasswordByName } from "../db/app-password";
 import {
-  verifyRefreshToken,
-  issueSessionTokens,
   computeGraceExpiry,
-} from './session-tokens';
-import { AuthScope } from './auth-scope';
+  isOAuthBoundRefresh,
+  issueSessionTokens,
+  verifyRefreshToken,
+} from "./session-tokens";
+import { AuthScope } from "./auth-scope";
 
 export type RefreshFailureCode =
-  | 'AuthRequired'
-  | 'InvalidToken'
-  | 'ExpiredToken';
+  | "AuthRequired"
+  | "InvalidToken"
+  | "ExpiredToken";
 
 export type RefreshFailure = {
-  readonly tag: 'failure';
+  readonly tag: "failure";
   readonly code: RefreshFailureCode;
   readonly message: string;
   readonly status: number;
 };
 
 export type RefreshSuccess = {
-  readonly tag: 'success';
+  readonly tag: "success";
   readonly did: string;
   readonly handle: string;
   readonly accessJwt: string;
@@ -47,8 +49,12 @@ export type RefreshSuccess = {
 
 export type RefreshOutcome = RefreshFailure | RefreshSuccess;
 
-function failure(code: RefreshFailureCode, message: string, status = 401): RefreshFailure {
-  return { tag: 'failure', code, message, status };
+function failure(
+  code: RefreshFailureCode,
+  message: string,
+  status = 401,
+): RefreshFailure {
+  return { tag: "failure", code, message, status };
 }
 
 type AttemptInput = {
@@ -62,9 +68,11 @@ type AttemptInput = {
  * concrete RefreshSuccess. The handler stays thin and the test surface
  * is the return value rather than HTTP response shape.
  */
-export async function attemptRefresh({ env, token, nowSec }: AttemptInput): Promise<RefreshOutcome> {
+export async function attemptRefresh(
+  { env, token, nowSec }: AttemptInput,
+): Promise<RefreshOutcome> {
   if (!token) {
-    return failure('AuthRequired', 'No authorization token provided');
+    return failure("AuthRequired", "No authorization token provided");
   }
 
   // Catch only token-shape failures here; configuration errors must propagate
@@ -73,56 +81,57 @@ export async function attemptRefresh({ env, token, nowSec }: AttemptInput): Prom
   try {
     verification = await verifyRefreshToken(env, token);
   } catch (error) {
-    if (error instanceof InvalidToken) {
+    if (error instanceof joseErrors.JWTExpired) {
+      return failure("ExpiredToken", "Refresh token expired");
+    }
+    if (
+      error instanceof InvalidToken || error instanceof joseErrors.JOSEError
+    ) {
       verification = null;
     } else {
       throw error;
     }
   }
   if (!verification) {
-    return failure('InvalidToken', 'Invalid or expired refresh token');
+    return failure("InvalidToken", "Invalid or expired refresh token");
   }
 
   const { decoded } = verification;
   if (
     !decoded ||
-    typeof decoded.jti !== 'string' ||
-    typeof decoded.sub !== 'string'
+    typeof decoded.jti !== "string" ||
+    typeof decoded.sub !== "string"
   ) {
-    return failure('InvalidToken', 'Malformed refresh token');
+    return failure("InvalidToken", "Malformed refresh token");
   }
 
-  if (typeof decoded.exp !== 'number' || decoded.exp <= nowSec) {
-    return failure('ExpiredToken', 'Refresh token expired');
+  if (typeof decoded.exp !== "number" || decoded.exp <= nowSec) {
+    return failure("ExpiredToken", "Refresh token expired");
+  }
+
+  if (isOAuthBoundRefresh(verification.payload)) {
+    return failure("InvalidToken", "OAuth refresh token must use /oauth/token");
   }
 
   const stored = await getRefreshToken(env, decoded.jti);
   if (!stored) {
-    return failure('InvalidToken', 'Refresh token has been revoked');
+    return failure("InvalidToken", "Refresh token has been revoked");
   }
 
   if (stored.revokedAt) {
-    return failure('InvalidToken', 'Refresh token has been revoked');
+    return failure("InvalidToken", "Refresh token has been revoked");
   }
 
-  if (stored.tokenKind !== 'legacy') {
-    return failure('InvalidToken', 'OAuth refresh token must use /oauth/token');
-  }
-
-  if (
-    typeof verification.payload.client_id === 'string' ||
-    typeof verification.payload.oauth_session === 'string' ||
-    !!(verification.payload.cnf as { jkt?: unknown } | undefined)?.jkt
-  ) {
-    return failure('InvalidToken', 'OAuth refresh token must use /oauth/token');
+  if (stored.tokenKind !== "legacy" || stored.oauthSessionId !== null) {
+    return failure("InvalidToken", "OAuth refresh token must use /oauth/token");
   }
 
   if (stored.expiresAt <= nowSec) {
-    return failure('ExpiredToken', 'Refresh token expired');
+    return failure("ExpiredToken", "Refresh token expired");
   }
 
   if (stored.did !== decoded.sub) {
-    return failure('InvalidToken', 'Token subject mismatch');
+    return failure("InvalidToken", "Token subject mismatch");
   }
 
   return finalizeRotation({ env, stored, expiredJti: decoded.jti, nowSec });
@@ -143,8 +152,9 @@ async function finalizeRotation({
 }: FinalizeInput): Promise<RefreshOutcome> {
   const account = await getAccountByIdentifier(env, stored.did);
   const did = stored.did;
-  const handle =
-    account?.handle ?? (await getRuntimeString(env, 'PDS_HANDLE', 'user.example')) ?? 'user.example';
+  const handle = account?.handle ??
+    (await getRuntimeString(env, "PDS_HANDLE", "user.example")) ??
+    "user.example";
 
   // If a previous rotation already chose the next JTI we MUST reuse it so
   // a client retrying inside the grace window receives the same pair.
@@ -152,24 +162,31 @@ async function finalizeRotation({
 
   let accessScope: string = AuthScope.Access;
   if (stored.appPasswordName) {
-    const appPassword = await findAppPasswordByName(env, stored.did, stored.appPasswordName);
+    const appPassword = await findAppPasswordByName(
+      env,
+      stored.did,
+      stored.appPasswordName,
+    );
     if (!appPassword) {
-      return failure('InvalidToken', 'Refresh token has been revoked');
+      return failure("InvalidToken", "Refresh token has been revoked");
     }
-    accessScope = appPassword.privileged ? AuthScope.AppPassPrivileged : AuthScope.AppPass;
+    accessScope = appPassword.privileged
+      ? AuthScope.AppPassPrivileged
+      : AuthScope.AppPass;
   }
 
-  const { accessJwt, refreshJwt, refreshPayload, refreshExpiry } = await issueSessionTokens(
-    env,
-    did,
-    { jti: desiredJti, accessScope },
-  );
+  const { accessJwt, refreshJwt, refreshPayload, refreshExpiry } =
+    await issueSessionTokens(
+      env,
+      did,
+      { jti: desiredJti, accessScope },
+    );
 
   // Reuse attack detection: the stored nextId fixes what the client is
   // allowed to see; any divergence means the same refresh was already used
   // to mint a *different* successor and this attempt is poisoned.
   if (stored.nextId && stored.nextId !== refreshPayload.jti) {
-    return failure('InvalidToken', 'Refresh token has been revoked');
+    return failure("InvalidToken", "Refresh token has been revoked");
   }
 
   if (!stored.nextId) {
@@ -181,8 +198,13 @@ async function finalizeRotation({
     });
 
     const graceExpiry = computeGraceExpiry(stored.expiresAt, nowSec);
-    await markRefreshTokenRotated(env, expiredJti, refreshPayload.jti, graceExpiry);
+    await markRefreshTokenRotated(
+      env,
+      expiredJti,
+      refreshPayload.jti,
+      graceExpiry,
+    );
   }
 
-  return { tag: 'success', did, handle, accessJwt, refreshJwt };
+  return { tag: "success", did, handle, accessJwt, refreshJwt };
 }

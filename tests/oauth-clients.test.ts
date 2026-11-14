@@ -9,6 +9,7 @@ import {
 } from '../src/lib/oauth/clients';
 import { isAllowedRedirectUri, redirectUriMatches } from '../src/lib/oauth/redirect-uri';
 import { isSafeFetchUrl, safeFetchJson } from '../src/lib/oauth/safe-fetch';
+import { jwkThumbprint } from '../src/lib/oauth/dpop';
 
 describe('OAuth client metadata validation', () => {
   const clientId = 'https://client.example/metadata';
@@ -217,7 +218,7 @@ describe('OAuth client metadata validation', () => {
       client_assertion: assertion,
     });
     const result = await verifyClientAuthentication(env, clientId, 'https://pds.example', meta, form);
-    expect(result).toEqual({ method: 'private_key_jwt', keyId: 'test-key' });
+    expect(result).toEqual({ method: 'private_key_jwt', keyId: await jwkThumbprint(publicJwk), keyBinding: 'jwk-thumbprint-v1' });
     await expect(verifyClientAuthentication(env, clientId, 'https://pds.example', meta, form)).rejects.toThrow('invalid client assertion');
 
     const replayJti = crypto.randomUUID();

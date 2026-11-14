@@ -2,7 +2,7 @@ import { describe, it } from "./helpers/bdd";
 import { expect } from "@std/expect";
 import { makeEnv } from './helpers/env';
 import { makeDpopKey, signAuthzDpop, signResourceDpop } from './helpers/oauth';
-import { getOAuthSession } from '../src/db/account';
+import { getOAuthSession } from './helpers/oauth-store';
 import { sha256b64url } from '../src/lib/oauth/dpop';
 import { verifyAccessToken } from '../src/lib/session-tokens';
 import { POST as parPost } from '../src/pages/oauth/par';

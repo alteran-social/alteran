@@ -59,21 +59,28 @@ export async function GET({ locals, request }: APIContext) {
       );
     }
 
-    // Get current PLC data to preserve rotation keys
     const did = await resolveSecret(env.PDS_DID);
     if (!did) {
       return new Response(JSON.stringify({ error: 'InvalidRequest', message: 'PDS_DID is not configured' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
     }
-    const plcResponse = await fetch(`https://plc.directory/${did}/data`);
+    if (!did.startsWith('did:plc:')) {
+      return jsonError('UnsupportedDidMethod', 'DID credential recommendations require a did:plc account', 400);
+    }
 
-    let rotationKeys: string[] = [];
-    if (plcResponse.ok) {
-      const plcData = await plcResponse.json() as { rotationKeys?: string[] };
-      rotationKeys = plcData.rotationKeys || [];
+    const plcData = await readPlcData(did, request.signal);
+    if (!plcData) {
+      return jsonError('PlcDataUnavailable', 'Unable to verify current PLC credentials', 502);
+    }
+    if (Object.hasOwn(plcData.verificationMethods, 'atproto_kem')) {
+      return jsonError(
+        'SpacesMigrationUnsupported',
+        'This account has a Spaces KEM key. Alteran cannot migrate Spaces data or recommend replacement credentials yet.',
+        400,
+      );
     }
 
     const credentials = {
-      rotationKeys,
+      rotationKeys: plcData.rotationKeys,
       alsoKnownAs: claimedHandle ? [`at://${claimedHandle}`] : [],
       verificationMethods: { atproto: didKey },
       services: {
@@ -99,4 +106,56 @@ export async function GET({ locals, request }: APIContext) {
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
   }
+}
+
+type PlcData = {
+  readonly rotationKeys: string[];
+  readonly verificationMethods: Record<string, string>;
+};
+
+async function readPlcData(did: string, signal: AbortSignal): Promise<PlcData | null> {
+  try {
+    const response = await fetch(`https://plc.directory/${encodeURIComponent(did)}/data`, {
+      redirect: 'manual',
+      signal,
+    });
+    if (!response.ok || response.redirected || response.type === 'opaqueredirect') {
+      console.error('PLC credential lookup failed:', response.status);
+      return null;
+    }
+    const data: unknown = await response.json();
+    if (!isPlcData(data, did)) {
+      console.error('PLC credential lookup returned invalid data');
+      return null;
+    }
+    return data;
+  } catch (error) {
+    console.error('PLC credential lookup failed:', error);
+    return null;
+  }
+}
+
+function isPlcData(value: unknown, did: string): value is PlcData {
+  if (!isObject(value) || value.did !== did) return false;
+  if (!Array.isArray(value.rotationKeys) || value.rotationKeys.length === 0 ||
+    !value.rotationKeys.every((key) => typeof key === 'string' && key.length > 0)) return false;
+  if (!isObject(value.verificationMethods) ||
+    !Object.values(value.verificationMethods).every((key) => typeof key === 'string')) return false;
+  if (!Array.isArray(value.alsoKnownAs) ||
+    !value.alsoKnownAs.every((alias) => typeof alias === 'string')) return false;
+  if (!isObject(value.services) || !Object.values(value.services).every((service) =>
+    isObject(service) && typeof service.type === 'string' && typeof service.endpoint === 'string'
+  )) return false;
+  return true;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function jsonError(error: string, message: string, status: number): Response {
+  return new Response(JSON.stringify({ error, message }), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }

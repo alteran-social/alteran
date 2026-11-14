@@ -1,3 +1,4 @@
+import { createOAuthSession } from './oauth-store';
 import { expect } from "@std/expect";
 import { CID } from 'multiformats/cid';
 import { sha256 } from 'multiformats/hashes/sha2';
@@ -5,7 +6,7 @@ import * as dagCbor from '@ipld/dag-cbor';
 import { makeEnv } from './env';
 import { issueSessionTokens } from '../../src/lib/session-tokens';
 import { makeDpopKey, signResourceDpop } from './oauth';
-import { createOAuthSession, storeRefreshToken } from '../../src/db/account';
+import { storeRefreshToken } from '../../src/db/account';
 import {
   getBlobQuota,
   listRecords,

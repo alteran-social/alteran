@@ -1,7 +1,7 @@
 import type { Env } from '../../env';
 import { jwkThumbprint } from './dpop';
 import { DpopNonceError } from './dpop-errors';
-import { cleanupExpiredOAuthReplaySecrets, createSecretOnce } from '../../db/account';
+import { consumeOAuthReplay } from '../../db/oauth-replay';
 import { decodeProtectedHeader, importJWK, compactVerify, type JWK as JoseJWK } from 'jose';
 import { resolveLoopbackClient } from './loopback-client';
 import { isAllowedRedirectUri, redirectUriMatches } from './redirect-uri';
@@ -29,6 +29,8 @@ export type OAuthClientMetadata = {
 export type VerifiedClientAuth = {
   method: ClientAuthMethod;
   keyId: string | null;
+  keyBinding?: 'jwk-thumbprint-v1';
+  replay?: { key: string; issuedAt: number; expiresAt: number };
 };
 
 export async function resolveClientMetadata(env: Env, clientId: string): Promise<OAuthClientMetadata> {
@@ -163,6 +165,7 @@ export async function verifyClientAuthentication(
   issuerOrigin: string,
   metadata: OAuthClientMetadata,
   form: URLSearchParams,
+  opts: { deferReplay?: boolean } = {},
 ): Promise<VerifiedClientAuth> {
   if (metadata.token_endpoint_auth_method === 'none') {
     return verifyPublicClientAuthentication(form);
@@ -174,11 +177,14 @@ export async function verifyClientAuthentication(
     throw new Error('missing client assertion');
   }
   const jwks = await resolveClientJwks(env, metadata);
-  const result = await verifyClientAssertion(env, client_id, issuerOrigin, client_assertion, jwks);
-  if (!result) {
-    throw new Error('invalid client assertion');
+  if (opts.deferReplay) {
+    const result = await verifySignedClientAssertion(client_id, issuerOrigin, client_assertion, jwks);
+    if (!result) throw new Error('invalid client assertion');
+    return { method: 'private_key_jwt', keyId: result.keyId, keyBinding: 'jwk-thumbprint-v1', replay: result.replay };
   }
-  return { method: 'private_key_jwt', keyId: result.keyId };
+  const result = await verifyClientAssertion(env, client_id, issuerOrigin, client_assertion, jwks);
+  if (!result) throw new Error('invalid client assertion');
+  return { method: 'private_key_jwt', keyId: result.keyId, keyBinding: 'jwk-thumbprint-v1' };
 }
 
 export function verifyPublicClientAuthentication(form: URLSearchParams): VerifiedClientAuth {
@@ -193,19 +199,23 @@ export async function requireStoredClientAuthentication(
   clientId: string,
   issuerOrigin: string,
   form: URLSearchParams,
-  expected: { method: string | null; keyId?: string | null },
+  expected: { method: string | null; keyId?: string | null; keyBinding?: string | null },
+  opts: { deferReplay?: boolean } = {},
 ): Promise<VerifiedClientAuth> {
   if (expected.method === 'none') {
     return verifyPublicClientAuthentication(form);
   }
+  if (expected.method !== 'private_key_jwt' || expected.keyBinding !== 'jwk-thumbprint-v1' || !expected.keyId) {
+    throw new Error('client authentication requires renewed authorization');
+  }
   const metadata = await resolveClientMetadata(env, clientId);
-  return requireSameClientAuth(env, clientId, issuerOrigin, metadata, form, expected);
+  return requireSameClientAuth(env, clientId, issuerOrigin, metadata, form, expected, opts);
 }
 
-async function consumeClientAssertionJti(env: Env, clientId: string, jti: string, exp: number): Promise<boolean> {
-  const key = `oauth:client-assertion:jti:${clientId}:${jti}`;
-  await cleanupExpiredOAuthReplaySecrets(env, Math.floor(Date.now() / 1000));
-  return createSecretOnce(env, key, JSON.stringify({ exp }));
+function clientAssertionTimesValid(iat: unknown, exp: unknown, now: number): boolean {
+  return typeof iat === 'number' && Number.isFinite(iat) &&
+    now - iat <= 300 && iat - now <= 30 &&
+    typeof exp === 'number' && Number.isFinite(exp) && exp > now && exp - now <= 300;
 }
 
 export async function verifyClientAssertion(
@@ -215,15 +225,37 @@ export async function verifyClientAssertion(
   assertionJwt: string,
   jwks: { keys: JsonWebKey[] },
 ): Promise<{ keyId: string } | null> {
+  const result = await verifySignedClientAssertion(client_id, issuerOrigin, assertionJwt, jwks);
+  if (!result) return null;
+  try {
+    const replay = await consumeOAuthReplay(env, result.replay.key, {
+      tag: 'assertion', issuedAt: result.replay.issuedAt, expiresAt: result.replay.expiresAt,
+    });
+    if (replay.tag !== 'accepted') return null;
+    if (!clientAssertionTimesValid(result.replay.issuedAt, result.replay.expiresAt, Math.floor(Date.now() / 1000))) return null;
+    return { keyId: result.keyId };
+  } catch (error) {
+    if (error instanceof DpopNonceError) throw error;
+    return null;
+  }
+}
+
+async function verifySignedClientAssertion(
+  client_id: string,
+  issuerOrigin: string,
+  assertionJwt: string,
+  jwks: { keys: JsonWebKey[] },
+): Promise<{ keyId: string; replay: { key: string; issuedAt: number; expiresAt: number } } | null> {
   try {
     const [h, p] = assertionJwt.split('.');
     if (!h || !p) return null;
     const header = decodeProtectedHeader(assertionJwt) as any;
     if (header.alg !== 'ES256') return null;
+    if ('kid' in header && (typeof header.kid !== 'string' || !header.kid)) return null;
     const keys: any[] = Array.isArray(jwks?.keys) ? jwks.keys : [];
     if (!keys.length) return null;
-    const byKid = typeof header.kid === 'string' ? keys.find((k) => k.kid === header.kid) : null;
-    const candidates = byKid ? [byKid] : keys;
+    const candidates = typeof header.kid === 'string' ? keys.filter((k) => k.kid === header.kid) : keys;
+    if (!candidates.length) return null;
 
     let payload: any | null = null;
     let matchedKey: JsonWebKey | null = null;
@@ -244,14 +276,12 @@ export async function verifyClientAssertion(
     if (payload.iss !== client_id) return null;
     if (payload.sub !== client_id) return null;
     if (payload.aud !== issuerOrigin) return null;
-    if (typeof payload.iat !== 'number' || now - payload.iat > 300 || payload.iat - now > 30) return null;
-    if (typeof payload.exp !== 'number' || payload.exp <= now || payload.exp - now > 300) return null;
+    if (!clientAssertionTimesValid(payload.iat, payload.exp, now)) return null;
     if (typeof payload.jti !== 'string' || payload.jti.length < 8) return null;
-    if (!(await consumeClientAssertionJti(env, client_id, payload.jti, payload.exp))) return null;
-
-    return {
-      keyId: typeof header.kid === 'string' ? header.kid : await jwkThumbprint(matchedKey),
-    };
+    const keyId = await jwkThumbprint(matchedKey);
+    const key = `oauth:client-assertion:jti:${client_id}:${payload.jti}`;
+    if (key.length > 8192 || new TextEncoder().encode(key).byteLength > 8192) return null;
+    return { keyId, replay: { key, issuedAt: payload.iat, expiresAt: payload.exp } };
   } catch (error) {
     if (error instanceof DpopNonceError) throw error;
     return null;
@@ -264,13 +294,15 @@ export async function requireSameClientAuth(
   issuerOrigin: string,
   metadata: OAuthClientMetadata,
   form: URLSearchParams,
-  expected: { method: string | null; keyId?: string | null },
+  expected: { method: string | null; keyId?: string | null; keyBinding?: string | null },
+  opts: { deferReplay?: boolean } = {},
 ): Promise<VerifiedClientAuth> {
-  const actual = await verifyClientAuthentication(env, clientId, issuerOrigin, metadata, form);
+  const actual = await verifyClientAuthentication(env, clientId, issuerOrigin, metadata, form, opts);
   if (actual.method !== expected.method) {
     throw new Error('client authentication method changed');
   }
-  if (actual.method === 'private_key_jwt' && expected.keyId && actual.keyId !== expected.keyId) {
+  if (actual.method === 'private_key_jwt' &&
+      (expected.keyBinding !== 'jwk-thumbprint-v1' || !expected.keyId || actual.keyId !== expected.keyId)) {
     throw new Error('client authentication key changed');
   }
   return actual;

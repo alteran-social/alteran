@@ -3,16 +3,16 @@
   "name": "alteran",
   "main": "src/_worker.ts",
   "compatibility_date": "2025-09-27",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "enable_request_signal"],
   // Base vars apply when running `wrangler dev`/`wrangler deploy` without
   // `--env`. Identity (PDS_DID/PDS_HANDLE/PDS_HOSTNAME) belongs to the
   // per-environment blocks below so a fork can configure dev/staging/prod
-  // independently; the `deploy` npm script pins `--env production`.
+  // independently; `deno task deploy` selects production during the build.
   "vars": {
     "PDS_MAX_BLOB_SIZE": "5242880"
   },
   // Secrets to set in env (via `wrangler secret put`):
-  // USER_PASSWORD, REFRESH_TOKEN, REFRESH_TOKEN_SECRET
+  // USER_PASSWORD, REPO_SIGNING_KEY; SESSION_JWT_SECRET is optional.
   // Optional: PDS_ALLOWED_MIME, PDS_MAX_BLOB_SIZE, PDS_MAX_JSON_BYTES, PDS_RATE_LIMIT_PER_MIN, PDS_CORS_ORIGIN,
   // PDS_OAUTH_CLIENT_HOSTS (CSV of trusted OAuth client metadata/JWKS hostnames)
   "d1_databases": [
@@ -36,16 +36,18 @@
     { "tag": "v1", "new_classes": ["Sequencer"] },
     { "tag": "v2", "modified_classes": ["Sequencer"] }
   ],
-  "observability": { "enabled": true },
+  // Space request query strings contain private identifiers.
+  "observability": {
+    "enabled": true,
+    "logs": { "invocation_logs": false },
+    "traces": { "enabled": false }
+  },
   // Optionally bind secrets from Cloudflare Secret Store. Each entry exposes
   // an env binding with an async get(). This project resolves them to strings
   // at runtime, so your handlers see plain string values.
   // "secrets_store_secrets": [
   //   { "binding": "USER_PASSWORD", "secret_name": "user_password", "store_id": "<your-store-id>" },
-  //   { "binding": "REFRESH_TOKEN", "secret_name": "REFRESH_TOKEN", "store_id": "<your-store-id>" },
-  //   { "binding": "REFRESH_TOKEN_SECRET", "secret_name": "refresh_token_secret", "store_id": "<your-store-id>" },
-  //   { "binding": "PDS_DID", "secret_name": "pds_did", "store_id": "<your-store-id>" },
-  //   { "binding": "PDS_HANDLE", "secret_name": "pds_handle", "store_id": "<your-store-id>" }
+  //   { "binding": "SESSION_JWT_SECRET", "secret_name": "session_jwt_secret", "store_id": "<your-store-id>" }
   // ],
 
   // Environment-specific configurations
@@ -132,7 +134,11 @@
         { "tag": "v1", "new_classes": ["Sequencer"] },
         { "tag": "v2", "modified_classes": ["Sequencer"] }
       ],
-      "observability": { "enabled": true },
+      "observability": {
+        "enabled": true,
+        "logs": { "invocation_logs": false },
+        "traces": { "enabled": false }
+      },
     },
   },
 }

@@ -1,0 +1,1 @@
+CREATE INDEX `space_mutation_attempt_owner` ON `space_mutation_attempt` (`space_ref`,`repo_did`);

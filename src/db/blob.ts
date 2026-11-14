@@ -149,6 +149,9 @@ export async function deleteUnreferencedBlobKeys(
            AND uploaded_at <= ?
            AND NOT EXISTS (
              SELECT 1 FROM blob_usage WHERE did = ? AND key = ?
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM space_blob_usage u WHERE u.repo_did = blob.did AND u.cid = blob.cid
            )`,
       ).bind(did, key, cutoff, did, key),
       recomputeQuotaStatement(env, did),
@@ -192,6 +195,9 @@ export async function listOrphanBlobRefs(
          AND NOT EXISTS (
            SELECT 1 FROM blob_usage u WHERE u.did = b.did AND u.key = b.key
          )
+         AND NOT EXISTS (
+           SELECT 1 FROM space_blob_usage u WHERE u.repo_did = b.did AND u.cid = b.cid
+         )
        ORDER BY b.uploaded_at, b.did, b.key
        LIMIT ?`,
     ).bind(options.did, cutoff, limit).all<BlobKeyRef>()
@@ -202,6 +208,9 @@ export async function listOrphanBlobRefs(
          AND NOT EXISTS (
            SELECT 1 FROM blob_usage u WHERE u.did = b.did AND u.key = b.key
          )
+         AND NOT EXISTS (
+           SELECT 1 FROM space_blob_usage u WHERE u.repo_did = b.did AND u.cid = b.cid
+         )
        ORDER BY b.uploaded_at, b.did, b.key
        LIMIT ?`,
     ).bind(cutoff, limit).all<BlobKeyRef>();
@@ -209,8 +218,16 @@ export async function listOrphanBlobRefs(
 }
 
 export async function deleteBlobByKey(env: Env, key: string) {
-  const db = getDb(env);
-  await db.delete(blob_ref).where(eq(blob_ref.key, key)).run();
+  await env.ALTERAN_DB.prepare(
+    `DELETE FROM blob
+     WHERE key = ?
+       AND NOT EXISTS (
+         SELECT 1 FROM blob_usage u WHERE u.did = blob.did AND u.key = blob.key
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM space_blob_usage u WHERE u.repo_did = blob.did AND u.cid = blob.cid
+       )`,
+  ).bind(key).run();
 }
 
 export async function getBlobQuota(env: Env, did: string) {
@@ -260,6 +277,9 @@ export async function deleteUnreferencedBlobRef(env: Env, did: string, cid: stri
          AND cid = ?
          AND NOT EXISTS (
            SELECT 1 FROM blob_usage u WHERE u.did = blob.did AND u.key = blob.key
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM space_blob_usage u WHERE u.repo_did = blob.did AND u.cid = blob.cid
          )`,
     ).bind(did, cid),
     recomputeQuotaStatement(env, did),

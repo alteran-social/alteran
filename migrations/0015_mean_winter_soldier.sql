@@ -1,0 +1,1 @@
+CREATE INDEX `space_blob_usage_cid_retention_idx` ON `space_blob_usage` (`repo_did`,`cid`);

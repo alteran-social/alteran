@@ -1,10 +1,10 @@
+import { createOAuthSession, getOAuthSession, saveCode } from './helpers/oauth-store';
 import { describe, it } from "./helpers/bdd";
 import { expect } from "@std/expect";
 import { makeEnv } from './helpers/env';
 import { makeDpopKey, mockClientMetadata, signAuthzDpop, signDpopProof, signResourceDpop } from './helpers/oauth';
-import { createOAuthSession, getOAuthSession, getRefreshToken, storeRefreshToken } from '../src/db/account';
+import { getRefreshToken, storeRefreshToken } from '../src/db/account';
 import { issueSessionTokens } from '../src/lib/session-tokens';
-import { saveCode } from '../src/lib/oauth/store';
 import { sha256b64url } from '../src/lib/oauth/dpop';
 import { POST as tokenPost } from '../src/pages/oauth/token';
 import { POST as revokePost } from '../src/pages/oauth/revoke';
@@ -223,7 +223,7 @@ describe('OAuth refresh and revocation state', () => {
     });
   });
 
-  it('revokes OAuth sessions from revoke and deleteSession', async () => {
+  it('revokes OAuth sessions through revoke and rejects bearer deletion', async () => {
     const restore = mockClientMetadata(clientId);
     try {
       const env = await makeEnv();
@@ -252,16 +252,16 @@ describe('OAuth refresh and revocation state', () => {
         method: 'POST',
         headers: { authorization: `Bearer ${issued2.refreshJwt}` },
       })));
-      expect(deleted.status).toBe(200);
-      expect(await getRefreshToken(env2, issued2.refreshJti)).toBeNull();
-      expect((await getOAuthSession(env2, issued2.sessionId))?.revokedAt).toBeTruthy();
+      expect(deleted.status).toBe(401);
+      expect(await getRefreshToken(env2, issued2.refreshJti)).not.toBeNull();
+      expect((await getOAuthSession(env2, issued2.sessionId))?.revokedAt).toBeNull();
       const refreshProof = await signAuthzDpop(env2, key2, 'POST', 'https://pds.example/oauth/token');
       const refresh = await tokenPost(apiContext(env2, new Request('https://pds.example/oauth/token', {
         method: 'POST',
         headers: { dpop: refreshProof, 'content-type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: issued2.refreshJwt, client_id: clientId }).toString(),
       })));
-      expect(refresh.status).toBe(400);
+      expect(refresh.status).toBe(200);
     } finally {
       restore();
     }

@@ -484,59 +484,11 @@ Configure in Cloudflare dashboard:
 
 ## Deployment Architecture
 
-### Environments
-
-- **Development**: Local Miniflare + local D1/R2
-- **Staging**: Cloudflare Workers + staging D1/R2
-- **Production**: Cloudflare Workers + production D1/R2
-
-### CI/CD
-
-Recommended flow:
-```
-1. Push to main
-   ↓
-2. Run tests (Deno test)
-   ↓
-3. Build (Astro build)
-   ↓
-4. Deploy to staging (wrangler deploy --env staging)
-   ↓
-5. Run smoke tests
-   ↓
-6. Deploy to production (wrangler deploy --env production)
-   ↓
-7. Monitor
-```
-
-### Rollback
-
-1. Revert to previous deployment:
-   ```bash
-   wrangler rollback --env production
-   ```
-
-2. Or deploy specific version:
-   ```bash
-   wrangler deploy --env production --version <version>
-   ```
+See [Deployment](DEPLOYMENT.md) for environments, production validation and rollback.
 
 ## Future Enhancements
 
-### Planned
-
-- [ ] Multi-user support
-- [ ] Caching layer (KV)
-- [ ] Advanced rate limiting
-- [ ] Metrics dashboard
-- [ ] Automated backups
-
-### Considered
-
-- [ ] Read replicas (D1)
-- [ ] CDN optimization
-- [ ] Advanced monitoring
-- [ ] A/B testing framework
+See [Future Enhancements](ROADMAP.md).
 
 ## References
 

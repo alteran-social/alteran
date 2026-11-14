@@ -1,279 +1,92 @@
 # Secret Rotation Procedures
 
-This document describes how to safely rotate secrets in your PDS deployment.
+Before changing a credential, verify the Cloudflare account, Worker and named
+environment. Back up the relevant configuration and data, test the change in
+staging, and plan for clients to reauthenticate. The local deployment preflight
+cannot inspect remote secrets or prove that a rotation reached every Worker
+instance.
 
-## Overview
+## Session signing key
 
-Secret rotation is a critical security practice. This guide covers rotation procedures for all secrets used by the PDS.
+Current access and refresh JWTs use `SESSION_JWT_SECRET` when configured. When
+it is absent, the Worker uses a `session_jwt_secret` generated and stored in D1.
+The runtime creates the D1 value only if it does not already exist; it does not
+overwrite an existing value when the environment secret changes.
 
-## JWT Secrets Rotation
+Alteran now reads the key from the request's Worker Env, not Astro's global env
+accessor. If the intended key was available only through Astro, configure the
+matching Worker secret or Secret Store binding before rollout and review the D1
+key independently. Falling back to a different D1 key changes which sessions can
+be verified.
 
-### Access Token Secret
+Changing the configured session key makes tokens signed with a different key
+fail verification on instances using the new key. This can affect both access
+and refresh tokens, including OAuth sessions; clients may need to sign in again.
+During rollout, verify the actual deployed version and behavior rather than
+assuming every instance changed at once.
 
-**Impact**: All active access tokens will be invalidated. Users will need to refresh their tokens.
+After confirming the target account and Worker, an operator who has chosen to
+use an environment secret can set the new value with:
 
-**Procedure**:
-
-1. **Generate new secret**:
-   ```bash
-   openssl rand -base64 32
-   ```
-
-2. **Set new secret** (staging first):
-   ```bash
-   wrangler secret put REFRESH_TOKEN --env staging
-   ```
-
-3. **Test in staging**:
-   - Verify existing sessions can refresh
-   - Verify new logins work
-   - Check error logs
-
-4. **Deploy to production**:
-   ```bash
-   wrangler secret put REFRESH_TOKEN --env production
-   ```
-
-5. **Monitor**:
-   - Watch for authentication errors
-   - Users will need to refresh tokens (automatic on next request)
-
-**Rollback**: Keep the old secret for 1 hour to allow in-flight requests to complete.
-
-### Refresh Token Secret
-
-**Impact**: All refresh tokens will be invalidated. Users will need to log in again.
-
-**Procedure**:
-
-1. **Announce maintenance window** (users will be logged out)
-
-2. **Generate new secret**:
-   ```bash
-   openssl rand -base64 32
-   ```
-
-3. **Set new secret**:
-   ```bash
-   wrangler secret put REFRESH_TOKEN_SECRET --env production
-   ```
-
-4. **Clear token revocation table** (optional):
-   ```sql
-   DELETE FROM token_revocation WHERE exp < <current_timestamp>;
-   ```
-
-5. **Notify users** to log in again
-
-**Rollback**: Not possible - users must re-authenticate.
-
-## Repository Signing Key Rotation
-
-**Impact**: Requires repository migration. This is a major operation.
-
-**⚠️ Warning**: This invalidates all existing commits. Only rotate if the key is compromised.
-
-**Procedure**:
-
-1. **Generate new signing key**:
-   ```bash
-   # Generate a new secp256k1 key as needed via your preferred tooling
-   ```
-
-2. **Backup current repository**:
-   ```bash
-   # Export current repo
-   curl "https://your-pds.example.com/xrpc/com.atproto.sync.getRepo?did=<your-did>" \
-     -o backup-$(date +%Y%m%d).car
-   ```
-
-3. **Set new signing key**:
-   ```bash
-   wrangler secret put REPO_SIGNING_KEY --env production
-   ```
-
-4. **Trigger repository re-signing**:
-   - This requires a custom migration script
-   - All commits must be re-signed with the new key
-   - MST must be rebuilt
-
-5. **Update DID document** (if using did:web):
-   - Ensure your PLC operation or did:web document advertises `verificationMethods.atproto` as the did:key derived from the new REPO_SIGNING_KEY.
-   - Publish to `/.well-known/did.json` if using did:web.
-
-6. **Verify**:
-   ```bash
-   # Check latest commit signature
-   curl "https://your-pds.example.com/xrpc/com.atproto.sync.getLatestCommit?did=<your-did>"
-   ```
-
-**Rollback**: Restore from backup and revert signing key.
-
-## User Password Rotation
-
-**Impact**: User must log in with new password.
-
-**Procedure**:
-
-1. **Set new password**:
-   ```bash
-   wrangler secret put USER_PASSWORD --env production
-   ```
-
-2. **User logs in** with new password
-
-3. **Old sessions remain valid** until tokens expire
-
-**Rollback**: Set old password back.
-
-## DID and Handle Updates
-
-### Changing DID
-
-**⚠️ Warning**: Changing DID is not recommended. It breaks federation.
-
-If you must change DID:
-
-1. **Export repository**:
-   ```bash
-   curl "https://your-pds.example.com/xrpc/com.atproto.sync.getRepo?did=<old-did>" \
-     -o migration-$(date +%Y%m%d).car
-   ```
-
-2. **Set new DID**:
-   ```bash
-   wrangler secret put PDS_DID --env production
-   ```
-
-3. **Update database**:
-   ```sql
-   UPDATE repo_root SET did = '<new-did>' WHERE did = '<old-did>';
-   UPDATE record SET did = '<new-did>' WHERE did = '<old-did>';
-   UPDATE blob_ref SET did = '<new-did>' WHERE did = '<old-did>';
-   ```
-
-4. **Update DID document** (if using did:web)
-
-5. **Notify relays** of DID change
-
-### Changing Handle
-
-**Impact**: Users will need to update their handle references.
-
-**Procedure**:
-
-1. **Set new handle**:
-   ```bash
-   wrangler secret put PDS_HANDLE --env production
-   ```
-
-2. **Update DNS** (if using did:web):
-   - Add TXT record: `_atproto.<new-handle>` → `did=<your-did>`
-
-3. **Verify**:
-   ```bash
-   curl "https://your-pds.example.com/xrpc/com.atproto.identity.resolveHandle?handle=<new-handle>"
-   ```
-
-4. **Update profile** in client apps
-
-**Rollback**: Set old handle back and revert DNS.
-
-## Rotation Schedule
-
-### Recommended Rotation Frequency
-
-| Secret | Frequency | Priority |
-|--------|-----------|----------|
-| `REFRESH_TOKEN` | Every 90 days | Medium |
-| `REFRESH_TOKEN_SECRET` | Every 180 days | Medium |
-| `USER_PASSWORD` | As needed | High (if compromised) |
-| `REPO_SIGNING_KEY` | Never (unless compromised) | Critical |
-| `PDS_DID` | Never | Critical |
-| `PDS_HANDLE` | As needed | Low |
-
-### Automated Rotation
-
-Consider implementing automated rotation for JWT secrets:
-
-```typescript
-// Example: Dual-secret validation during rotation
-function validateToken(token: string, env: Env): boolean {
-  try {
-    // Try new secret first
-    return verifyJWT(token, env.REFRESH_TOKEN);
-  } catch {
-    // Fall back to old secret (if in rotation window)
-    if (env.REFRESH_TOKEN_OLD) {
-      return verifyJWT(token, env.REFRESH_TOKEN_OLD);
-    }
-    throw new Error('Invalid token');
-  }
-}
+```bash
+deno run -A npm:wrangler secret put SESSION_JWT_SECRET --env production
 ```
 
-## Emergency Rotation
+Removing that secret can make the Worker fall back to an older key still in D1.
+Do not treat removal as a revocation procedure. Key changes do not themselves
+remove stored refresh-session records, and this repository does not provide a
+verified bulk-revocation or D1 key-rotation runbook. Do not execute ad hoc SQL
+against production without an independently reviewed procedure and backup.
 
-If a secret is compromised:
+Older-format JWTs are not accepted by the updated Worker. Affected clients must
+authenticate again. Current non-OAuth refresh sessions still use the existing
+refresh-table token kind and are not rejected on that basis.
 
-1. **Immediately rotate** the compromised secret
-2. **Revoke all tokens** (if JWT secret compromised):
-   ```sql
-   -- Mark all tokens as revoked
-   INSERT INTO token_revocation (jti, exp, revoked_at)
-   SELECT jti, exp, <current_timestamp>
-   FROM active_tokens;
-   ```
-3. **Force re-authentication** for all users
-4. **Audit logs** for suspicious activity
-5. **Notify users** if data may have been accessed
+During a deployment with mixed Worker versions, an older version may still
+accept behavior that the updated version rejects. Drain or replace all older
+versions before relying on the new behavior, and verify the active deployment
+and any rollback target. Rolling back to an older version can restore the old
+verification behavior.
 
-## Checklist
+## User password
 
-Before rotating any secret:
+Change `USER_PASSWORD` for the intended environment after verifying the account
+and Worker:
 
-- [ ] Backup current configuration
-- [ ] Test rotation in staging environment
-- [ ] Schedule maintenance window (if needed)
-- [ ] Prepare rollback plan
-- [ ] Notify users (if needed)
-- [ ] Monitor logs during and after rotation
-- [ ] Verify functionality after rotation
-- [ ] Document the rotation in change log
+```bash
+deno run -A npm:wrangler secret put USER_PASSWORD --env production
+```
 
-## Troubleshooting
+The password change does not by itself guarantee that already-issued sessions
+are revoked. Check the deployment and session behavior, and arrange any
+necessary reauthentication separately.
 
-### Users Can't Authenticate After Rotation
+## Repository signing key
 
-**Cause**: Token validation failing with new secret.
+The signing key is part of the account's protocol identity. Replacing
+`REPO_SIGNING_KEY` without coordinating the DID document and repository state
+can interrupt signing or verification. Preserve verified backups and use a
+reviewed AT Protocol identity-rotation procedure; this repository does not
+provide an automated key migration or rollback procedure.
 
-**Solution**:
-1. Check secret was set correctly: `wrangler secret list --env production`
-2. Verify no typos in secret value
-3. Check logs for specific error messages
-4. Rollback if necessary
+## DID and handle
 
-### Repository Commits Invalid After Signing Key Rotation
+`PDS_DID`, `PDS_HANDLE` and `PDS_HOSTNAME` are configured as named environment
+vars in this repository. Check for conflicting remote secrets before changing
+them. DID changes affect federation and require a separately reviewed migration;
+this guide does not prescribe direct database edits. For a handle change,
+coordinate account identity, DNS and the relevant AT Protocol records.
 
-**Cause**: Commits signed with old key, verified with new key.
+## Incident response
 
-**Solution**:
-1. Verify signing key is correct
-2. Re-sign all commits with new key
-3. Rebuild MST with new signatures
-4. Update DID document
-
-### DID Resolution Failing After Handle Change
-
-**Cause**: DNS not updated or propagation delay.
-
-**Solution**:
-1. Verify DNS TXT record: `dig TXT _atproto.<handle>`
-2. Wait for DNS propagation (up to 48 hours)
-3. Use DID directly until DNS propagates
+If credentials may be compromised, restrict access, preserve evidence, and
+review the applicable session, identity and signing-key procedures above. A
+successful secret update is not proof that all sessions were revoked or that all
+data is safe. Verify the deployed state and notify affected users as
+appropriate.
 
 ## References
 
-- [AT Protocol Security](https://atproto.com/specs/security)
-- [JWT Best Practices](https://datatracker.ietf.org/doc/html/rfc8725)
-- [Cloudflare Workers Secrets](https://developers.cloudflare.com/workers/configuration/secrets/)
+- [AT Protocol security](https://atproto.com/specs/security)
+- [JWT best practices](https://datatracker.ietf.org/doc/html/rfc8725)
+- [Cloudflare Workers secrets](https://developers.cloudflare.com/workers/configuration/secrets/)

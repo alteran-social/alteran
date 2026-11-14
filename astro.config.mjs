@@ -22,8 +22,6 @@ export default defineConfig({
       PDS_DID: envField.string({ context: "server", access: "secret" }),
       PDS_HANDLE: envField.string({ context: "server", access: "secret" }),
       USER_PASSWORD: envField.string({ context: "server", access: "secret" }),
-      ACCESS_TOKEN: envField.string({ context: "server", access: "secret" }),
-      REFRESH_TOKEN: envField.string({ context: "server", access: "secret" }),
       PDS_ALLOWED_MIME: envField.string({
         context: "server",
         access: "secret",

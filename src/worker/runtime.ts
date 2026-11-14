@@ -1,20 +1,29 @@
-import { handle } from '@astrojs/cloudflare/handler';
-import { seed } from '../db/seed';
-import { validateConfigOrThrow } from '../lib/config';
-import { resolveEnvSecrets } from '../lib/secrets';
-import { notifyRelaysIfNeeded } from '../lib/relay';
-import { normalizePdsRequestForAstro } from './normalize-request';
-import type { Env } from '../env';
+import { handle } from "@astrojs/cloudflare/handler";
+import { seed } from "../db/seed";
+import { validateConfigOrThrow } from "../lib/config";
+import { resolveEnvSecrets, SecretResolutionError } from "../lib/secrets";
+import { withRequestEnv } from "../lib/request-env";
+import { notifyRelaysIfNeeded } from "../lib/relay";
+import { normalizePdsRequestForAstro } from "./normalize-request";
+import {
+  isCanonicalJwksGet,
+  isPrivateProtocolPath,
+} from "../lib/private-protocol-path";
+import {
+  privateProtocolFailure,
+  securePrivateProtocolResponse,
+} from "../lib/private-protocol-response";
+import type { Env } from "../env";
 import type {
   ExecutionContext,
   Request as WorkersRequest,
   Response as WorkersResponse,
-} from '@cloudflare/workers-types';
+} from "@cloudflare/workers-types";
 
 export type PdsFetchHandler = (
   request: WorkersRequest,
   env: Env,
-  ctx: ExecutionContext
+  ctx: ExecutionContext,
 ) => Promise<WorkersResponse>;
 
 /**
@@ -22,20 +31,36 @@ export type PdsFetchHandler = (
  * compose it inside their own Cloudflare Worker entrypoint.
  */
 export function createPdsFetchHandler(): PdsFetchHandler {
-  return async function fetch(request: WorkersRequest, env: Env, ctx: ExecutionContext) {
-    // Resolve any Secret Store bindings to strings so downstream code can
-    // treat secrets uniformly regardless of source (Secret or Secret Store).
-    const resolvedEnv = await resolveEnvSecrets(env);
+  async function handlePds(
+    request: WorkersRequest,
+    env: Env,
+    ctx: ExecutionContext,
+  ) {
+    // Capture request bindings and resolve eager secrets before routing. The
+    // Spaces KEM key remains lazy until a Spaces operation needs it.
+    let resolvedEnv: Env;
+    try {
+      resolvedEnv = await resolveEnvSecrets(env);
+    } catch (error) {
+      if (!(error instanceof SecretResolutionError)) throw error;
+      return new Response(
+        JSON.stringify({ error: "ConfigurationError", message: error.message }),
+        { status: 500, headers: { "Content-Type": "application/json" } },
+      ) as unknown as WorkersResponse;
+    }
 
     // Cloudflare's Astro adapter expects an ASSETS binding for serving static
     // fallback content. Our worker doesn't ship static assets in production,
     // so provide a no-op stub to prevent adapter crashes (error code 1101).
-    if (!resolvedEnv.ASSETS || typeof (resolvedEnv as any).ASSETS.fetch !== 'function') {
+    if (
+      !resolvedEnv.ASSETS ||
+      typeof (resolvedEnv as any).ASSETS.fetch !== "function"
+    ) {
       (resolvedEnv as any).ASSETS = {
         async fetch() {
-          return new Response('Not Found', {
+          return new Response("Not Found", {
             status: 404,
-            headers: { 'Cache-Control': 'public, max-age=60' },
+            headers: { "Cache-Control": "public, max-age=60" },
           });
         },
       };
@@ -46,26 +71,32 @@ export function createPdsFetchHandler(): PdsFetchHandler {
     } catch (error) {
       return new Response(
         JSON.stringify({
-          error: 'ConfigurationError',
-          message: error instanceof Error ? error.message : 'Invalid configuration',
+          error: "ConfigurationError",
+          message: error instanceof Error
+            ? error.message
+            : "Invalid configuration",
         }),
         {
           status: 500,
-          headers: { 'Content-Type': 'application/json' },
-        }
+          headers: { "Content-Type": "application/json" },
+        },
       ) as unknown as WorkersResponse;
     }
 
     // Short-circuit CORS preflight at the worker entrypoint to avoid
     // adapter/method routing mismatches causing 500s on OPTIONS.
-    if (request.method === 'OPTIONS') {
+    if (request.method === "OPTIONS") {
       const headers = new Headers({
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': '*',
-        'Access-Control-Allow-Headers': '*',
-        'Access-Control-Max-Age': '86400',
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers":
+          "*, Authorization, DPoP, Content-Type, Accept-Signature",
+        "Access-Control-Max-Age": "86400",
       });
-      return new Response(null, { status: 204, headers }) as unknown as WorkersResponse;
+      return new Response(null, {
+        status: 204,
+        headers,
+      }) as unknown as WorkersResponse;
     }
 
     await seed(resolvedEnv.ALTERAN_DB, resolvedEnv.PDS_DID as string);
@@ -77,8 +108,8 @@ export function createPdsFetchHandler(): PdsFetchHandler {
     try {
       const pathname = new URL(request.url).pathname;
       const isRelayPath =
-        pathname === '/xrpc/com.atproto.server.describeServer' ||
-        pathname === '/xrpc/com.atproto.sync.subscribeRepos';
+        pathname === "/xrpc/com.atproto.server.describeServer" ||
+        pathname === "/xrpc/com.atproto.sync.subscribeRepos";
       if (!isRelayPath) {
         ctx.waitUntil(notifyRelaysIfNeeded(resolvedEnv as any, request.url));
       }
@@ -89,58 +120,96 @@ export function createPdsFetchHandler(): PdsFetchHandler {
     const url = new URL(request.url);
 
     // Lightweight debug endpoint for Sequencer metrics
-    if (url.pathname === '/debug/sequencer' && request.method === 'GET') {
+    if (url.pathname === "/debug/sequencer" && request.method === "GET") {
       try {
-        if (!('ALTERAN_SEQUENCER' in resolvedEnv) || !resolvedEnv.ALTERAN_SEQUENCER) {
-          return new Response('Sequencer not configured', { status: 503 }) as unknown as WorkersResponse;
+        if (
+          !("ALTERAN_SEQUENCER" in resolvedEnv) ||
+          !resolvedEnv.ALTERAN_SEQUENCER
+        ) {
+          return new Response("Sequencer not configured", {
+            status: 503,
+          }) as unknown as WorkersResponse;
         }
-        const id = (resolvedEnv as any).ALTERAN_SEQUENCER.idFromName('default');
+        const id = (resolvedEnv as any).ALTERAN_SEQUENCER.idFromName("default");
         const stub = (resolvedEnv as any).ALTERAN_SEQUENCER.get(id);
-        const proxyRequest = new Request(new URL('/metrics', request.url).toString(), { method: 'GET' });
+        const proxyRequest = new Request(
+          new URL("/metrics", request.url).toString(),
+          { method: "GET" },
+        );
         const response = await stub.fetch(proxyRequest as any);
         // Pass through JSON
         const headers = new Headers(response.headers);
-        headers.set('Content-Type', 'application/json');
-        return new Response(await response.text(), { status: response.status, headers }) as unknown as WorkersResponse;
+        headers.set("Content-Type", "application/json");
+        return new Response(await response.text(), {
+          status: response.status,
+          headers,
+        }) as unknown as WorkersResponse;
       } catch (error) {
-        return new Response(JSON.stringify({ error: 'InternalError', message: 'Failed to fetch sequencer metrics' }), { status: 500, headers: { 'Content-Type': 'application/json' } }) as unknown as WorkersResponse;
+        return new Response(
+          JSON.stringify({
+            error: "InternalError",
+            message: "Failed to fetch sequencer metrics",
+          }),
+          { status: 500, headers: { "Content-Type": "application/json" } },
+        ) as unknown as WorkersResponse;
       }
     }
-    if (url.pathname === '/xrpc/com.atproto.sync.subscribeRepos') {
-      const upgrade = request.headers.get('upgrade');
-      if (upgrade !== 'websocket') {
+    if (url.pathname === "/xrpc/com.atproto.sync.subscribeRepos") {
+      const upgrade = request.headers.get("upgrade");
+      if (upgrade !== "websocket") {
         try {
           console.log(JSON.stringify({
-            level: 'warn',
-            type: 'ws_expected',
+            level: "warn",
+            type: "ws_expected",
             path: url.pathname,
             method: request.method,
-            message: 'subscribeRepos requires WebSocket upgrade',
+            message: "subscribeRepos requires WebSocket upgrade",
             timestamp: new Date().toISOString(),
           }));
         } catch {
           // Logging-only path; never block the response on log serialization.
         }
-        return new Response('This endpoint requires a WebSocket (wss://) upgrade', { status: 426 }) as unknown as WorkersResponse;
+        return new Response(
+          "This endpoint requires a WebSocket (wss://) upgrade",
+          { status: 426 },
+        ) as unknown as WorkersResponse;
       }
       if (!resolvedEnv.ALTERAN_SEQUENCER) {
-        return new Response('Sequencer not configured', { status: 503 }) as unknown as WorkersResponse;
+        return new Response("Sequencer not configured", {
+          status: 503,
+        }) as unknown as WorkersResponse;
       }
 
-      const id = resolvedEnv.ALTERAN_SEQUENCER.idFromName('default');
+      const id = resolvedEnv.ALTERAN_SEQUENCER.idFromName("default");
       const stub = resolvedEnv.ALTERAN_SEQUENCER.get(id);
       return (await stub.fetch(request as any)) as unknown as WorkersResponse;
     }
 
-    const response = await handle(
-      normalizePdsRequestForAstro(request) as any,
-      resolvedEnv as any,
-      ctx as any,
-    );
+    const response = await withRequestEnv(resolvedEnv, () =>
+      handle(
+        normalizePdsRequestForAstro(request) as any,
+        resolvedEnv as any,
+        ctx as any,
+      ));
     return response as unknown as WorkersResponse;
+  }
+  return async function fetch(request, env, ctx) {
+    const privateProtocol = isPrivateProtocolPath(
+      new URL(request.url).pathname,
+    );
+    if (!privateProtocol) return handlePds(request, env, ctx);
+    try {
+      const response = await handlePds(request, env, ctx);
+      return securePrivateProtocolResponse(
+        response as unknown as Response,
+        isCanonicalJwksGet(request as unknown as Request),
+      ) as unknown as WorkersResponse;
+    } catch {
+      return privateProtocolFailure() as unknown as WorkersResponse;
+    }
   };
 }
 
-export { onRequest } from '../middleware';
+export { onRequest } from "../middleware";
 export { seed };
 export { validateConfigOrThrow };

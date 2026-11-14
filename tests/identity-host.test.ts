@@ -256,7 +256,8 @@ describe('canonical public host identity surfaces', () => {
   });
 
   it('uses the canonical PDS origin in recommended DID credentials', async () => {
-    const env = await canonicalEnv();
+    const plcDid = 'did:plc:ewvi7nxzyoun6zhxrhs64oiz';
+    const env = await canonicalEnv({ PDS_DID: plcDid });
 
     const created = await createSession(apiContext(
       env,
@@ -269,8 +270,14 @@ describe('canonical public host identity surfaces', () => {
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: RequestInfo | URL) => {
-      expect(String(input)).toBe(`https://plc.directory/${did}/data`);
-      return new Response(JSON.stringify({ rotationKeys: ['did:key:zRotation'] }), {
+      expect(String(input)).toBe(`https://plc.directory/${encodeURIComponent(plcDid)}/data`);
+      return new Response(JSON.stringify({
+        did: plcDid,
+        rotationKeys: ['did:key:zRotation'],
+        verificationMethods: { atproto: 'did:key:zSigning' },
+        alsoKnownAs: [],
+        services: {},
+      }), {
         headers: { 'Content-Type': 'application/json' },
       });
     }) as typeof fetch;

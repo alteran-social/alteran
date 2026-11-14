@@ -39,7 +39,10 @@ export async function signAuthzDpop(env: Env, key: Awaited<ReturnType<typeof mak
 export async function signResourceDpop(env: Env, key: Awaited<ReturnType<typeof makeDpopKey>>, method: string, url: string, accessToken: string) {
   const nonceResponse = await dpopResourceUnauthorized(env);
   const nonce = nonceResponse.headers.get('DPoP-Nonce') ?? '';
-  return signDpopProof({ key, method, url, nonce, accessToken });
+  const target = new URL(url);
+  target.search = '';
+  target.hash = '';
+  return signDpopProof({ key, method, url: target.toString(), nonce, accessToken });
 }
 
 export function mockClientMetadata(clientId = 'https://client.example/metadata') {
