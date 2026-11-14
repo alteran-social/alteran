@@ -147,8 +147,12 @@ key without a verified migration and rotation procedure.
 
 Space XRPC query strings contain private identifiers. The supplied Wrangler
 configuration disables automatic invocation logs and traces while retaining
-application logs; verify those settings in every deployed environment. Audit
-Astro debug hooks, tail consumers, Logpush, other export destinations, proxies
+application logs; verify those settings in every deployed environment. OAuth
+and Space protocol failures are sanitized at the Worker and middleware
+boundaries. For ambiguous encoded paths, middleware conservatively applies
+private, no-store handling; an OAuth JWKS served under a non-root base also
+uses no-store. Sanitized server errors discard their original body and headers.
+Audit Astro debug hooks, tail consumers, Logpush, other export destinations, proxies
 and edge logs separately before enabling private reads. Local middleware tests
 cannot establish what those systems record.
 

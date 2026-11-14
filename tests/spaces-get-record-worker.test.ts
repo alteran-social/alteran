@@ -83,9 +83,65 @@ Deno.test({
       expect(await thrown.text()).not.toContain('secret middleware failure');
       expect(thrown.headers.get('x-test-sensitive-log')).toBe('false');
       checkPrivateCors(thrown);
-      const preflight = await worker.dispatchFetch(path, { method: 'OPTIONS', headers: { origin: 'https://client.example' } });
+      for (const target of [
+        '/xrpc/com.atproto.space.createSpace', '/xrpc/com.atproto.memberspace.listMembers',
+        '/xrpc/com.atproto.personalspace.get', '/xrpc/com.atproto.managedspace.get',
+        '/xrpc/com%2eatproto.space.getRecord', '/xr%70c/com.atproto.space.getRecord',
+        '//xrpc/com.atproto.space.getRecord', '/pds/xrpc/com.atproto.space.getRecord/private-path-secret',
+        '/oauth/par', '/pds/oauth/token/private-path-secret',
+      ]) {
+        const failure = await worker.dispatchFetch(`https://pds.example${target}`, { headers: { 'x-test-mode': 'throw' } });
+        expect(failure.status).toBe(500);
+        expect(await failure.text()).not.toContain('secret middleware failure');
+        expect(failure.headers.get('x-test-sensitive-log')).toBe('false');
+        expect(failure.headers.get('x-test-path-log')).toBe('false');
+        expect(failure.headers.get('x-test-path-metric')).toBe('false');
+        checkPrivateCors(failure);
+      }
+      const publicFailure = await worker.dispatchFetch('https://pds.example/xrpc/com.atproto.repo.getRecord', {
+        headers: { 'x-test-mode': 'throw' },
+      });
+      expect(await publicFailure.text()).toContain('secret middleware failure');
+      expect(publicFailure.headers.get('x-test-sensitive-log')).toBe('true');
+      const jwks = await worker.dispatchFetch('https://pds.example/oauth/jwks', { headers: { 'x-test-mode': 'jwks-cache' } });
+      expect(jwks.headers.get('cache-control')).toBe('public, max-age=300');
+      const basedJwks = await worker.dispatchFetch('https://pds.example/pds/oauth/jwks', { headers: { 'x-test-mode': 'jwks-cache' } });
+      expect(basedJwks.headers.get('cache-control')).toBe('private, no-store');
+      const queriedJwks = await worker.dispatchFetch('https://pds.example/oauth/jwks?value=1', {
+        headers: { 'x-test-mode': 'jwks-cache' },
+      });
+      expect(queriedJwks.headers.get('cache-control')).toBe('private, no-store');
+      const disguisedJwks = await worker.dispatchFetch('https://pds.example/xrpc/com.atproto.space.getRecord/oauth/jwks', {
+        headers: { 'x-test-mode': 'jwks-cache' },
+      });
+      expect(disguisedJwks.headers.get('cache-control')).toBe('private, no-store');
+      await db.prepare(`INSERT INTO secret (key, value, updated_at) VALUES (?, ?, unixepoch())
+        ON CONFLICT (key) DO UPDATE SET value = excluded.value`).bind('oauth:as:signing-key', 'KEYSECRET__invalid_json').run();
+      const malformedJwks = await worker.dispatchFetch('https://pds.example/oauth/jwks', { headers: { 'x-test-mode': 'jwks-real' } });
+      expect(malformedJwks.status).toBe(500);
+      expect(await malformedJwks.text()).not.toContain('KEYSECRET');
+      expect(malformedJwks.headers.get('x-test-sensitive-log')).toBe('false');
+      expect(malformedJwks.headers.get('cache-control')).toBe('private, no-store');
+      await db.prepare('DELETE FROM secret WHERE key = ?').bind('oauth:as:signing-key').run();
+      const actualJwks = await worker.dispatchFetch('https://pds.example/oauth/jwks', { headers: { 'x-test-mode': 'jwks-real' } });
+      expect(actualJwks.status).toBe(200);
+      expect(actualJwks.headers.get('cache-control')).toBe('public, max-age=300');
+      for (const target of ['/oauth/par', '/xrpc/com.atproto.space.getRecord']) {
+        const failure = await worker.dispatchFetch(`https://pds.example${target}`, { headers: { 'x-test-mode': 'returned-500' } });
+        expect(failure.status).toBe(500);
+        expect(await failure.text()).not.toContain('secret middleware failure');
+        expect(failure.headers.get('x-private')).toBeNull();
+        expect(failure.headers.get('vary')).toBe('*');
+      }
+      const preflight = await worker.dispatchFetch(path, { method: 'OPTIONS', headers: {
+        origin: 'https://client.example', 'access-control-request-method': 'GET',
+        'access-control-request-headers': 'authorization,dpop,accept-signature',
+      } });
       expect(preflight.status).toBe(204);
       expect(preflight.headers.get('access-control-allow-origin')).toBe('*');
+      expect(preflight.headers.get('cache-control')).toBe('private, no-store');
+      const allowed = preflight.headers.get('access-control-allow-headers')?.toLowerCase().split(',').map((x) => x.trim()) ?? [];
+      for (const header of ['authorization', 'dpop', 'accept-signature']) expect(allowed).toContain(header);
     } finally {
       await worker.dispose();
       await Deno.remove(temp, { recursive: true });

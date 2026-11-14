@@ -3,6 +3,8 @@ import { env as cloudflareEnv } from 'cloudflare:workers';
 import type { Env } from './env';
 import { resolveEnvSecrets } from './lib/secrets';
 import { mergeHeaderTokens } from './lib/http-headers';
+import { isCanonicalJwksGet, isPrivateProtocolPath, privateProtocolMethod } from './lib/private-protocol-path';
+import { securePrivateProtocolHeaders, securePrivateProtocolResponse } from './lib/private-protocol-response';
 
 // Response.redirect() (and a few other constructors) returns a Response whose
 // headers are immutable. Re-wrap into a fresh Response so downstream middleware
@@ -13,7 +15,8 @@ function ensureMutableResponse(response: Response): Response {
 }
 
 const cors = defineMiddleware(async ({ request }, next) => {
-  const isPrivateSpaceRead = new URL(request.url).pathname === '/xrpc/com.atproto.space.getRecord';
+  const privateProtocol = isPrivateProtocolPath(new URL(request.url).pathname);
+  const jwksGet = isCanonicalJwksGet(request);
   // Match atproto CORS implementation: use wildcard for public endpoints
   // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin
   // For requests without credentials, "*" can be specified as a wildcard
@@ -25,11 +28,12 @@ const cors = defineMiddleware(async ({ request }, next) => {
       'Access-Control-Allow-Origin': '*',
       // Use wildcard for methods (atproto standard)
       'Access-Control-Allow-Methods': '*',
-      // Use wildcard for headers to allow atproto-accept-labelers and other custom headers
-      'Access-Control-Allow-Headers': '*',
+      // Authorization is a non-wildcard request header in the Fetch standard.
+      'Access-Control-Allow-Headers': '*, Authorization, DPoP, Content-Type, Accept-Signature',
       // Match atproto: 1 day max-age for CORS preflight cache
       'Access-Control-Max-Age': '86400',
     });
+    if (privateProtocol) securePrivateProtocolHeaders(headers);
     return new Response(null, { status: 204, headers });
   }
 
@@ -39,12 +43,13 @@ const cors = defineMiddleware(async ({ request }, next) => {
   // reaches us here.
   let response: Response;
   try {
-    response = ensureMutableResponse(await next());
+    const downstream = await next();
+    response = privateProtocol ? securePrivateProtocolResponse(downstream, jwksGet) : ensureMutableResponse(downstream);
   } catch (error) {
     response = new Response(
       JSON.stringify({
         error: 'InternalError',
-        message: isPrivateSpaceRead ? 'Internal server error' :
+        message: privateProtocol ? 'Internal server error' :
           error instanceof Error ? error.message : 'Internal server error',
       }),
       { status: 500, headers: { 'Content-Type': 'application/json' } },
@@ -53,10 +58,7 @@ const cors = defineMiddleware(async ({ request }, next) => {
 
   // Set CORS headers on all responses (atproto standard)
   response.headers.set('Access-Control-Allow-Origin', '*');
-  if (isPrivateSpaceRead) {
-    response.headers.set('Cache-Control', 'private, no-store');
-    mergeHeaderTokens(response.headers, 'Vary', ['Accept-Signature', 'Authorization', 'DPoP']);
-  }
+  if (privateProtocol) securePrivateProtocolHeaders(response.headers, jwksGet && response.status === 200);
 
   // Expose DPoP-Nonce header for OAuth clients (atproto standard)
   // This allows clients to read the DPoP-Nonce header from responses
@@ -87,6 +89,9 @@ const logger = defineMiddleware(async ({ request, locals }, next) => {
 
   const start = Date.now();
   const url = new URL(request.url);
+  const privateProtocol = isPrivateProtocolPath(url.pathname);
+  const path = privateProtocol ? '[private-protocol]' : url.pathname;
+  const method = privateProtocol ? privateProtocolMethod(request.method) : request.method;
 
   try {
     const response = ensureMutableResponse(await next());
@@ -97,8 +102,8 @@ const logger = defineMiddleware(async ({ request, locals }, next) => {
       level: 'info',
       type: 'request',
       requestId: rid,
-      method: request.method,
-      path: url.pathname,
+      method,
+      path,
       status: response.status,
       duration: dur,
       timestamp: new Date().toISOString(),
@@ -107,7 +112,7 @@ const logger = defineMiddleware(async ({ request, locals }, next) => {
     // Track metrics (import dynamically to avoid circular deps)
     try {
       const { trackRequest } = await import('./lib/metrics');
-      trackRequest(request.method, url.pathname, response.status, dur);
+      trackRequest(method, path, response.status, dur);
     } catch (e) {
       // Metrics are optional, don't fail request
     }
@@ -118,25 +123,23 @@ const logger = defineMiddleware(async ({ request, locals }, next) => {
     return response;
   } catch (error) {
     const dur = Date.now() - start;
-    const isPrivateSpaceRead = url.pathname === '/xrpc/com.atproto.space.getRecord';
-
     // Log error
     console.log(JSON.stringify({
       level: 'error',
       type: 'request',
       requestId: rid,
-      method: request.method,
-      path: url.pathname,
+      method,
+      path,
       duration: dur,
-      error: isPrivateSpaceRead ? 'Private request failed' : error instanceof Error ? error.message : String(error),
-      stack: !isPrivateSpaceRead && error instanceof Error ? error.stack : undefined,
+      error: privateProtocol ? 'Private request failed' : error instanceof Error ? error.message : String(error),
+      stack: !privateProtocol && error instanceof Error ? error.stack : undefined,
       timestamp: new Date().toISOString(),
     }));
 
     // Track error metrics
     try {
       const { trackRequest } = await import('./lib/metrics');
-      trackRequest(request.method, url.pathname, 500, dur);
+      trackRequest(method, path, 500, dur);
     } catch (e) {
       // Metrics are optional
     }

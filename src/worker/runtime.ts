@@ -4,6 +4,8 @@ import { validateConfigOrThrow } from '../lib/config';
 import { resolveEnvSecrets } from '../lib/secrets';
 import { notifyRelaysIfNeeded } from '../lib/relay';
 import { normalizePdsRequestForAstro } from './normalize-request';
+import { isCanonicalJwksGet, isPrivateProtocolPath } from '../lib/private-protocol-path';
+import { privateProtocolFailure, securePrivateProtocolResponse } from '../lib/private-protocol-response';
 import type { Env } from '../env';
 import type {
   ExecutionContext,
@@ -22,7 +24,7 @@ export type PdsFetchHandler = (
  * compose it inside their own Cloudflare Worker entrypoint.
  */
 export function createPdsFetchHandler(): PdsFetchHandler {
-  return async function fetch(request: WorkersRequest, env: Env, ctx: ExecutionContext) {
+  async function handlePds(request: WorkersRequest, env: Env, ctx: ExecutionContext) {
     // Resolve any Secret Store bindings to strings so downstream code can
     // treat secrets uniformly regardless of source (Secret or Secret Store).
     const resolvedEnv = await resolveEnvSecrets(env);
@@ -62,7 +64,7 @@ export function createPdsFetchHandler(): PdsFetchHandler {
       const headers = new Headers({
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': '*',
-        'Access-Control-Allow-Headers': '*',
+        'Access-Control-Allow-Headers': '*, Authorization, DPoP, Content-Type, Accept-Signature',
         'Access-Control-Max-Age': '86400',
       });
       return new Response(null, { status: 204, headers }) as unknown as WorkersResponse;
@@ -138,6 +140,17 @@ export function createPdsFetchHandler(): PdsFetchHandler {
       ctx as any,
     );
     return response as unknown as WorkersResponse;
+  }
+  return async function fetch(request, env, ctx) {
+    const privateProtocol = isPrivateProtocolPath(new URL(request.url).pathname);
+    if (!privateProtocol) return handlePds(request, env, ctx);
+    try {
+      const response = await handlePds(request, env, ctx);
+      return securePrivateProtocolResponse(response as unknown as Response,
+        isCanonicalJwksGet(request as unknown as Request)) as unknown as WorkersResponse;
+    } catch {
+      return privateProtocolFailure() as unknown as WorkersResponse;
+    }
   };
 }
 
