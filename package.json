@@ -28,6 +28,7 @@
   "scripts": {},
   "devDependencies": {
     "@astrojs/cloudflare": "^13.5.1",
+    "@atproto/oauth-scopes": "0.0.0-spaces-alpha-20261113224550",
     "@cloudflare/vite-plugin": "^1.37.0",
     "drizzle-kit": "^0.31.10",
     "miniflare": "^3.20250718.3",

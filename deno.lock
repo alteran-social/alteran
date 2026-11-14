@@ -14,6 +14,7 @@
     "npm:@atproto/did@0.0.0-spaces-alpha-20261113224550": "0.0.0-spaces-alpha-20261113224550",
     "npm:@atproto/lex-cbor@0.0.0-spaces-alpha-20261113224550": "0.0.0-spaces-alpha-20261113224550",
     "npm:@atproto/lex-document@0.0.0-spaces-alpha-20261113224550": "0.0.0-spaces-alpha-20261113224550",
+    "npm:@atproto/oauth-scopes@0.0.0-spaces-alpha-20261113224550": "0.0.0-spaces-alpha-20261113224550",
     "npm:@atproto/repo@0.0.0-spaces-alpha-20261113224550": "0.0.0-spaces-alpha-20261113224550",
     "npm:@atproto/space@0.0.0-spaces-alpha-20261113224550": "0.0.0-spaces-alpha-20261113224550",
     "npm:@atproto/syntax@0.0.0-spaces-alpha-20261113224550": "0.0.0-spaces-alpha-20261113224550",
@@ -34,6 +35,7 @@
     "npm:drizzle-orm@~0.44.7": "0.44.7_@cloudflare+workers-types@4.20260511.1",
     "npm:get-port@^7.2.0": "7.2.0",
     "npm:hono@^4.12.18": "4.12.18",
+    "npm:jose@5.10.0": "5.10.0",
     "npm:jose@^5.10.0": "5.10.0",
     "npm:miniflare@^3.20250718.3": "3.20250718.3",
     "npm:multiformats@13.4.2": "13.4.2",
@@ -308,6 +310,13 @@
         "iso-datestring-validator",
         "multiformats@9.9.0",
         "zod@3.25.76"
+      ]
+    },
+    "@atproto/oauth-scopes@0.0.0-spaces-alpha-20261113224550": {
+      "integrity": "sha512-cyLK+jIX2YtWvtAeaQC4hwMXQRZd0fO1PSwNpwDtU9vM+OcNFmsiIIYw6aoOayazn2dIjU58s0CFG/udX4MA2A==",
+      "dependencies": [
+        "@atproto/did",
+        "@atproto/syntax@0.0.0-spaces-alpha-20261113224550"
       ]
     },
     "@atproto/repo@0.0.0-spaces-alpha-20261113224550": {
@@ -4136,6 +4145,7 @@
         "npm:@atproto/did@0.0.0-spaces-alpha-20261113224550",
         "npm:@atproto/lex-cbor@0.0.0-spaces-alpha-20261113224550",
         "npm:@atproto/lex-document@0.0.0-spaces-alpha-20261113224550",
+        "npm:@atproto/oauth-scopes@0.0.0-spaces-alpha-20261113224550",
         "npm:@atproto/repo@0.0.0-spaces-alpha-20261113224550",
         "npm:@atproto/space@0.0.0-spaces-alpha-20261113224550",
         "npm:@atproto/syntax@0.0.0-spaces-alpha-20261113224550",
