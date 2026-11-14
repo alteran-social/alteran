@@ -24,3 +24,11 @@ jobs:
         run: deno task test
       - name: Typecheck
         run: deno task check
+      - name: Test Worker request signals and private reads
+        env:
+          ALTERAN_LIVE_REQUEST_SIGNAL_TEST: '1'
+          RUN_APP_TESTS: 'true'
+        run: |
+          export MINIFLARE_WORKERD_PATH="$(deno eval --frozen 'import workerd from "npm:workerd@1.20260511.1"; console.log(workerd.default)')"
+          test -x "$MINIFLARE_WORKERD_PATH"
+          deno test -A --no-check tests/spaces-request-signal.test.ts tests/spaces-built-worker.e2e.test.ts

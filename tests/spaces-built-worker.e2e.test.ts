@@ -13,6 +13,7 @@ import { encode } from '@atproto/lex-cbor';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { CID } from 'multiformats/cid';
 import { create as createDigest } from 'multiformats/hashes/digest';
+import { readWranglerCompatibility } from './helpers/wrangler-compatibility';
 
 Deno.test({
   name: 'built Astro worker routes authorized private Space reads',
@@ -25,6 +26,15 @@ Deno.test({
       cwd: root, args: ['task', 'build'], stdout: 'piped', stderr: 'piped',
     }).output();
     if (!build.success) throw new Error(`Astro build failed: ${new TextDecoder().decode(build.stderr)}`);
+    const compatibility = await readWranglerCompatibility(root);
+    const generated: unknown = JSON.parse(await Deno.readTextFile(join(root, 'dist/server/wrangler.json')));
+    if (!generated || typeof generated !== 'object' || Array.isArray(generated)) {
+      throw new Error('Invalid generated Worker configuration');
+    }
+    const config = generated as Record<string, unknown>;
+    expect(config.compatibility_date).toBe(compatibility.compatibilityDate);
+    expect(Array.isArray(config.compatibility_flags) &&
+      compatibility.compatibilityFlags.every((flag) => (config.compatibility_flags as unknown[]).includes(flag))).toBe(true);
 
     const bindings = {
       PDS_DID: 'did:example:test', PDS_HANDLE: 'test.example', USER_PASSWORD: 'pwd',
@@ -42,7 +52,7 @@ Deno.test({
     }
     const worker = new Miniflare({
       modules, modulesRoot: join(root, 'dist/server'),
-      compatibilityDate: '2025-09-27', compatibilityFlags: ['nodejs_compat'],
+      ...compatibility,
       d1Databases: { ALTERAN_DB: ':memory:' }, r2Buckets: ['ALTERAN_BLOBS'], bindings,
     });
     try {
@@ -67,6 +77,24 @@ Deno.test({
       expect((await unauthorized.json() as { error: string }).error).toBe('AuthRequired');
 
       const privateKey = await importJWK(config.privateJwk, 'ES256');
+      const describe = await worker.dispatchFetch('https://pds.example/xrpc/com.atproto.server.describeServer');
+      expect(describe.status).toBe(200);
+      const tokenPath = 'https://pds.example/oauth/token';
+      for (const origin of [undefined, 'https://pds.example', 'https://client.example']) {
+        const tokenProof = await new SignJWT({ htm: 'POST', htu: tokenPath, iat: Math.floor(Date.now() / 1000),
+          jti: crypto.randomUUID() })
+          .setProtectedHeader({ typ: 'dpop+jwt', alg: 'ES256', jwk: config.publicJwk }).sign(privateKey);
+        const headers = new Headers({ 'content-type': 'application/x-www-form-urlencoded', dpop: tokenProof });
+        if (origin) headers.set('origin', origin);
+        const token = await worker.dispatchFetch(tokenPath, { method: 'POST', headers, body: 'grant_type=unsupported' });
+        expect(token.status).toBe(400);
+        expect((await token.json() as { error: string }).error).toBe('unsupported_grant_type');
+      }
+      const consentResponse = await worker.dispatchFetch('https://pds.example/oauth/consent', {
+        method: 'POST', headers: { origin: 'https://client.example', 'content-type': 'application/x-www-form-urlencoded' },
+        body: 'decision=approve',
+      });
+      expect(consentResponse.status).toBe(403);
       const proof = await new SignJWT({ htm: 'GET', htu: path, iat: Math.floor(Date.now() / 1000),
         jti: crypto.randomUUID(), nonce: config.nonce, ath: await sha256b64url(config.access) })
         .setProtectedHeader({ typ: 'dpop+jwt', alg: 'ES256', jwk: config.publicJwk }).sign(privateKey);

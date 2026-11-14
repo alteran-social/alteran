@@ -225,6 +225,21 @@ Audit Astro debug hooks, tail consumers, Logpush, other export destinations, pro
 and edge logs separately before enabling private reads. Local middleware tests
 cannot establish what those systems record.
 
+The supplied Worker enables Cloudflare's `enable_request_signal` compatibility
+flag so an incoming request can observe a client disconnect. The local
+`spaces-request-signal.test.ts` exercises a socket disconnect through the Worker
+request normalization, and CI runs it with a compatible workerd. This does not
+establish the timing or delivery of disconnects in a deployed Worker. A signal
+also does not cancel an already dispatched D1 query or establish rollback;
+authorization and completion checks remain necessary. Outbound operations
+must receive a signal explicitly if they need to observe it.
+
+Alteran is also an Astro integration: an application using the package must
+configure its own Worker to enable incoming request signals (or choose a
+compatibility date where Cloudflare enables them by default). The repository's
+Wrangler configuration does not configure the consuming application. Verify
+the flag, intermediary behavior and in-flight operations in each deployment.
+
 The experimental request-wide scope resolver permits at most two distinct
 declaration-backed Space types per request, resolved serially under one
 deadline. This deliberately limits interoperability until aggregate Worker
