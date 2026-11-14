@@ -47,7 +47,7 @@ describe('unsupported Spaces endpoints', () => {
               } else {
                 expect(await response.json()).toEqual({
                   error: 'NotImplemented',
-                  message: 'AT Protocol Spaces are not supported by this PDS',
+                  message: 'This AT Protocol Spaces endpoint is not supported by this PDS',
                 });
               }
             }

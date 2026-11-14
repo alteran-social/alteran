@@ -35,7 +35,7 @@ async function handle({ locals, request, params }: APIContext): Promise<Response
   if (isSpaceRoute(nsid)) {
     const body = JSON.stringify({
       error: 'NotImplemented',
-      message: 'AT Protocol Spaces are not supported by this PDS',
+      message: 'This AT Protocol Spaces endpoint is not supported by this PDS',
     });
     return new Response(request.method === 'HEAD' ? null : body, {
       status: 501,
