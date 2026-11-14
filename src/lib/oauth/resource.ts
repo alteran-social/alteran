@@ -147,7 +147,14 @@ export async function verifyResourceRequest(env: Env, request: Request): Promise
   return null;
 }
 
-async function verifyDpopAccess(env: Env, request: Request, accessToken: string) {
+async function verifyDpopAccess(sourceEnv: Env, request: Request, accessToken: string) {
+  const database = sourceEnv.ALTERAN_DB;
+  // All admission reads and the replay claim must use the same D1 binding.
+  const env = new Proxy(sourceEnv, {
+    get(target, property) {
+      return property === 'ALTERAN_DB' ? database : Reflect.get(target, property, target);
+    },
+  });
   const nonce = await getNonce(env);
   const dpop = request.headers.get('DPoP');
   if (!dpop) {
@@ -214,21 +221,24 @@ async function verifyDpopAccess(env: Env, request: Request, accessToken: string)
     scope: tokenPayload.scope, expiresAt: tokenPayload.exp,
     ...(spaceGrant && { spaceGrant }),
   });
+  if (sourceEnv.ALTERAN_DB !== database) throw new ResourceAuthError('invalid_token');
+  const access = await withResolvedResourceAccountStatus(
+    env,
+    tokenPayload.sub as string,
+    oauthAccessContext(String(tokenPayload.scope)),
+  );
+  if (sourceEnv.ALTERAN_DB !== database) throw new ResourceAuthError('invalid_token');
   const spacePrincipal = spaceGrant ? createVerifiedSpacePrincipal({
     sessionId, accessJti, did: tokenPayload.sub, clientId, jkt: tokenJkt,
     scope: tokenPayload.scope, expiresAt: tokenPayload.exp, proofIssuedAt: payload.iat, grant: spaceGrant,
-  }, request, env.ALTERAN_DB) : undefined;
+  }, request, database) : undefined;
   return {
     did: tokenPayload.sub as string,
     token: accessToken,
     scope: typeof tokenPayload.scope === 'string' ? tokenPayload.scope : undefined,
     authType: 'oauth-dpop' as const,
     ...(spacePrincipal && { spacePrincipal }),
-    access: await withResolvedResourceAccountStatus(
-      env,
-      tokenPayload.sub as string,
-      oauthAccessContext(String(tokenPayload.scope)),
-    ),
+    access,
   };
 }
 
