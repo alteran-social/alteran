@@ -96,6 +96,66 @@ describe('space storage', () => {
     await expectError(() => getSpaceRecord(env, spaceA, 'did:example:other', collection, 'same'), 'RepoNotFound');
   });
 
+  it('captures writes and nested records before awaiting account authorization', async () => {
+    const env = await makeEnv();
+    await createLocalSpace(env, spaceA);
+    const link = CID.createV1(0x55, await sha256.digest(new TextEncoder().encode('linked'))).toString();
+    const input = { $type: collection, nested: { text: 'original', bytes: { $bytes: 'YWJj' }, link: { $link: link } } };
+    const write = create('first', input);
+    const writes = [write];
+    let resolveDid: (value: string) => void = () => { throw new Error('Missing resolver'); };
+    const secret = new Promise<string>((resolve) => { resolveDid = resolve; });
+    const pending = applySpaceWrites({ ...env, PDS_DID: { get: () => secret } }, spaceA, did, writes);
+    write.rkey = 'changed';
+    input.nested.text = 'changed';
+    input.nested.bytes.$bytes = 'eHl6';
+    input.nested.link.$link = CID.createV1(0x55, await sha256.digest(new TextEncoder().encode('other'))).toString();
+    writes.splice(0, 1, create('second', record('other')));
+    resolveDid(did);
+    await pending;
+    const stored = await getSpaceRecord(env, spaceA, did, collection, 'first');
+    const decoded = dagCbor.decode(stored!.value) as { nested: { text: string; bytes: Uint8Array; link: CID } };
+    expect(decoded.nested.text).toBe('original');
+    expect([...decoded.nested.bytes]).toEqual([97, 98, 99]);
+    expect(decoded.nested.link.toString()).toBe(link);
+    expect(await getSpaceRecord(env, spaceA, did, collection, 'changed')).toBeNull();
+    expect(await getSpaceRecord(env, spaceA, did, collection, 'second')).toBeNull();
+  });
+
+  it('rejects complex record values and accessors without reading them', async () => {
+    const env = await makeEnv();
+    await createLocalSpace(env, spaceA);
+    let getterCalls = 0;
+    const accessor = Object.defineProperty({}, 'value', { enumerable: true, get: () => { getterCalls++; return 'secret'; } });
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    const link = CID.createV1(0x55, await sha256.digest(new TextEncoder().encode('linked')));
+    for (const value of [accessor, cycle, new Uint8Array([1, 2]), link, new Date()]) {
+      await expectError(() => applySpaceWrites(env, spaceA, did, [create('bad', { $type: collection, value })]), 'InvalidRequest');
+    }
+    expect(getterCalls).toBe(0);
+    expect(await getSpaceRecord(env, spaceA, did, collection, 'bad')).toBeNull();
+  });
+
+  it('bounds input size, node count and nesting before asynchronous work', async () => {
+    const env = await makeEnv();
+    await createLocalSpace(env, spaceA);
+    let secretReads = 0;
+    const guardedEnv = { ...env, PDS_DID: { get: () => { secretReads++; return Promise.resolve(did); } } };
+    const tooDeep: Record<string, unknown> = {};
+    let current = tooDeep;
+    for (let index = 0; index < 101; index++) {
+      const child: Record<string, unknown> = {};
+      current.child = child;
+      current = child;
+    }
+    for (const value of ['x'.repeat(4_000_001), Array(200_001).fill(null), tooDeep]) {
+      await expectError(() => applySpaceWrites(guardedEnv, spaceA, did, [create('bad', { $type: collection, value })]), 'InvalidRequest');
+    }
+    expect(secretReads).toBe(0);
+    expect(await getSpaceRecord(env, spaceA, did, collection, 'bad')).toBeNull();
+  });
+
   it('applies repeated paths in order and rolls back an invalid batch', async () => {
     const env = await makeEnv();
     await createLocalSpace(env, spaceA);
@@ -157,7 +217,7 @@ describe('space storage', () => {
     expect(spaceSetHashDigest(Uint8Array.from(stateRow!.set_hash))).toEqual(spaceSetHashDigest(expected));
   });
 
-  it('rejects a stale snapshot after a repo row is recreated at the same generation', async () => {
+  it('retains the repo tombstone and rejects a stale same-generation nonce', async () => {
     const env = await makeEnv();
     await createLocalSpace(env, spaceA);
     const first = await applySpaceWrites(env, spaceA, did, [create('key', record('initial'))]);
@@ -167,34 +227,21 @@ describe('space storage', () => {
     const staleWrite: PreparedSpaceWrite = { ...staleCreate, action: 'update' };
     const snapshot = await loadSpaceSnapshot(env, ref, did, [staleWrite]);
 
-    const [replacementCid, replacementValue] = await encodeRecordBlock(record('replacement'));
-    const replacementHash = applySpaceSetHashChanges(null, [{
-      action: 'add', element: spaceRecordHashElement(collection, 'key', replacementCid.toString()),
-    }]);
-    const replacementRev = nextSpaceRevision(first!.rev);
     const replacementId = crypto.randomUUID();
-    await env.ALTERAN_DB.batch([
-      env.ALTERAN_DB.prepare('DELETE FROM space_repo WHERE space_ref = ? AND repo_did = ?').bind(spaceA, did),
-      env.ALTERAN_DB.prepare(
-        `INSERT INTO space_repo (space_ref, repo_did, rev, set_hash, generation, mutation_id)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      ).bind(spaceA, did, replacementRev, replacementHash, 1, replacementId),
-      env.ALTERAN_DB.prepare(
-        `UPDATE space_record SET cid = ?, value_cbor = ?, repo_rev = ?
-         WHERE space_ref = ? AND repo_did = ? AND collection = ? AND rkey = ?`,
-      ).bind(replacementCid.toString(), new Uint8Array(replacementValue).buffer, replacementRev, spaceA, did, collection, 'key'),
-    ]);
+    await expect(env.ALTERAN_DB.prepare('DELETE FROM space_repo WHERE space_ref = ? AND repo_did = ?')
+      .bind(spaceA, did).run()).rejects.toThrow();
+    await env.ALTERAN_DB.prepare('UPDATE space_repo SET mutation_id = ? WHERE space_ref = ? AND repo_did = ?')
+      .bind(replacementId, spaceA, did).run();
     expect((await commitSpaceWrites(env, ref, did, [staleWrite], snapshot)).tag).toBe('conflict');
     const stored = await getSpaceRecord(env, spaceA, did, collection, 'key');
-    expect(stored!.cid).toBe(replacementCid.toString());
-    expect(dagCbor.decode(stored!.value)).toMatchObject(record('replacement'));
+    expect(dagCbor.decode(stored!.value)).toMatchObject(record('initial'));
     const repo = await env.ALTERAN_DB.prepare(
       'SELECT rev, generation, mutation_id, set_hash FROM space_repo WHERE space_ref = ? AND repo_did = ?',
     ).bind(spaceA, did).first<{ rev: string; generation: number; mutation_id: string; set_hash: number[] }>();
-    expect(repo!.rev).toBe(replacementRev);
+    expect(repo!.rev).toBe(first!.rev);
     expect(repo!.generation).toBe(1);
     expect(repo!.mutation_id).toBe(replacementId);
-    expect(Uint8Array.from(repo!.set_hash)).toEqual(replacementHash);
+    expect(Uint8Array.from(repo!.set_hash)).toEqual(first!.setHash);
     const operations = await env.ALTERAN_DB.prepare('SELECT COUNT(*) AS count FROM space_op WHERE space_ref = ?')
       .bind(spaceA).first<{ count: number }>();
     expect(operations!.count).toBe(1);

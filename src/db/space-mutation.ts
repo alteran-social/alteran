@@ -12,6 +12,8 @@ import {
   type SpaceSetHashChange,
 } from '../lib/spaces/lthash';
 import { nextSpaceRevision } from './space-tid';
+import { assertLocalSpaceRepo, parseSpaceRef } from './space-ref';
+import { ownSpaceWriteValue, spaceWriteArrayLength } from './space-write-input';
 import {
   MAX_SPACE_WRITE_BYTES,
   MAX_SPACE_WRITES,
@@ -24,8 +26,8 @@ import {
 } from './space-types';
 
 type Snapshot = {
-  readonly repo: (SpaceRepoState & { readonly mutationId: string }) | null;
-  readonly records: ReadonlyMap<string, string>;
+  readonly repo: (SpaceRepoState & { readonly mutationId: string; readonly epochId: string }) | null;
+  readonly records: ReadonlyMap<string, { readonly cid: string; readonly fromGeneration: number }>;
 };
 
 type CommitResult =
@@ -34,7 +36,28 @@ type CommitResult =
 
 const GUARD = `EXISTS (
   SELECT 1 FROM space_repo
-  WHERE space_ref = ? AND repo_did = ? AND generation = ? AND mutation_id = ?
+  WHERE space_ref = ? AND repo_did = ? AND generation = ? AND mutation_id = ? AND active_epoch_id = ?
+    AND rev = ? AND set_hash = ?
+)`;
+
+const WON_GUARD = `(${GUARD} AND EXISTS (
+  SELECT 1 FROM space_commit_assertion WHERE mutation_id = ?
+))`;
+
+const EFFECT_GUARD = `(${WON_GUARD} AND EXISTS (
+  SELECT 1 FROM space_epoch e WHERE e.id = ? AND e.space_ref = ? AND e.repo_did = ? AND e.state = 'active'
+))`;
+
+const RECORDS_MATCH = `NOT EXISTS (
+  SELECT 1 FROM json_each(?) requested
+  LEFT JOIN space_record r ON r.space_ref = ? AND r.repo_did = ?
+    AND r.collection = json_extract(requested.value, '$.collection') AND r.rkey = json_extract(requested.value, '$.rkey')
+  LEFT JOIN space_record_version v ON v.epoch_id = ? AND v.space_ref = ? AND v.repo_did = ?
+    AND v.path = json_extract(requested.value, '$.path') AND v.until_generation IS NULL
+  WHERE r.cid IS NOT json_extract(requested.value, '$.cid')
+    OR v.cid IS NOT json_extract(requested.value, '$.cid')
+    OR v.from_generation IS NOT json_extract(requested.value, '$.fromGeneration')
+    OR (r.cid IS NOT NULL AND (r.value_cbor IS NOT v.value_cbor OR r.repo_rev IS NOT v.repo_rev))
 )`;
 
 const SPACE_AVAILABLE = `(
@@ -48,21 +71,42 @@ export async function loadSpaceSnapshot(
   repoDid: string,
   writes: readonly PreparedSpaceWrite[],
 ): Promise<Snapshot> {
-  const paths = JSON.stringify(writes.map(({ collection, rkey }) => [collection, rkey]));
+  ref = parseSpaceRef(ref.ref);
+  const count = spaceWriteArrayLength(writes);
+  const requested: [string, string][] = [];
+  for (let index = 0; index < count; index++) {
+    const write = ownSpaceWriteValue(writes, String(index));
+    if (!isPlainRecord(write)) throw new SpaceStorageError('InvalidRequest', 'Invalid space write');
+    const collection = ownSpaceWriteValue(write, 'collection');
+    const rkey = ownSpaceWriteValue(write, 'rkey');
+    if (typeof collection !== 'string' || typeof rkey !== 'string' ||
+      !isValidNsid(collection) || !isValidRecordKey(rkey)) {
+      throw new SpaceStorageError('InvalidRequest', 'Invalid space write');
+    }
+    requested.push([collection, rkey]);
+  }
+  const paths = JSON.stringify(requested);
+  await assertLocalSpaceRepo(env, repoDid);
   const [spaceResult, repoResult, recordResult] = await env.ALTERAN_DB.batch([
     env.ALTERAN_DB.prepare('SELECT deleted_at FROM space WHERE space_ref = ?').bind(ref.ref),
     env.ALTERAN_DB.prepare(
-      'SELECT rev, set_hash, generation, mutation_id FROM space_repo WHERE space_ref = ? AND repo_did = ?',
+      `SELECT h.rev, h.set_hash, h.generation, h.mutation_id, h.active_epoch_id, e.state AS epoch_state
+       FROM space_repo h LEFT JOIN space_epoch e ON e.id = h.active_epoch_id
+         AND e.space_ref = h.space_ref AND e.repo_did = h.repo_did
+       WHERE h.space_ref = ? AND h.repo_did = ?`,
     ).bind(ref.ref, repoDid),
     env.ALTERAN_DB.prepare(
-      `SELECT collection, rkey, cid FROM space_record
-       WHERE space_ref = ? AND repo_did = ?
-         AND EXISTS (
-           SELECT 1 FROM json_each(?) path
-           WHERE json_extract(path.value, '$[0]') = space_record.collection
-             AND json_extract(path.value, '$[1]') = space_record.rkey
-         )`,
-    ).bind(ref.ref, repoDid, paths),
+      `SELECT json_extract(path.value, '$[0]') AS collection, json_extract(path.value, '$[1]') AS rkey,
+         r.cid, v.cid AS version_cid, v.from_generation,
+         (r.value_cbor IS v.value_cbor AND r.repo_rev IS v.repo_rev) AS consistent
+       FROM json_each(?) path
+       LEFT JOIN space_record r ON r.space_ref = ? AND r.repo_did = ?
+         AND r.collection = json_extract(path.value, '$[0]') AND r.rkey = json_extract(path.value, '$[1]')
+       LEFT JOIN space_repo h ON h.space_ref = ? AND h.repo_did = ?
+       LEFT JOIN space_record_version v ON v.epoch_id = h.active_epoch_id AND v.space_ref = h.space_ref
+         AND v.repo_did = h.repo_did AND v.path = json_extract(path.value, '$[0]') || '/' || json_extract(path.value, '$[1]')
+         AND v.until_generation IS NULL`,
+    ).bind(paths, ref.ref, repoDid, ref.ref, repoDid),
   ]);
   const space = spaceResult.results?.[0] as { deleted_at: number | null } | undefined;
   if ((space && space.deleted_at !== null) || (!space && ref.authorityDid === repoDid)) {
@@ -73,12 +117,19 @@ export async function loadSpaceSnapshot(
     set_hash: number[];
     generation: number;
     mutation_id: string;
+    active_epoch_id: string | null;
+    epoch_state: string | null;
   } | undefined;
   const repo = row ? decodeRepoState(row) : null;
-  const records = new Map<string, string>();
+  const records = new Map<string, { cid: string; fromGeneration: number }>();
   for (const record of recordResult.results ?? []) {
-    const typed = record as { collection: string; rkey: string; cid: string };
-    records.set(recordPath(typed.collection, typed.rkey), typed.cid);
+    const typed = record as { collection: string; rkey: string; cid: string | null; version_cid: string | null; from_generation: number | null; consistent: number };
+    if (typed.cid !== typed.version_cid || (typed.cid !== null && (!typed.consistent || !Number.isSafeInteger(typed.from_generation)))) {
+      throw new SpaceStorageError('InvalidRepoState', 'Current space record differs from its version');
+    }
+    if (typed.cid !== null && typed.from_generation !== null) {
+      records.set(recordPath(typed.collection, typed.rkey), { cid: typed.cid, fromGeneration: typed.from_generation });
+    }
   }
   return { repo, records };
 }
@@ -90,28 +141,57 @@ export async function commitSpaceWrites(
   writes: readonly PreparedSpaceWrite[],
   snapshot: Snapshot,
 ): Promise<CommitResult> {
-  if (writes.length === 0 || writes.length > MAX_SPACE_WRITES) {
+  ref = parseSpaceRef(ref.ref);
+  const writeCount = spaceWriteArrayLength(writes);
+  if (writeCount === 0) {
     throw new SpaceStorageError('InvalidRequest', 'Invalid number of space writes');
+  }
+  if (snapshot.records.size > MAX_SPACE_WRITES || (snapshot.repo &&
+    (!(snapshot.repo.setHash instanceof Uint8Array) || snapshot.repo.setHash.byteLength !== 2048))) {
+    throw new SpaceStorageError('InvalidRepoState', 'Invalid space snapshot');
+  }
+  snapshot = {
+    repo: snapshot.repo ? { ...snapshot.repo, setHash: new Uint8Array(snapshot.repo.setHash) } : null,
+    records: new Map([...snapshot.records].map(([path, record]) => [path, { ...record }])),
+  };
+  if (!snapshot.repo && snapshot.records.size !== 0) {
+    throw new SpaceStorageError('InvalidRepoState', 'Missing repo has snapshot records');
   }
   let recordBytes = 0;
   const stagedWrites: PreparedSpaceWrite[] = [];
-  for (const write of writes) {
-    if (!isValidNsid(write.collection) || !isValidRecordKey(write.rkey) ||
-      (write.action !== 'create' && write.action !== 'update' && write.action !== 'delete')) {
+  for (let index = 0; index < writeCount; index++) {
+    const write = ownSpaceWriteValue(writes, String(index));
+    if (!isPlainRecord(write)) throw new SpaceStorageError('InvalidRequest', 'Invalid space write');
+    const action = ownSpaceWriteValue(write, 'action');
+    const collection = ownSpaceWriteValue(write, 'collection');
+    const rkey = ownSpaceWriteValue(write, 'rkey');
+    if (typeof collection !== 'string' || typeof rkey !== 'string' || !isValidNsid(collection) || !isValidRecordKey(rkey) ||
+      (action !== 'create' && action !== 'update' && action !== 'delete')) {
       throw new SpaceStorageError('InvalidRequest', 'Invalid space write');
     }
-    if (write.action === 'delete') {
-      stagedWrites.push({ ...write });
+    if (action === 'delete') {
+      stagedWrites.push({ action, collection, rkey });
       continue;
     }
-    if (!(write.value instanceof Uint8Array)) {
+    const encoded = ownSpaceWriteValue(write, 'value');
+    const claimedCid = ownSpaceWriteValue(write, 'cid');
+    const blobs = ownSpaceWriteValue(write, 'blobs');
+    if (!ArrayBuffer.isView(encoded) || !(encoded instanceof Uint8Array) || typeof claimedCid !== 'string') {
       throw new SpaceStorageError('InvalidRequest', 'Invalid encoded space record');
     }
-    recordBytes += write.value.byteLength;
+    if (spaceWriteArrayLength(blobs) !== 0) {
+      throw new SpaceStorageError('BlobIntegrityUnavailable', 'Space blob storage is unavailable');
+    }
+    const byteLength = Reflect.get(Object.getPrototypeOf(Uint8Array.prototype), 'byteLength', encoded);
+    if (!Number.isSafeInteger(byteLength) || byteLength < 0) {
+      throw new SpaceStorageError('InvalidRequest', 'Invalid encoded space record');
+    }
+    recordBytes += byteLength;
     if (recordBytes > MAX_SPACE_WRITE_BYTES) {
       throw new SpaceStorageError('InvalidRequest', 'Space write batch is too large');
     }
-    const bytes = new Uint8Array(write.value);
+    const bytes = new Uint8Array(encoded);
+    if (bytes.byteLength !== byteLength) throw new SpaceStorageError('InvalidRequest', 'Invalid encoded space record');
     let value: unknown;
     let canonical: Uint8Array;
     try {
@@ -120,24 +200,26 @@ export async function commitSpaceWrites(
     } catch {
       throw new SpaceStorageError('InvalidRequest', 'Invalid encoded space record');
     }
-    if (!isPlainRecord(value) || value.$type !== write.collection) {
+    if (!isPlainRecord(value) || value.$type !== collection) {
       throw new SpaceStorageError('InvalidRequest', 'Invalid encoded space record');
     }
-    if (write.blobs.length || containsBlob(value)) {
+    if (containsBlob(value)) {
       throw new SpaceStorageError('BlobIntegrityUnavailable', 'Space blob storage is unavailable');
     }
     if (canonical.length !== bytes.length || canonical.some((byte, index) => byte !== bytes[index])) {
       throw new SpaceStorageError('InvalidRequest', 'Space record is not canonical DAG-CBOR');
     }
     const cid = CID.createV1(dagCbor.code, createDigest(0x12, sha256(bytes))).toString();
-    if (cid !== write.cid) throw new SpaceStorageError('InvalidRequest', 'Space record CID does not match its bytes');
-    stagedWrites.push({ ...write, value: bytes, blobs: [] });
+    if (cid !== claimedCid) throw new SpaceStorageError('InvalidRequest', 'Space record CID does not match its bytes');
+    stagedWrites.push({ action, collection, rkey, cid, value: bytes, blobs: [] });
   }
-  const records = new Map(snapshot.records);
+  const records = new Map([...snapshot.records].map(([path, record]) => [path, record.cid]));
+  const finalWrites = new Map<string, PreparedSpaceWrite>();
   const operations: SpaceOperation[] = [];
   const changes: SpaceSetHashChange[] = [];
   for (const write of stagedWrites) {
     const path = recordPath(write.collection, write.rkey);
+    finalWrites.set(path, write);
     const previous = records.get(path) ?? null;
     if (write.action === 'create' && previous) {
       throw new SpaceStorageError('RecordAlreadyExists', 'Record already exists');
@@ -159,59 +241,153 @@ export async function commitSpaceWrites(
   const state = applySpaceSetHashChanges(snapshot.repo?.setHash ?? null, changes);
   const rev = nextSpaceRevision(snapshot.repo?.rev ?? null);
   const generation = (snapshot.repo?.generation ?? 0) + 1;
+  if (!Number.isSafeInteger(generation)) throw new SpaceStorageError('InvalidRepoState', 'Space generation overflow');
   const mutationId = crypto.randomUUID();
-  const guard = [ref.ref, repoDid, generation, mutationId] as const;
+  const won = `${mutationId}:won`;
+  const lost = `${mutationId}:lost`;
+  const baselinePrefix = `${mutationId}:baseline:`;
+  const baselineGlob = `${baselinePrefix}*`;
+  const epochId = snapshot.repo?.epochId ?? crypto.randomUUID();
+  const guard = [ref.ref, repoDid, generation, mutationId, epochId, rev, state] as const;
+  const wonGuard = [...guard, won] as const;
+  const effectGuard = [...wonGuard, epochId, ref.ref, repoDid] as const;
   const availability = [ref.ref, ref.authorityDid, repoDid, ref.ref] as const;
+  const expectedRecords = JSON.stringify([...finalWrites].map(([path, write]) => ({
+    path, collection: write.collection, rkey: write.rkey,
+    cid: snapshot.records.get(path)?.cid ?? null,
+    fromGeneration: snapshot.records.get(path)?.fromGeneration ?? null,
+  })));
+  const expectedArguments = [expectedRecords, ref.ref, repoDid, epochId, ref.ref, repoDid] as const;
   const root = snapshot.repo
     ? env.ALTERAN_DB.prepare(
       `UPDATE space_repo SET rev = ?, set_hash = ?, generation = ?, mutation_id = ?
-       WHERE space_ref = ? AND repo_did = ? AND generation = ? AND mutation_id = ?
-         AND ${SPACE_AVAILABLE}`,
-    ).bind(rev, state, generation, mutationId, ref.ref, repoDid, snapshot.repo.generation, snapshot.repo.mutationId, ...availability)
+       WHERE space_ref = ? AND repo_did = ? AND generation = ? AND mutation_id = ? AND active_epoch_id = ?
+         AND rev IS ? AND set_hash = ?
+         AND EXISTS (SELECT 1 FROM space_epoch e WHERE e.id = ? AND e.space_ref = ? AND e.repo_did = ? AND e.state = 'active')
+         AND ${SPACE_AVAILABLE} AND ${RECORDS_MATCH}`,
+    ).bind(rev, state, generation, mutationId, ref.ref, repoDid, snapshot.repo.generation, snapshot.repo.mutationId,
+      epochId, snapshot.repo.rev, snapshot.repo.setHash, epochId, ref.ref, repoDid, ...availability, ...expectedArguments)
     : env.ALTERAN_DB.prepare(
-      `INSERT INTO space_repo (space_ref, repo_did, rev, set_hash, generation, mutation_id)
-       SELECT ?, ?, ?, ?, ?, ? WHERE ${SPACE_AVAILABLE}
+      `INSERT INTO space_repo (space_ref, repo_did, rev, set_hash, generation, mutation_id, active_epoch_id)
+       SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${SPACE_AVAILABLE}
+         AND NOT EXISTS (SELECT 1 FROM space_epoch WHERE space_ref = ? AND repo_did = ?)
+         AND NOT EXISTS (SELECT 1 FROM space_record WHERE space_ref = ? AND repo_did = ?)
        ON CONFLICT(space_ref, repo_did) DO NOTHING`,
-    ).bind(ref.ref, repoDid, rev, state, generation, mutationId, ...availability);
+    ).bind(ref.ref, repoDid, rev, state, generation, mutationId, epochId, ...availability, ref.ref, repoDid, ref.ref, repoDid);
 
+  // Preserve a connection-local total so ignored root statements cannot hide trigger writes.
   const statements: D1PreparedStatement[] = [
-    root,
     env.ALTERAN_DB.prepare(
-      `INSERT INTO space (space_ref, authority_did, space_type, skey, created_at)
-       SELECT ?, ?, ?, ?, ? WHERE ${GUARD}
-       ON CONFLICT(space_ref) DO NOTHING`,
-    ).bind(ref.ref, ref.authorityDid, ref.spaceType, ref.skey, Date.now(), ...guard),
+      `INSERT INTO space_commit_assertion (mutation_id, valid)
+       SELECT ? || CAST(total_changes() + 1 AS TEXT), 1`,
+    ).bind(baselinePrefix),
+    root,
+    // SQLite changes() reports the direct root mutation; D1 metadata includes trigger effects.
+    env.ALTERAN_DB.prepare(
+      `INSERT INTO space_commit_assertion (mutation_id, valid)
+       SELECT CASE changes() WHEN 1 THEN ? ELSE ? END,
+         CASE
+           WHEN changes() = 0 AND EXISTS (SELECT 1 FROM space_commit_assertion
+             WHERE mutation_id = ? || CAST(total_changes() AS TEXT)) THEN 1
+           WHEN changes() = 1 AND EXISTS (SELECT 1 FROM space_commit_assertion WHERE mutation_id GLOB ?)
+             AND ${GUARD} THEN 1
+           ELSE 0 END`,
+    ).bind(won, lost, baselinePrefix, baselineGlob, ...guard),
   ];
-  stagedWrites.forEach((write, ordinal) => {
+  if (!snapshot.repo) {
+    statements.push(env.ALTERAN_DB.prepare(
+      `INSERT INTO space_epoch (id, space_ref, repo_did, state, created_at)
+       SELECT ?, ?, ?, 'active', unixepoch() WHERE ${WON_GUARD}`,
+    ).bind(epochId, ref.ref, repoDid, ...wonGuard));
+  }
+  statements.push(env.ALTERAN_DB.prepare(
+      `INSERT INTO space (space_ref, authority_did, space_type, skey, created_at)
+       SELECT ?, ?, ?, ?, ? WHERE ${EFFECT_GUARD}
+       ON CONFLICT(space_ref) DO NOTHING`,
+    ).bind(ref.ref, ref.authorityDid, ref.spaceType, ref.skey, Date.now(), ...effectGuard));
+  for (const [pathString, write] of finalWrites) {
     const path = [ref.ref, repoDid, write.collection, write.rkey] as const;
     statements.push(env.ALTERAN_DB.prepare(
       `DELETE FROM space_blob_usage
-       WHERE space_ref = ? AND repo_did = ? AND collection = ? AND rkey = ? AND ${GUARD}`,
-    ).bind(...path, ...guard));
+       WHERE space_ref = ? AND repo_did = ? AND collection = ? AND rkey = ? AND ${EFFECT_GUARD}`,
+    ).bind(...path, ...effectGuard));
+    statements.push(env.ALTERAN_DB.prepare(
+      `UPDATE space_record_version SET until_generation = ?
+       WHERE epoch_id = ? AND space_ref = ? AND repo_did = ? AND path = ?
+         AND until_generation IS NULL AND ${EFFECT_GUARD}`,
+    ).bind(generation, epochId, ref.ref, repoDid, pathString, ...effectGuard));
     if (write.action === 'delete') {
       statements.push(env.ALTERAN_DB.prepare(
         `DELETE FROM space_record
-         WHERE space_ref = ? AND repo_did = ? AND collection = ? AND rkey = ? AND ${GUARD}`,
-      ).bind(...path, ...guard));
+         WHERE space_ref = ? AND repo_did = ? AND collection = ? AND rkey = ? AND ${EFFECT_GUARD}`,
+      ).bind(...path, ...effectGuard));
     } else {
       statements.push(env.ALTERAN_DB.prepare(
         `INSERT INTO space_record (space_ref, repo_did, collection, rkey, cid, value_cbor, repo_rev)
-         SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${GUARD}
+         SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${EFFECT_GUARD}
          ON CONFLICT(space_ref, repo_did, collection, rkey) DO UPDATE
          SET cid = excluded.cid, value_cbor = excluded.value_cbor, repo_rev = excluded.repo_rev`,
-      ).bind(...path, write.cid, new Uint8Array(write.value).buffer, rev, ...guard));
+      ).bind(...path, write.cid, new Uint8Array(write.value).buffer, rev, ...effectGuard));
+      statements.push(env.ALTERAN_DB.prepare(
+        `INSERT INTO space_record_version
+         (epoch_id, space_ref, repo_did, path, collection, rkey, from_generation, until_generation, cid, value_cbor, value_size, repo_rev)
+         SELECT ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ? WHERE ${EFFECT_GUARD}`,
+      ).bind(epochId, ref.ref, repoDid, pathString, write.collection, write.rkey, generation,
+        write.cid, new Uint8Array(write.value).buffer, write.value.byteLength, rev, ...effectGuard));
     }
+  }
+  stagedWrites.forEach((write, ordinal) => {
     const operation = operations[ordinal];
     statements.push(env.ALTERAN_DB.prepare(
       `INSERT INTO space_op (space_ref, repo_did, rev, ordinal, collection, rkey, cid, prev)
-       SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${GUARD}`,
-    ).bind(ref.ref, repoDid, rev, ordinal, operation.collection, operation.rkey, operation.cid, operation.prev, ...guard));
+       SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${EFFECT_GUARD}`,
+    ).bind(ref.ref, repoDid, rev, ordinal, operation.collection, operation.rkey, operation.cid, operation.prev, ...effectGuard));
   });
 
+  const finalRecords = JSON.stringify([...finalWrites].map(([path, write]) => ({
+    path, collection: write.collection, rkey: write.rkey,
+    cid: write.action === 'delete' ? null : write.cid,
+    fromGeneration: write.action === 'delete' ? null : generation,
+  })));
+  const finalArguments = [finalRecords, ref.ref, repoDid, epochId, ref.ref, repoDid] as const;
+  // A failed assertion must abort the batch even if a trigger skips a write.
+  statements.push(env.ALTERAN_DB.prepare(
+    `SELECT CASE
+       WHEN EXISTS (SELECT 1 FROM space_commit_assertion WHERE mutation_id = ?)
+         AND NOT EXISTS (SELECT 1 FROM space_commit_assertion WHERE mutation_id = ?) THEN 1
+       WHEN ${WON_GUARD}
+       AND NOT EXISTS (SELECT 1 FROM space_commit_assertion WHERE mutation_id = ?)
+       AND EXISTS (SELECT 1 FROM space_epoch e WHERE e.id = ? AND e.space_ref = ? AND e.repo_did = ? AND e.state = 'active')
+       AND EXISTS (SELECT 1 FROM space s WHERE s.space_ref = ? AND s.deleted_at IS NULL)
+       AND ${RECORDS_MATCH}
+       AND NOT EXISTS (
+         SELECT 1 FROM json_each(?) requested JOIN space_blob_usage b ON b.space_ref = ? AND b.repo_did = ?
+           AND b.collection = json_extract(requested.value, '$.collection') AND b.rkey = json_extract(requested.value, '$.rkey')
+       )
+       AND (SELECT COUNT(*) FROM space_op WHERE space_ref = ? AND repo_did = ? AND rev = ?) = ?
+       THEN 1 ELSE json('{') END AS valid`,
+  ).bind(lost, won, ...wonGuard, lost, epochId, ref.ref, repoDid, ref.ref, ...finalArguments,
+    finalRecords, ref.ref, repoDid, ref.ref, repoDid, rev, operations.length));
+  const outcomeIndex = statements.length;
+  statements.push(env.ALTERAN_DB.prepare(
+    'SELECT mutation_id FROM space_commit_assertion WHERE mutation_id IN (?, ?)',
+  ).bind(won, lost));
+  statements.push(env.ALTERAN_DB.prepare(
+    'DELETE FROM space_commit_assertion WHERE mutation_id IN (?, ?) OR mutation_id GLOB ?',
+  ).bind(won, lost, baselineGlob));
+  statements.push(env.ALTERAN_DB.prepare(
+    `SELECT CASE WHEN EXISTS (SELECT 1 FROM space_commit_assertion WHERE mutation_id IN (?, ?) OR mutation_id GLOB ?)
+       THEN json('{') ELSE 1 END AS valid`,
+  ).bind(won, lost, baselineGlob));
+
+  await assertLocalSpaceRepo(env, repoDid);
   const results = await env.ALTERAN_DB.batch(statements);
-  if (results[0].meta.changes === 1) {
+  const outcome = results[outcomeIndex].results;
+  if (outcome?.length !== 1) throw new SpaceStorageError('InvalidRepoState', 'Missing space commit outcome');
+  if (outcome[0].mutation_id === won) {
     return { tag: 'committed', commit: { rev, setHash: state, data: spaceSetHashDigest(state), generation, operations } };
   }
+  if (outcome[0].mutation_id !== lost) throw new SpaceStorageError('InvalidRepoState', 'Invalid space commit outcome');
   const spaceStatus = await env.ALTERAN_DB.prepare(`SELECT ${SPACE_AVAILABLE} AS ok`)
     .bind(ref.ref, ref.authorityDid, repoDid, ref.ref).first<{ ok: number }>();
   if (!spaceStatus?.ok) return { tag: 'missingSpace' };
@@ -223,13 +399,18 @@ function decodeRepoState(row: {
   set_hash: number[];
   generation: number;
   mutation_id: string;
-}): SpaceRepoState & { readonly mutationId: string } {
+  active_epoch_id: string | null;
+  epoch_state: string | null;
+}): SpaceRepoState & { readonly mutationId: string; readonly epochId: string } {
   const setHash = Uint8Array.from(row.set_hash);
   if (setHash.length !== 2048 || !Number.isSafeInteger(row.generation) || row.generation < 1 ||
     typeof row.mutation_id !== 'string' || !row.mutation_id) {
     throw new SpaceStorageError('InvalidRepoState', 'Invalid stored space repo state');
   }
-  return { rev: row.rev, setHash, generation: row.generation, mutationId: row.mutation_id };
+  if (!row.active_epoch_id || row.epoch_state !== 'active') {
+    throw new SpaceStorageError('SpaceEpochUnavailable', 'Space epoch is unavailable');
+  }
+  return { rev: row.rev, setHash, generation: row.generation, mutationId: row.mutation_id, epochId: row.active_epoch_id };
 }
 
 function recordPath(collection: string, rkey: string): string {
@@ -256,7 +437,11 @@ function containsBlob(root: unknown): boolean {
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
+    return false;
+  }
 }

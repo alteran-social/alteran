@@ -1,11 +1,11 @@
 import { isValidNsid, isValidRecordKey } from '@atproto/syntax-spaces';
 import type { Env } from '../env';
 import { resolveSecret } from '../lib/secrets';
-import { collectBlobRefs, validateRawRecord, type BlobReference } from '../lib/repo-write-data';
 import { encodeRecordBlock } from '../services/repo/blockstore-ops';
 import { parseSpaceRef } from './space-ref';
 import { commitSpaceWrites, loadSpaceSnapshot } from './space-mutation';
-import { MAX_SPACE_WRITE_BYTES, MAX_SPACE_WRITES, SpaceStorageError, type PreparedSpaceWrite, type SpaceCommit, type SpaceWrite } from './space-types';
+import { captureSpaceWrites } from './space-write-input';
+import { MAX_SPACE_WRITE_BYTES, SpaceStorageError, type PreparedSpaceWrite, type SpaceCommit, type SpaceWrite } from './space-types';
 
 const MAX_RETRIES = 4;
 
@@ -29,11 +29,11 @@ export async function applySpaceWrites(
   writes: readonly SpaceWrite[],
 ): Promise<SpaceCommit | null> {
   const ref = parseSpaceRef(spaceRef);
+  const captured = captureSpaceWrites(writes);
   if (repoDid !== await localDid(env)) throw new SpaceStorageError('RepoNotFound', 'Repo is not local');
-  if (writes.length > MAX_SPACE_WRITES) throw new SpaceStorageError('InvalidRequest', 'Too many writes');
-  if (writes.length === 0) return null;
+  if (captured.length === 0) return null;
 
-  const prepared = await prepareWrites(writes);
+  const prepared = await prepareWrites(captured);
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     const snapshot = await loadSpaceSnapshot(env, ref, repoDid, prepared);
     const result = await commitSpaceWrites(env, ref, repoDid, prepared, snapshot);
@@ -47,24 +47,14 @@ async function prepareWrites(writes: readonly SpaceWrite[]): Promise<PreparedSpa
   const prepared: PreparedSpaceWrite[] = [];
   let bytes = 0;
   for (const write of writes) {
-    if (!isValidNsid(write.collection) || !isValidRecordKey(write.rkey)) {
-      throw new SpaceStorageError('InvalidRequest', 'Invalid collection or record key');
-    }
     if (write.action === 'delete') {
       prepared.push(write);
       continue;
     }
-    if (write.action !== 'create' && write.action !== 'update') {
-      throw new SpaceStorageError('InvalidRequest', 'Invalid write action');
-    }
-    const record = validateRawRecord(write.collection, write.record);
-    const blobs: BlobReference[] = [];
-    collectBlobRefs(record, blobs);
-    if (blobs.length) throw new SpaceStorageError('BlobIntegrityUnavailable', 'Space blob storage is unavailable');
-    const [cid, value] = await encodeRecordBlock(record);
+    const [cid, value] = await encodeRecordBlock(write.record);
     bytes += value.byteLength;
     if (bytes > MAX_SPACE_WRITE_BYTES) throw new SpaceStorageError('InvalidRequest', 'Space write batch is too large');
-    prepared.push({ ...write, cid: cid.toString(), value, blobs });
+    prepared.push({ action: write.action, collection: write.collection, rkey: write.rkey, cid: cid.toString(), value, blobs: [] });
   }
   return prepared;
 }
@@ -84,6 +74,13 @@ export async function getSpaceRecord(
   const row = await env.ALTERAN_DB.prepare(
     `SELECT record.cid, record.value_cbor, record.repo_rev FROM space_record record
      JOIN space ON space.space_ref = record.space_ref AND space.deleted_at IS NULL
+     JOIN space_repo h ON h.space_ref = record.space_ref AND h.repo_did = record.repo_did
+     JOIN space_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
+       AND e.repo_did = h.repo_did AND e.state = 'active'
+     JOIN space_record_version v ON v.epoch_id = e.id AND v.space_ref = record.space_ref
+       AND v.repo_did = record.repo_did AND v.path = record.collection || '/' || record.rkey
+       AND v.until_generation IS NULL AND v.cid = record.cid
+       AND v.value_cbor IS record.value_cbor AND v.repo_rev = record.repo_rev
      WHERE record.space_ref = ? AND record.repo_did = ? AND record.collection = ? AND record.rkey = ?`,
   ).bind(spaceRef, repoDid, collection, rkey).first<{ cid: string; value_cbor: number[]; repo_rev: string }>();
   return row ? { cid: row.cid, value: Uint8Array.from(row.value_cbor), rev: row.repo_rev } : null;

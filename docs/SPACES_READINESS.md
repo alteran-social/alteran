@@ -68,6 +68,14 @@ same-CID blobs, firehose and cache leakage, migration and recovery, and
 regressions for ordinary public-repo clients. A local build or test suite alone
 does not establish deployed or cross-implementation compatibility.
 
+Space and public records both use `com.atproto.repo.uploadBlob`, so upload-time
+intent does not identify which data will be private. A Spaces-capable upload
+path must stage bytes in a private bucket without a public domain, verify the
+raw CID against the stored bytes, and reserve quota for in-flight and orphaned
+uploads. Public and Space associations must be checked separately; access to one
+Space must not reveal a blob referenced only by another. Imports also need to
+retain missing-blob associations until their bytes are uploaded.
+
 ## Development and deployment
 
 The `spaces-reference-interop.test.ts` and `spaces-reference-lexicon.test.ts`
@@ -92,3 +100,8 @@ the publisher's PDS or a cache.
 Apply database migrations `0014` and `0015` in order before deploying code that
 uses them. Public blob cleanup queries consult the new private-usage table, so
 deploying the Worker first would break those cleanup operations.
+
+For migrations `0016`–`0018`, stop any internal Space writers during the
+upgrade. Existing Space repositories are preserved in quarantined epochs and
+remain unavailable until a future verification and activation path is added.
+Keep a recoverable database backup before applying migrations.

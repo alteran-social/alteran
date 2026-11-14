@@ -123,9 +123,68 @@ export const space_repo = sqliteTable('space_repo', {
   setHash: blob('set_hash', { mode: 'buffer' }).notNull(),
   generation: integer('generation').notNull(),
   mutationId: text('mutation_id').notNull(),
+  activeEpochId: text('active_epoch_id'),
 }, (table) => ({
   pk: primaryKey({ columns: [table.spaceRef, table.repoDid] }),
   hashSize: check('space_repo_hash_size', sql`length(${table.setHash}) = 2048`),
+}));
+
+export const space_epoch = sqliteTable('space_epoch', {
+  id: text('id').primaryKey().notNull(),
+  spaceRef: text('space_ref').notNull(),
+  repoDid: text('repo_did').notNull(),
+  state: text('state').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, (table) => ({
+  activeOwner: uniqueIndex('space_epoch_active_owner').on(table.spaceRef, table.repoDid)
+    .where(sql`${table.state} = 'active'`),
+  validState: check('space_epoch_state', sql`${table.state} in ('active', 'quarantined', 'retired', 'deleting')`),
+}));
+
+export const space_record_version = sqliteTable('space_record_version', {
+  epochId: text('epoch_id').notNull(),
+  spaceRef: text('space_ref').notNull(),
+  repoDid: text('repo_did').notNull(),
+  path: text('path').notNull(),
+  collection: text('collection').notNull(),
+  rkey: text('rkey').notNull(),
+  fromGeneration: integer('from_generation').notNull(),
+  untilGeneration: integer('until_generation'),
+  cid: text('cid').notNull(),
+  valueCbor: blob('value_cbor', { mode: 'buffer' }).notNull(),
+  valueSize: integer('value_size').notNull(),
+  repoRev: text('repo_rev').notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.epochId, table.path, table.fromGeneration] }),
+  currentPath: uniqueIndex('space_record_version_current_path').on(table.epochId, table.path)
+    .where(sql`${table.untilGeneration} IS NULL`),
+  validInterval: check('space_record_version_interval', sql`${table.fromGeneration} >= 1 AND (${table.untilGeneration} IS NULL OR ${table.untilGeneration} > ${table.fromGeneration})`),
+  validPath: check('space_record_version_path', sql`${table.path} = ${table.collection} || '/' || ${table.rkey}`),
+  validSize: check('space_record_version_size', sql`${table.valueSize} = length(${table.valueCbor}) AND ${table.valueSize} > 0 AND ${table.valueSize} <= 1048576`),
+}));
+
+export const space_snapshot_lease = sqliteTable('space_snapshot_lease', {
+  id: text('id').primaryKey().notNull(),
+  token: text('token').notNull(),
+  renewalNonce: text('renewal_nonce').notNull(),
+  spaceRef: text('space_ref').notNull(),
+  repoDid: text('repo_did').notNull(),
+  epochId: text('epoch_id').notNull(),
+  generation: integer('generation').notNull(),
+  rev: text('rev').notNull(),
+  setHash: blob('set_hash', { mode: 'buffer' }).notNull(),
+  expiresAt: integer('expires_at').notNull(),
+  maximumExpiresAt: integer('maximum_expires_at').notNull(),
+}, (table) => ({
+  epochExpiry: index('space_snapshot_lease_epoch_expiry').on(table.epochId, table.expiresAt, table.generation),
+  hashSize: check('space_snapshot_lease_hash_size', sql`length(${table.setHash}) = 2048`),
+}));
+
+export const space_commit_assertion = sqliteTable('space_commit_assertion', {
+  mutationId: text('mutation_id').primaryKey().notNull(),
+  valid: integer('valid').notNull(),
+}, (table) => ({
+  validResult: check('space_commit_assertion_valid', sql`${table.valid} = 1`),
 }));
 
 export const space_record = sqliteTable('space_record', {
