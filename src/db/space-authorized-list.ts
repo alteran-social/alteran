@@ -10,8 +10,10 @@ import { parseCanonicalRepoCid } from '../lib/spaces/repo-cid';
 import { ASSERT_CLOCK, REFRESH_CLOCK } from './oauth-replay';
 import { parseSpaceRef } from './space-ref';
 import { SpaceStorageError } from './space-types';
+import { validLifecycleNonce } from './space-lifecycle-types';
+import { personalGenesisValues, SPACE_PERSONAL_GENESIS } from './space-personal-genesis-sql';
 import { decodeSpaceRecord, type SpaceRecordRow, type StoredSpaceRecord } from './space-record-projection';
-import { authorizationSql, authorizationValues, authorizeSpaceRead, completion, consumeSpaceRead,
+import { authorizationSql, authorizationValues, authorizeSpaceRead, completion, consumeSpaceRead, genesisListCompletion,
   windowIsLive, windowIsLiveAt } from './space-read-auth';
 
 type CompleteRead = (request: Request, database: D1Database) => Promise<boolean>;
@@ -26,7 +28,8 @@ export type AuthorizedSpaceListResult =
 
 type ListRow = {
   collection: unknown; rkey: unknown; cid: unknown; repo_rev: unknown; head_rev: unknown;
-  consistent: unknown; epoch_id: unknown; sentinel: unknown; session_expires_at: unknown; too_large: unknown; value_cbor?: unknown;
+  consistent: unknown; epoch_id: unknown; sentinel: unknown; session_expires_at: unknown; too_large: unknown;
+  budget_total: unknown; genesis_nonce: unknown; genesis_created_at: unknown; value_cbor?: unknown;
 };
 const MAX_PAGE_COMPARE_BYTES = 4 * 1024 * 1024;
 const MAX_PAGE_VALUE_BYTES = MAX_RECORD_SIZE;
@@ -61,6 +64,12 @@ export async function listAuthorizedSpaceRecords(
       WHERE s.space_ref = ? AND s.authority_did = ? AND s.space_type = ? AND s.skey = ?
         AND s.deleted_at IS NULL AND e.owner_incarnation = ?`;
   const epochValues = [target.repo, ref.ref, ref.authorityDid, ref.spaceType, ref.skey, principal.grant.accountIncarnation];
+  const personal = ref.authorityDid === principal.did && target.repo === principal.did;
+  const genesis = personal
+    ? `genesis AS MATERIALIZED (SELECT candidate.creation_nonce, candidate.created_at
+        FROM authorized CROSS JOIN (${SPACE_PERSONAL_GENESIS}) candidate)`
+    : `genesis AS MATERIALIZED (SELECT NULL AS creation_nonce, NULL AS created_at WHERE 0)`;
+  const genesisValues = personal ? personalGenesisValues(ref, target.repo, principal.grant.accountIncarnation) : [];
   const path = `(record.collection || '/' || record.rkey) COLLATE BINARY`;
   const filter: string[] = [];
   const filters: (string | number)[] = [];
@@ -75,7 +84,7 @@ export async function listAuthorizedSpaceRecords(
     filters.push(target.cursorPath);
   }
   const result = await (async () => {
-    const page = db.prepare(`${authorization}, candidates AS MATERIALIZED (
+    const page = db.prepare(`${authorization}, ${genesis}, candidates AS MATERIALIZED (
       SELECT record.rowid AS record_id,
         CASE WHEN typeof(record.value_cbor) = 'blob' AND length(record.value_cbor) BETWEEN 1 AND ?
           THEN length(record.value_cbor) ELSE ? END AS value_size
@@ -114,7 +123,8 @@ export async function listAuthorizedSpaceRecords(
             AND typeof(v.from_generation) = 'integer' AND v.from_generation BETWEEN 1 AND h.generation
             THEN 1 ELSE 0 END ELSE 0 END AS consistent,
         CASE WHEN typeof(e.id) = 'text' AND length(CAST(e.id AS BLOB)) BETWEEN 1 AND 128 THEN e.id END AS epoch_id,
-        0 AS sentinel, NULL AS session_expires_at, 0 AS too_large${valueProjection}
+        0 AS sentinel, NULL AS session_expires_at, 0 AS too_large, 0 AS budget_total,
+        NULL AS genesis_nonce, NULL AS genesis_created_at${valueProjection}
       FROM candidates candidate CROSS JOIN budget CROSS JOIN space_record record NOT INDEXED
         JOIN space s ON s.space_ref = record.space_ref AND s.deleted_at IS NULL
         JOIN space_repo h ON h.space_ref = record.space_ref AND h.repo_did = record.repo_did
@@ -130,8 +140,9 @@ export async function listAuthorizedSpaceRecords(
         AND e.owner_incarnation = ? AND EXISTS (SELECT 1 FROM authorized)
     ) SELECT * FROM page
     UNION ALL SELECT NULL, NULL, NULL, NULL, NULL, 0, (${activeEpoch}), 1, session_expires_at,
-      (SELECT CASE WHEN total > ? THEN 1 ELSE 0 END FROM budget)${valueSentinel} FROM authorized`)
-      .bind(...authValues, MAX_RECORD_SIZE, MAX_PAGE_COMPARE_BYTES + 1, ref.ref, target.repo, ref.authorityDid,
+      (SELECT CASE WHEN total > ? THEN 1 ELSE 0 END FROM budget), (SELECT total FROM budget),
+      (SELECT creation_nonce FROM genesis), (SELECT created_at FROM genesis)${valueSentinel} FROM authorized`)
+      .bind(...authValues, ...genesisValues, MAX_RECORD_SIZE, MAX_PAGE_COMPARE_BYTES + 1, ref.ref, target.repo, ref.authorityDid,
         ref.spaceType, ref.skey, principal.grant.accountIncarnation, ...filters, target.limit,
         MAX_RECORD_SIZE, maxPageBytes, ref.ref, target.repo,
         ref.authorityDid, ref.spaceType, ref.skey, principal.grant.accountIncarnation, ...epochValues, maxPageBytes);
@@ -142,8 +153,10 @@ export async function listAuthorizedSpaceRecords(
       page,
       db.prepare(REFRESH_CLOCK).bind(nonce),
       db.prepare(ASSERT_CLOCK).bind(nonce),
-      db.prepare(`${authorization} SELECT clock.seconds, (SELECT session_expires_at FROM authorized) AS session_expires_at,
-        (${activeEpoch}) AS epoch_id FROM clock`).bind(...authValues, ...epochValues),
+      db.prepare(`${authorization}, ${genesis}
+        SELECT clock.seconds, (SELECT session_expires_at FROM authorized) AS session_expires_at,
+          (${activeEpoch}) AS epoch_id, (SELECT creation_nonce FROM genesis) AS genesis_nonce,
+          (SELECT created_at FROM genesis) AS genesis_created_at FROM clock`).bind(...authValues, ...genesisValues, ...epochValues),
     ]);
   })().catch(() => null);
   if (!Array.isArray(result) || result.length !== 6 || result.some((entry: { success?: unknown } | null) => entry?.success !== true) ||
@@ -160,8 +173,7 @@ export async function listAuthorizedSpaceRecords(
   if (typeof clock !== 'number' || !Number.isSafeInteger(clock) || clock < now ||
     principal.expiresAt <= clock || clock - principal.proofIssuedAt > DPOP_PROOF_MAX_AGE_SEC ||
     principal.proofIssuedAt - clock > DPOP_PROOF_FUTURE_SKEW_SEC ||
-    typeof expiry !== 'number' || !Number.isSafeInteger(expiry) || expiry <= clock ||
-    typeof epoch !== 'string' || !epoch || new TextEncoder().encode(epoch).byteLength > 128) {
+    typeof expiry !== 'number' || !Number.isSafeInteger(expiry) || expiry <= clock) {
     return { tag: 'unauthorized' };
   }
   const selected = result[2]?.results;
@@ -172,14 +184,38 @@ export async function listAuthorizedSpaceRecords(
   const rows = selected as ListRow[];
   const sentinels = rows.filter((row) => row.sentinel === 1);
   const records = rows.filter((row) => row.sentinel === 0);
-  if (!sentinels.length && !rows.length) return { tag: 'unauthorized' };
+  if (sentinels.length !== 1 || records.length > target.limit || sentinels.length + records.length !== rows.length ||
+    sentinels[0].session_expires_at !== expiry || records.some((row) => row.session_expires_at !== null)) {
+    return { tag: 'unauthorized' };
+  }
+  if (epoch === null) {
+    const sentinel = sentinels[0];
+    const createdAt = final.genesis_created_at;
+    const after = Math.floor(Date.now() / 1000);
+    if (!personal || sentinel.epoch_id !== null || records.length !== 0 || sentinel.too_large !== 0 ||
+      sentinel.budget_total !== 0 || !validLifecycleNonce(final.genesis_nonce) ||
+      typeof createdAt !== 'number' || !Number.isSafeInteger(createdAt) || createdAt < 0 ||
+      sentinel.collection !== null || sentinel.rkey !== null || sentinel.cid !== null ||
+      sentinel.repo_rev !== null || sentinel.head_rev !== null || sentinel.consistent !== 0 ||
+      (!target.excludeValues && sentinel.value_cbor !== null) ||
+      sentinel.genesis_nonce !== final.genesis_nonce || sentinel.genesis_created_at !== createdAt ||
+      request.signal.aborted || env.ALTERAN_DB !== db || !windowIsLiveAt(principal, after) || expiry <= after) {
+      return { tag: 'unauthorized' };
+    }
+    return { tag: 'found', records: [], complete: genesisListCompletion(handle, {
+      nonce: final.genesis_nonce, createdAt,
+    }) };
+  }
+  if (typeof epoch !== 'string' || !epoch || new TextEncoder().encode(epoch).byteLength > 128 ||
+    final.genesis_nonce !== null || final.genesis_created_at !== null ||
+    sentinels[0].genesis_nonce !== null || sentinels[0].genesis_created_at !== null ||
+    records.some((row) => row.genesis_nonce !== null || row.genesis_created_at !== null)) return { tag: 'unauthorized' };
   const failure = (tag: 'invalid' | 'tooLarge'): AuthorizedSpaceListResult => {
     const after = Math.floor(Date.now() / 1000);
     if (request.signal.aborted || !windowIsLiveAt(principal, after) || expiry <= after) return { tag: 'unauthorized' };
     return { tag, complete: completion(handle, epoch) };
   };
-  if (sentinels.length !== 1 || records.length > target.limit || sentinels.length + records.length !== rows.length ||
-    sentinels[0].epoch_id !== epoch || records.some((row) => row.epoch_id !== epoch)) return { tag: 'unauthorized' };
+  if (sentinels[0].epoch_id !== epoch || records.some((row) => row.epoch_id !== epoch)) return { tag: 'unauthorized' };
   if (sentinels[0].too_large !== 0 && sentinels[0].too_large !== 1) return failure('invalid');
   if (sentinels[0].too_large === 1) return records.length === 0 ? failure('tooLarge') : failure('invalid');
   if (records.some((row) => row.too_large !== 0)) return failure('invalid');

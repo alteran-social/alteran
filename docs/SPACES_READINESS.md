@@ -36,8 +36,10 @@ records or advertised as encrypted.
   single record can exceed the supported complexity. Value reads validate
   record bytes and CIDs; metadata-only reads check current-version consistency
   without rehashing. Pages larger than 50 (the reference maximum is 1,000),
-  cross-prefix cursors and credential access remain unsupported. A Space
-  without an active local epoch is denied rather than listed as empty.
+  cross-prefix cursors and credential access remain unsupported. A fresh
+  personal Space returns an empty page only while its current policy and the
+  absence of repository history are verified. Other Spaces without an active
+  local epoch are denied rather than assumed empty.
 - `com.atproto.space.getSpace` reads a current personal policy when its
   authority is the authenticated account and a matching `read_self` grant
   exists. It does not require a repository epoch. Missing, tombstoned and
@@ -114,7 +116,8 @@ The `spaces-reference-interop.test.ts`, `spaces-reference-lexicon.test.ts`,
 `spaces-reference-policy.test.ts`, `spaces-reference-ops.test.ts`,
 `spaces-reference-export.test.ts`, `spaces-reference-meta-archive.test.ts`,
 `spaces-reference-meta-members.test.ts`, `spaces-list-reference.test.ts`,
-`spaces-list-values-reference.test.ts`, `spaces-reference-integers.test.ts` and
+`spaces-list-values-reference.test.ts`, `spaces-list-genesis-reference.test.ts`,
+`spaces-reference-integers.test.ts` and
 `spaces-get-space-reference.test.ts`
 tests can exercise a disposable local reference PDS. Set
 `ALTERAN_REFERENCE_INTEROP_CONFIG` to a JSON file containing
@@ -134,6 +137,8 @@ The list test compares metadata, CIDs, cursor paths and filtered pagination
 against the reference PDS for matching test records.
 The value-list test also compares default, explicit value and metadata modes,
 including Lex JSON links, bytes and escaped text.
+The genesis-list test compares empty pages before the first record, including
+collection filters, cursors and metadata-only mode.
 The integer test checks signed 64-bit values through a reference archive and
 rejects silently rounded JSON. Reference revision `16bfeba` preserves those
 values in its binary archive but returns an error for values outside JavaScript's
@@ -251,12 +256,15 @@ authenticate the policy, writer state and archive separately.
 
 An internal personal-Space lifecycle can tombstone a newly created personal
 Space and page through its local D1 records and history. It fences old leases
-and writers and permanently rejects recreation. It only applies when there are
-no external credentials, registered syncers, blob references or quarantine
-receipts. It does not send deletion notifications, clean R2, or securely erase
-copies and database backups. Exposing deletion requires those contracts and a
-recovery path for unfinished cleanup. Incremental sync must also handle its
-history boundary; pruning the operation log for live Spaces remains unsupported.
+and writers and permanently rejects recreation. Supporting recreation requires
+a fresh Space generation bound to policy, reads, writes and cleanup, so an old
+operation cannot validate a new empty Space with the same reference. It only
+applies when there are no external credentials, registered syncers, blob
+references or quarantine receipts. It does not send deletion notifications,
+clean R2, or securely erase copies and database backups. Exposing deletion
+requires those contracts and a recovery path for unfinished cleanup. Incremental
+sync must also handle its history boundary; pruning the operation log for live
+Spaces remains unsupported.
 
 The internal private-blob ledger is not connected to an upload or download
 route. Its caller must authenticate the owner, retain the server-created

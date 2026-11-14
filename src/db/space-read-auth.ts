@@ -5,6 +5,8 @@ import { allowsSpacePermission } from '../lib/spaces/oauth-scopes';
 import { restoreExplicitSpaceConsent } from '../lib/spaces/explicit-read-consent';
 import { oauthSpaceGrantFence, oauthSpaceGrantFenceValues } from './oauth-space-grant';
 import { assertLocalSpaceRepo, parseSpaceRef } from './space-ref';
+import { validLifecycleNonce } from './space-lifecycle-types';
+import { personalGenesisValues, SPACE_PERSONAL_GENESIS } from './space-personal-genesis-sql';
 
 type CompleteRead = (request: Request, database: D1Database) => Promise<boolean>;
 declare const readBrand: unique symbol;
@@ -12,6 +14,7 @@ export type SpaceReadHandle = { readonly [readBrand]: true };
 type ReadState = {
   env: Env; database: D1Database; request: Request; principal: VerifiedSpacePrincipal;
   phase: 'new' | 'checking' | 'allowed'; ref?: ReturnType<typeof parseSpaceRef>; repo?: string;
+  operation?: 'getRecord' | 'listRecords';
 };
 const handles = new WeakMap<SpaceReadHandle, ReadState>();
 
@@ -52,6 +55,7 @@ export async function authorizeSpaceRead(handle: SpaceReadHandle, operation: 'ge
   if (request.signal.aborted || env.ALTERAN_DB !== database || !windowIsLive(principal)) return false;
   state.ref = Object.freeze(ref);
   state.repo = repo;
+  state.operation = operation;
   state.phase = 'allowed';
   return true;
 }
@@ -136,6 +140,53 @@ export function completion(handle: SpaceReadHandle, epoch: string | null): Compl
       typeof row.session_expires_at === 'number' && Number.isSafeInteger(row.session_expires_at) &&
       row.session_expires_at > row.seconds && row.session_expires_at > after &&
       env.ALTERAN_DB === database && !request.signal.aborted && windowIsLiveAt(principal, after);
+  };
+}
+
+/** Complete an empty page only while the same personal genesis still exists. */
+export function genesisListCompletion(handle: SpaceReadHandle, identity: { nonce: string; createdAt: number }): CompleteRead {
+  const state = handles.get(handle);
+  handles.delete(handle);
+  if (!state || state.phase !== 'allowed' || state.operation !== 'listRecords' || !state.ref || !state.repo ||
+    state.repo !== state.principal.did || state.ref.authorityDid !== state.repo || !validLifecycleNonce(identity.nonce) ||
+    !Number.isSafeInteger(identity.createdAt) || identity.createdAt < 0) return async () => false;
+  const { env, database, request, principal, ref, repo } = state;
+  const values = [...personalGenesisValues(ref, repo, principal.grant.accountIncarnation), identity.nonce, identity.createdAt];
+  const condition = `EXISTS (SELECT 1 FROM (${SPACE_PERSONAL_GENESIS}) genesis
+    WHERE genesis.creation_nonce = ? AND genesis.created_at = ?)`;
+  let consumed = false;
+  return async (suppliedRequest, suppliedDatabase) => {
+    if (consumed) return false;
+    consumed = true;
+    try {
+      if (request !== suppliedRequest || database !== suppliedDatabase || env.ALTERAN_DB !== database ||
+        request.signal.aborted || !windowIsLive(principal)) return false;
+      const now = Math.floor(Date.now() / 1000);
+      if (!Number.isSafeInteger(now) || now < 0) return false;
+      const nonce = crypto.randomUUID().replaceAll('-', '');
+      const sample = await database.prepare(`UPDATE oauth_replay_clock SET seconds = MAX(seconds, unixepoch(), ?), nonce = ?
+        WHERE id = 1 AND typeof(seconds) = 'integer' AND seconds BETWEEN 0 AND 9007199254740991
+        RETURNING seconds, nonce, EXISTS (SELECT 1 FROM oauth_session session
+          WHERE session.id = ? AND CASE WHEN ${authorizationPredicate('oauth_replay_clock.seconds')}
+            THEN ${condition} ELSE 0 END) AS authorized`)
+        .bind(now, nonce, principal.sessionId, ...sessionValues(principal), ...values)
+        .first<{ seconds: unknown; nonce: unknown; authorized: unknown }>();
+      if (!sample || sample.authorized !== 1 || sample.nonce !== nonce || typeof sample.seconds !== 'number' ||
+        !Number.isSafeInteger(sample.seconds) || sample.seconds < now || env.ALTERAN_DB !== database ||
+        request.signal.aborted || !windowIsLive(principal)) return false;
+      const row = await database.prepare(`${authorizationSql('seconds')}
+        SELECT clock.seconds, authorized.session_expires_at FROM authorized CROSS JOIN clock
+        WHERE CASE WHEN authorized.session_expires_at > clock.seconds THEN ${condition} ELSE 0 END`)
+        .bind(...authorizationValues(principal, sample.seconds), ...values)
+        .first<{ seconds: unknown; session_expires_at: unknown }>();
+      const after = Math.floor(Date.now() / 1000);
+      return !!row && typeof row.seconds === 'number' && Number.isSafeInteger(row.seconds) && row.seconds >= sample.seconds &&
+        typeof row.session_expires_at === 'number' && Number.isSafeInteger(row.session_expires_at) &&
+        row.session_expires_at > row.seconds && row.session_expires_at > after &&
+        env.ALTERAN_DB === database && !request.signal.aborted && windowIsLiveAt(principal, after);
+    } catch {
+      return false;
+    }
   };
 }
 
