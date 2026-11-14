@@ -20,7 +20,11 @@ export type SpacePermission = {
 
 export type IssuedSpacePermission = Omit<SpacePermission, "collections"> & {
   readonly tag: "issued";
-  readonly collectionSource: "declaration" | "explicit" | "none";
+  readonly collectionSource:
+    | "declaration"
+    | "explicit"
+    | "none"
+    | "none_manage_create";
   readonly collections: Extract<SpaceCollections, { readonly tag: "explicit" }>;
 };
 
@@ -105,7 +109,12 @@ export function materializeCollectionFreeReadSelf(
   grantingDid: string,
 ): IssuedSpacePermission | null {
   const fields = copyPlainRecord(value, [
-    "spaceType", "authority", "skey", "collections", "actions", "manage",
+    "spaceType",
+    "authority",
+    "skey",
+    "collections",
+    "actions",
+    "manage",
   ]);
   const permission = fields && copyPermissionFields(fields);
   if (
@@ -117,8 +126,54 @@ export function materializeCollectionFreeReadSelf(
     spaceType: permission.spaceType,
     collections: [],
   };
-  const issued = materializeSpacePermission(permission, grantingDid, declaration);
+  const issued = materializeSpacePermission(
+    permission,
+    grantingDid,
+    declaration,
+  );
   return issued ? { ...issued, collectionSource: "none" } : null;
+}
+
+/** Materialize read-self with create management; callers enforce authority and policy. */
+export function materializeCollectionFreeReadSelfManageCreate(
+  scope: unknown,
+  grantingDid: string,
+): IssuedSpacePermission | null {
+  const permission = parseSpacePermission(scope);
+  if (
+    typeof scope !== "string" || !permission ||
+    permission.collections.tag !== "declaration" ||
+    permission.actions.length !== 1 || permission.actions[0] !== "read_self" ||
+    permission.manage.length !== 1 || permission.manage[0] !== "create" ||
+    permission.authority.includes("%")
+  ) return null;
+  const question = scope.indexOf("?");
+  if (question < 0) return null;
+  const parameters = new URLSearchParams(scope.slice(question + 1));
+  const actions = parameters.getAll("action");
+  const manage = parameters.getAll("manage");
+  if (
+    actions.length !== 1 || actions[0] !== "read_self" ||
+    manage.length !== 1 || manage[0] !== "create" ||
+    parameters.has("collection")
+  ) return null;
+  const declaration = permission.spaceType === "*" ? undefined : {
+    spaceType: permission.spaceType,
+    collections: [],
+  };
+  const issued = materializeSpacePermission(
+    permission,
+    grantingDid,
+    declaration,
+  );
+  if (!issued || issued.authority.includes("%")) return null;
+  return Object.freeze({
+    ...issued,
+    collectionSource: "none_manage_create",
+    collections: Object.freeze({ tag: "explicit", values: Object.freeze([]) }),
+    actions: Object.freeze([...issued.actions]),
+    manage: Object.freeze([...issued.manage]),
+  });
 }
 
 const ACTIONS: ReadonlySet<string> = new Set([
@@ -288,7 +343,9 @@ export function copyIssuedSpacePermission(
   if (
     !fields || fields.tag !== "issued" ||
     (fields.collectionSource !== "declaration" &&
-      fields.collectionSource !== "explicit" && fields.collectionSource !== "none")
+      fields.collectionSource !== "explicit" &&
+      fields.collectionSource !== "none" &&
+      fields.collectionSource !== "none_manage_create")
   ) return null;
   const permission = copyPermissionFields(fields);
   if (
@@ -301,8 +358,16 @@ export function copyIssuedSpacePermission(
   ) return null;
   if (
     fields.collectionSource === "none" &&
-    (permission.collections.values.length !== 0 || permission.actions.length !== 1 ||
+    (permission.collections.values.length !== 0 ||
+      permission.actions.length !== 1 ||
       permission.actions[0] !== "read_self" || permission.manage.length !== 0)
+  ) return null;
+  if (
+    fields.collectionSource === "none_manage_create" &&
+    (permission.collections.values.length !== 0 ||
+      permission.actions.length !== 1 ||
+      permission.actions[0] !== "read_self" || permission.manage.length !== 1 ||
+      permission.manage[0] !== "create" || permission.authority.includes("%"))
   ) return null;
   if (
     fields.collectionSource === "declaration" &&

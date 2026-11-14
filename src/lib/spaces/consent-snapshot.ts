@@ -4,6 +4,7 @@ import {
   copyIssuedSpacePermission,
   type IssuedSpacePermission,
   materializeCollectionFreeReadSelf,
+  materializeCollectionFreeReadSelfManageCreate,
   materializeSpacePermission,
   parseSpacePermission,
 } from "./oauth-scopes";
@@ -165,7 +166,20 @@ function copyGrant(
   if (permission.collectionSource === "none") {
     const expected = materializeCollectionFreeReadSelf(requested, subject);
     const canonical = expected && copyIssuedSpacePermission(expected);
-    if (!canonical || JSON.stringify(canonical) !== JSON.stringify(permission)) return null;
+    if (
+      !canonical || JSON.stringify(canonical) !== JSON.stringify(permission)
+    ) return null;
+    return { grant: { requestedScope: fields.requestedScope, permission } };
+  }
+  if (permission.collectionSource === "none_manage_create") {
+    const expected = materializeCollectionFreeReadSelfManageCreate(
+      fields.requestedScope,
+      subject,
+    );
+    const canonical = expected && copyIssuedSpacePermission(expected);
+    if (
+      !canonical || JSON.stringify(canonical) !== JSON.stringify(permission)
+    ) return null;
     return { grant: { requestedScope: fields.requestedScope, permission } };
   }
   const declarationType =
