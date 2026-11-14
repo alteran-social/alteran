@@ -159,9 +159,17 @@ describe('private Space record authorization', () => {
   it('fails closed if the final replay-clock update is skipped', async () => {
     const f = await authorizedReadFixture();
     const { principal, request } = await f.principal();
+    const before = await f.env.ALTERAN_DB.prepare('SELECT nonce FROM oauth_replay_clock WHERE id = 1')
+      .first<{ nonce: string }>();
     await f.env.ALTERAN_DB.exec(`CREATE TRIGGER test_skip_final_clock BEFORE UPDATE ON oauth_replay_clock
       WHEN OLD.nonce = NEW.nonce BEGIN SELECT RAISE(IGNORE); END`.replaceAll('\n', ' '));
-    await expect(readAuthorizedSpaceRecord(f.env, principal, request, SPACE, DID, COLLECTION, 'one')).rejects.toThrow();
+    expect((await readAuthorizedSpaceRecord(f.env, principal, request, SPACE, DID, COLLECTION, 'one')).tag).toBe('unauthorized');
+    const after = await f.env.ALTERAN_DB.prepare('SELECT nonce FROM oauth_replay_clock WHERE id = 1')
+      .first<{ nonce: string }>();
+    expect(after?.nonce).toBe(before?.nonce);
+    await f.env.ALTERAN_DB.exec('DROP TRIGGER test_skip_final_clock');
+    const next = await f.principal();
+    expect((await readAuthorizedSpaceRecord(f.env, next.principal, next.request, SPACE, DID, COLLECTION, 'one')).tag).toBe('found');
   });
 
   it('fails closed on incomplete or malformed D1 batch results', async () => {
