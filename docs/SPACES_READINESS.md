@@ -79,7 +79,8 @@ retain missing-blob associations until their bytes are uploaded.
 ## Development and deployment
 
 The `spaces-reference-interop.test.ts`, `spaces-reference-lexicon.test.ts`,
-`spaces-reference-policy.test.ts` and `spaces-reference-ops.test.ts`
+`spaces-reference-policy.test.ts`, `spaces-reference-ops.test.ts`,
+`spaces-reference-export.test.ts` and `spaces-reference-meta-archive.test.ts`
 tests can exercise a disposable local reference PDS. Set
 `ALTERAN_REFERENCE_INTEROP_CONFIG` to a JSON file containing
 `pds`, `plc`, `did`, and `accessJwt` for a test account. Both service URLs must
@@ -88,6 +89,10 @@ spaces and then attempt to delete them. The archive test also exchanges a STAR
 archive and verifies response MACs. The operation-log comparison runs the same
 writes against local D1 and the reference PDS, then compares paginated
 operations and the final digest.
+The export test uploads an archive produced by the internal snapshot exporter
+and verifies the imported record and digest; it buffers that small archive
+before uploading and does not test streaming HTTP transport.
+The metadata test imports and exports a memberspace policy, member, and writer.
 An interrupted request may leave test data behind. Keep the configuration file
 private because it contains an access token. The Lexicon test injects DNS and
 maps test HTTPS origins to the local services; it does not establish live DNS or
@@ -118,13 +123,41 @@ currently immutable and unpruned; imports, pruning, and epoch replacement need
 an atomic history fence before this reader can be exposed. Callers must still
 authorize the request, authenticate the commit, and compare the final digest.
 
+The internal snapshot exporter pages through a leased version history,
+recomputes the snapshot digest, and emits the STAR terminator only after the
+digest matches. It does not authorize an export or authenticate its commit.
+Snapshot leases and version cleanup are bounded, but cleanup must run
+regularly: response loss or Worker termination can leave a lease until expiry.
+The indexed page reader relies on the database's non-overlapping version
+interval invariant. Quarantined legacy epochs cannot be read through this path.
+Validate the complete lease, cleanup, and concurrent-write workload on the
+target D1 deployment before exposing an export route.
+
+The internal metadata archive codec is limited to 16 MiB and normalizes the
+reference PDS's supported policy and member fields; it is not a lossless backup
+or an authorized import. To avoid an ambiguous reference member-key mapping,
+it rejects member DIDs with multiple method-specific segments, including some
+valid `did:web` identities. Migration cannot rely on this codec until that
+identity mapping and preservation of all required state are resolved.
+
+Space deletion also needs an atomic tombstone and a durable, bounded cleanup
+job before it is exposed. Current records, operations, and blob associations
+are not keyed by epoch, and old operations cannot yet be pruned; recreating a
+space before those rows are cleared could mix different incarnations. The
+cleanup must fence old leases and writers, preserve deletion notifications,
+and make stale incremental-sync revisions require a full sync. The proposal
+permits a host to reject recreation, so supporting it can be a separate step.
+
 Apply database migrations `0014` and `0015` in order before deploying code that
 uses them. Public blob cleanup queries consult the new private-usage table, so
 deploying the Worker first would break those cleanup operations.
 
 For migrations `0016`–`0018`, stop any internal Space writers during the
-upgrade. Existing Space repositories are preserved in quarantined epochs and
-remain unavailable until a future verification and activation path is added.
+upgrade. Existing Space repositories are preserved in quarantined epochs. An
+internal verifier exists, but activation remains disabled by migration `0017`;
+verification of local consistency alone does not authenticate an external
+commit. The one-statement legacy backfill, recovery procedure, and activation
+need production-scale validation before any quarantined data is made available.
 Keep a recoverable database backup before applying migrations.
 
 Migrations `0019` and `0020` add database fences for current Space writes and
@@ -133,3 +166,11 @@ writers must not be restarted against the upgraded database. The trigger and
 batch behavior still requires validation on the target D1 deployment before
 these internal storage paths are enabled. Space operation-log pruning is not
 yet available.
+
+Migrations `0021`–`0031` add quarantine checkpoints, replay tracking, snapshot
+lease safeguards, cleanup indexes, and confidential-client key-binding state.
+Apply them in order with old Workers drained; older code does not enforce all
+the new fences. Follow [the OAuth replay and cutover notes](OAUTH_REPLAY_CLOCK.md)
+before deployment, including the separate backup-restore procedure and any
+required confidential-client reauthorization. Production cleanup scheduling,
+backlog monitoring, and D1 load testing remain deployment gates.
