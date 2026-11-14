@@ -169,6 +169,27 @@ freshness. It has the same public-egress prerequisites as the Lexicon resolver.
 Before using it for signed responses, establish authoritative identity freshness,
 rotation handling and binding to the authenticated account incarnation.
 
+The internal unsigned KEM PLC planner builds a candidate from one caller-supplied
+signed head and captured identity values. It hashes the original signed head
+before normalizing a legacy genesis operation, preserves supported identity
+fields, and checks the prospective signed operation against incoming size and
+field limits. Extra verification methods receive only did:key/base58btc syntax
+checks; the helper does not cryptographically authenticate them. Existing heads
+are bounded separately from proposals, so a historical head that matches the
+captured KEM key may be reported as matching even when it exceeds current
+incoming limits. The [published PLC specification](https://web.plc.directory/spec/v0.1/did-plc)
+states a 7,500-byte operation limit, while the [current PLC server source](https://github.com/did-method-plc/did-method-plc/blob/main/packages/server/src/constraints.ts)
+uses a 4,000-byte incoming limit and additional field limits. The planner checks
+both limits conservatively for new proposals; the source does not establish
+which version is deployed. The helper does not authenticate the head's signature
+or provenance, establish that it is current, verify the captured account, secret
+separation or backup, or publish a PLC operation. Its caller must independently
+establish those facts and recheck them before any later action. A higher-priority
+recovery can supersede the captured head. Its optional local comparison creates
+an identity and recovery fork in a disposable PLC directory; set
+`ALTERAN_REFERENCE_PLC_ORIGIN` only to a loopback test server. The test never
+signs or publishes the KEM candidate.
+
 On Linux, `scripts/space-kem-key.ts` can create a new local P-256 KEM key in
 an owner-only directory outside any Git worktree. The destination must not
 already exist. The script writes and verifies an owner-only private file, syncs
