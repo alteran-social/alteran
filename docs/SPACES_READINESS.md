@@ -193,6 +193,17 @@ an identity and recovery fork in a disposable PLC directory; set
 `ALTERAN_REFERENCE_PLC_ORIGIN` only to a loopback test server. The test never
 signs or publishes the KEM candidate.
 
+The offline KEM lineage helper additionally verifies a supplied linear chain
+from the DID-anchored genesis, including predecessor CIDs, signatures, and
+supported public-key points. It uses curve-specific low-S verification and
+conservatively rejects unsupported keys and historical high-S signatures. It
+limits input to 32 operations, 512 KiB of JSON, 16 keys per operation, and 256
+keys in total. A valid chain can still be stale or superseded by a recovery; it
+does not prove directory acceptance or the current head. The local PLC test
+shows both a subsequently nullified branch and the recovery branch can pass
+signature linkage. The helper is not connected to a route or a publication flow,
+and its cost has not been measured in a deployed Worker.
+
 On Linux, `scripts/space-kem-key.ts` can create a new local P-256 KEM key in
 an owner-only directory outside any Git worktree. The destination must not
 already exist. The script writes and verifies an owner-only private file, syncs

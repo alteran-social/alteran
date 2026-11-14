@@ -2,6 +2,7 @@ import { expect } from '@std/expect';
 import { P256Keypair, Secp256k1Keypair } from '@atproto/crypto-spaces';
 import { createOp, createUpdateOp } from '@did-plc/lib';
 import { planKemPlcUpdate } from '../src/lib/spaces/kem-plc-plan';
+import { planKemPlcFromLineage } from '../src/lib/spaces/kem-plc-lineage';
 
 const configuredOrigin = Deno.env.get('ALTERAN_REFERENCE_PLC_ORIGIN');
 
@@ -38,6 +39,9 @@ Deno.test({
       };
       const plan = (head: unknown) => planKemPlcUpdate(JSON.stringify(head), genesis.did,
         '1234567890abcdef1234567890abcdef', true, 'https://pds.example', signing.did(), signing.did(), kem.did());
+      const linked = (...operations: unknown[]) => planKemPlcFromLineage(operations.map((op) => JSON.stringify(op)),
+        genesis.did, '1234567890abcdef1234567890abcdef', true, 'https://pds.example',
+        signing.did(), signing.did(), kem.did());
       await post(genesis.op);
       const initial = await audit();
       if (initial.length !== 1 || JSON.stringify(initial[0].operation) !== JSON.stringify(genesis.op)) throw new Error();
@@ -70,6 +74,13 @@ Deno.test({
       expect(recovered.context.headCid === afterRecovery[2].cid).toBe(true);
       expect(updatePlan.context.headCid === recovered.context.headCid).toBe(false);
       expect(plan(afterUpdate[1].operation)).toEqual(updatePlan);
+      const staleLink = await linked(initial[0].operation, afterUpdate[1].operation);
+      const recoveredLink = await linked(initial[0].operation, afterRecovery[2].operation);
+      expect(staleLink.tag).toBe('signatureLinked');
+      expect(recoveredLink.tag).toBe('signatureLinked');
+      if (staleLink.tag !== 'signatureLinked' || recoveredLink.tag !== 'signatureLinked') throw new Error();
+      expect(staleLink.plan).toEqual(updatePlan);
+      expect(recoveredLink.plan).toEqual(recovered);
     } catch {
       throw new Error('Disposable PLC planner comparison failed');
     }
