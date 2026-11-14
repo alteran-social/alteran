@@ -1,4 +1,5 @@
-import { sqliteTable, text, integer, index, primaryKey, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, blob, index, primaryKey, uniqueIndex, check } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
 
 export const secret = sqliteTable('secret', {
   key: text('key').primaryKey().notNull(),
@@ -102,6 +103,69 @@ export const blob_usage = sqliteTable('blob_usage', {
   recordUriIdx: index('blob_usage_record_uri_idx').on(table.did, table.recordUri),
   didKeyIdx: index('blob_usage_did_key_idx').on(table.did, table.key),
   didRepoRevCidIdx: index('blob_usage_did_repo_rev_cid_idx').on(table.did, table.repoRev, table.cid),
+}));
+
+export const space = sqliteTable('space', {
+  ref: text('space_ref').primaryKey().notNull(),
+  authorityDid: text('authority_did').notNull(),
+  spaceType: text('space_type').notNull(),
+  skey: text('skey').notNull(),
+  createdAt: integer('created_at').notNull(),
+  deletedAt: integer('deleted_at'),
+}, (table) => ({
+  authorityTypeIdx: index('space_authority_type_idx').on(table.authorityDid, table.spaceType, table.ref),
+}));
+
+export const space_repo = sqliteTable('space_repo', {
+  spaceRef: text('space_ref').notNull(),
+  repoDid: text('repo_did').notNull(),
+  rev: text('rev'),
+  setHash: blob('set_hash', { mode: 'buffer' }).notNull(),
+  generation: integer('generation').notNull(),
+  mutationId: text('mutation_id').notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.spaceRef, table.repoDid] }),
+  hashSize: check('space_repo_hash_size', sql`length(${table.setHash}) = 2048`),
+}));
+
+export const space_record = sqliteTable('space_record', {
+  spaceRef: text('space_ref').notNull(),
+  repoDid: text('repo_did').notNull(),
+  collection: text('collection').notNull(),
+  rkey: text('rkey').notNull(),
+  cid: text('cid').notNull(),
+  valueCbor: blob('value_cbor', { mode: 'buffer' }).notNull(),
+  repoRev: text('repo_rev').notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.spaceRef, table.repoDid, table.collection, table.rkey] }),
+  cidIdx: index('space_record_cid_idx').on(table.spaceRef, table.repoDid, table.cid),
+}));
+
+export const space_op = sqliteTable('space_op', {
+  spaceRef: text('space_ref').notNull(),
+  repoDid: text('repo_did').notNull(),
+  rev: text('rev').notNull(),
+  ordinal: integer('ordinal').notNull(),
+  collection: text('collection').notNull(),
+  rkey: text('rkey').notNull(),
+  cid: text('cid'),
+  prev: text('prev'),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.spaceRef, table.repoDid, table.rev, table.ordinal] }),
+}));
+
+export const space_blob_usage = sqliteTable('space_blob_usage', {
+  spaceRef: text('space_ref').notNull(),
+  repoDid: text('repo_did').notNull(),
+  collection: text('collection').notNull(),
+  rkey: text('rkey').notNull(),
+  cid: text('cid').notNull(),
+  key: text('key').notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.spaceRef, table.repoDid, table.collection, table.rkey, table.cid] }),
+  retentionIdx: index('space_blob_usage_retention_idx').on(table.repoDid, table.key),
+  cidRetentionIdx: index('space_blob_usage_cid_retention_idx').on(table.repoDid, table.cid),
+  spaceCidIdx: index('space_blob_usage_space_cid_idx').on(table.spaceRef, table.repoDid, table.cid),
 }));
 
 // Commit log stores full commit history for firehose and sync

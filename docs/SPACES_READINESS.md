@@ -14,7 +14,8 @@ records or advertised as encrypted.
 ## Current behavior
 
 - Alteran has one public MST repository per account and serves its commits via
-  public sync and the firehose. It has no space repositories or space host.
+  public sync and the firehose. Internal space storage and protocol helpers are
+  under development; no space repositories or space host are accessible yet.
 - Space and policy XRPC namespaces return `NotImplemented`; `space:` OAuth
   scopes are not granted. An independently granted `transition:generic` scope
   continues to authorize its existing public-repository operations.
@@ -31,7 +32,7 @@ is based on [proposal 0016 at revision `b54ec68`](https://github.com/bluesky-soc
 which explicitly remains a draft, and the reference implementation's
 [Spaces branch at `16bfeba`](https://github.com/bluesky-social/atproto/tree/16bfeba760aede46f0b87bf94febef9e6ea84b95/packages/pds).
 Recheck the released beta Lexicons, implementation, and migration guidance
-before implementing or enabling any of these contracts.
+before enabling any of these contracts.
 
 1. **Storage and publication:** implement separate per-author, per-space
    repositories, commits, revision and operation history. Keep their records,
@@ -66,3 +67,17 @@ revoked readers, cross-space access, simultaneous writes, public/private
 same-CID blobs, firehose and cache leakage, migration and recovery, and
 regressions for ordinary public-repo clients. A local build or test suite alone
 does not establish deployed or cross-implementation compatibility.
+
+## Development and deployment
+
+The `spaces-reference-interop.test.ts` test can exercise a disposable local
+reference PDS. Set `ALTERAN_REFERENCE_INTEROP_CONFIG` to a JSON file containing
+`pds`, `plc`, `did`, and `accessJwt` for a test account. Both service URLs must
+be loopback HTTP origins. The test creates a uniquely named space, exchanges a
+STAR archive and verifies response MACs, then attempts to delete the test space.
+An interrupted request may leave test data behind. Keep the configuration file
+private because it contains an access token.
+
+Apply database migrations `0014` and `0015` in order before deploying code that
+uses them. Public blob cleanup queries consult the new private-usage table, so
+deploying the Worker first would break those cleanup operations.
