@@ -135,7 +135,7 @@ The `spaces-reference-interop.test.ts`, `spaces-reference-lexicon.test.ts`,
 `spaces-reference-meta-members.test.ts`, `spaces-list-reference.test.ts`,
 `spaces-list-values-reference.test.ts`, `spaces-list-genesis-reference.test.ts`,
 `spaces-reference-integers.test.ts` and
-`spaces-get-space-reference.test.ts`
+`spaces-get-space-reference.test.ts` and `spaces-write-json-reference.test.ts`
 tests can exercise a disposable local reference PDS. Set
 `ALTERAN_REFERENCE_INTEROP_CONFIG` to a JSON file containing
 `pds`, `plc`, `did`, and `accessJwt` for a test account. Both service URLs must
@@ -293,6 +293,23 @@ The indexed page reader relies on the database's non-overlapping version
 interval invariant. Quarantined legacy epochs cannot be read through this path.
 Validate the complete lease, cleanup, and concurrent-write workload on the
 target D1 deployment before exposing an export route.
+
+The internal Space-write JSON parser accepts at most 1,000,000 input bytes,
+64 nesting levels, 32,768 total items including object keys, and 8,192 object
+keys. A key is limited to 8,192 UTF-8 bytes and a string value to 262,144
+bytes. It rejects malformed UTF-8, duplicate decoded names, empty or
+prototype-sensitive names, and unpaired surrogates. JSON numeric tokens are
+limited to 128 characters and an exponent magnitude of 128; mathematically
+integral decimal or exponent forms are represented exactly within signed
+64-bit range, using bigint outside the safe-number range. Negative zero becomes
+zero. Runtimes without source-aware JSON parsing fail closed.
+
+This parser is not connected to a route or a write. A successful parse does
+not validate a record's Lexicon, link, bytes or blob semantics, authorize a
+caller, or mean that the current write path can persist bigint values. Worker
+CPU, memory and concurrent-request costs must be validated in the target
+deployment before exposure. These conservative input limits are narrower than
+the reference protocol and require client compatibility testing.
 
 Record decoding is limited to 131,072 CBOR items and 100 levels per record.
 The internal mutation path validates the CIDs of touched records and limits
