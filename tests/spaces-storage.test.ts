@@ -4,11 +4,13 @@ import type { APIContext } from 'astro';
 import * as dagCbor from '@ipld/dag-cbor';
 import { CID } from 'multiformats/cid';
 import { sha256 } from 'multiformats/hashes/sha2';
-import { makeEnv } from './helpers/env';
+import { makeSpaceEnv as makeEnv, spaceOwner } from './helpers/space-env';
 import { seedLegacySpaceBlobUsage } from './helpers/space-legacy';
-import { applySpaceWrites, createLocalSpace, getSpaceRecord } from '../src/db/space-store';
+import { applySpaceWrites, createLocalSpace, getSpaceRecord } from './helpers/space-storage';
+import { beginPersonalSpaceDeletion } from './helpers/space-storage';
+import { applySpaceWrites as writeWithOwner } from '../src/db/space-store';
 import { parseSpaceRef } from '../src/db/space-ref';
-import { commitSpaceWrites, loadSpaceSnapshot } from '../src/db/space-mutation';
+import { commitSpaceWrites, loadSpaceSnapshot } from './helpers/space-storage';
 import { nextSpaceRevision } from '../src/db/space-tid';
 import { SpaceStorageError, type PreparedSpaceWrite } from '../src/db/space-types';
 import { putBlobRef, deleteBlobByKey, deleteUnreferencedBlobKeys, deleteUnreferencedBlobRef, listOrphanBlobRefs, setRecordBlobUsage, sweepEligibleUnreferencedBlobKeys } from '../src/db/dal';
@@ -97,13 +99,14 @@ describe('space storage', () => {
   it('captures writes and nested records before awaiting account authorization', async () => {
     const env = await makeEnv();
     await createLocalSpace(env, spaceA);
+    const owner = await spaceOwner(env);
     const link = CID.createV1(0x55, await sha256.digest(new TextEncoder().encode('linked'))).toString();
     const input = { $type: collection, nested: { text: 'original', bytes: { $bytes: 'YWJj' }, link: { $link: link } } };
     const write = create('first', input);
     const writes = [write];
     let resolveDid: (value: string) => void = () => { throw new Error('Missing resolver'); };
     const secret = new Promise<string>((resolve) => { resolveDid = resolve; });
-    const pending = applySpaceWrites({ ...env, PDS_DID: { get: () => secret } }, spaceA, did, writes);
+    const pending = writeWithOwner({ ...env, PDS_DID: { get: () => secret } }, spaceA, did, writes, owner);
     write.rkey = 'changed';
     input.nested.text = 'changed';
     input.nested.bytes.$bytes = 'eHl6';
@@ -138,6 +141,7 @@ describe('space storage', () => {
   it('bounds input size, node count and nesting before asynchronous work', async () => {
     const env = await makeEnv();
     await createLocalSpace(env, spaceA);
+    const owner = await spaceOwner(env);
     let secretReads = 0;
     const guardedEnv = { ...env, PDS_DID: { get: () => { secretReads++; return Promise.resolve(did); } } };
     const tooDeep: Record<string, unknown> = {};
@@ -148,7 +152,7 @@ describe('space storage', () => {
       current = child;
     }
     for (const value of ['x'.repeat(4_000_001), Array(200_001).fill(null), tooDeep]) {
-      await expectError(() => applySpaceWrites(guardedEnv, spaceA, did, [create('bad', { $type: collection, value })]), 'InvalidRequest');
+      await expectError(() => writeWithOwner(guardedEnv, spaceA, did, [create('bad', { $type: collection, value })], owner), 'InvalidRequest');
     }
     expect(secretReads).toBe(0);
     expect(await getSpaceRecord(env, spaceA, did, collection, 'bad')).toBeNull();
@@ -192,7 +196,13 @@ describe('space storage', () => {
       loadSpaceSnapshot(env, ref, did, two),
     ]);
     expect((await commitSpaceWrites(env, ref, did, one, firstSnapshot)).tag).toBe('committed');
+    const firstHead = await env.ALTERAN_DB.prepare('SELECT active_epoch_id, generation, mutation_id FROM space_repo WHERE space_ref = ?')
+      .bind(remoteSpace).first();
     expect((await commitSpaceWrites(env, ref, did, two, secondSnapshot)).tag).toBe('conflict');
+    expect(await env.ALTERAN_DB.prepare('SELECT active_epoch_id, generation, mutation_id FROM space_repo WHERE space_ref = ?')
+      .bind(remoteSpace).first()).toEqual(firstHead);
+    expect((await env.ALTERAN_DB.prepare('SELECT COUNT(*) AS n FROM space_mutation_attempt').first())?.n).toBe(0);
+    expect((await env.ALTERAN_DB.prepare('SELECT COUNT(*) AS n FROM space_commit_assertion').first())?.n).toBe(0);
     expect(await getSpaceRecord(env, remoteSpace, did, collection, 'two')).toBeNull();
     const ops = await env.ALTERAN_DB.prepare('SELECT COUNT(*) AS count FROM space_op WHERE space_ref = ?').bind(remoteSpace)
       .first<{ count: number }>();
@@ -250,7 +260,7 @@ describe('space storage', () => {
     const env = await makeEnv();
     await createLocalSpace(env, spaceA);
     const commit = await applySpaceWrites(env, spaceA, did, [create('key', record('before'))]);
-    await env.ALTERAN_DB.prepare('UPDATE space SET deleted_at = ? WHERE space_ref = ?').bind(Date.now(), spaceA).run();
+    expect((await beginPersonalSpaceDeletion(env, spaceA, crypto.randomUUID())).tag).toBe('started');
     await expectError(() => applySpaceWrites(env, spaceA, did, [create('other', record('after'))]), 'SpaceNotFound');
     await expectError(() => createLocalSpace(env, spaceA), 'SpaceAlreadyExists');
     expect(await getSpaceRecord(env, spaceA, did, collection, 'key')).toBeNull();

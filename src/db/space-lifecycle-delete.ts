@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { captureSpaceOwner } from "./space-owner";
 import {
   assertPersonalAuthority,
   captureDeletionHandle,
@@ -17,24 +18,31 @@ export async function beginPersonalSpaceDeletion(
   env: Env,
   spaceRef: string,
   nonce: string,
+  ownerIncarnation: string,
 ): Promise<BeginPersonalDeletion> {
   if (!validLifecycleNonce(nonce)) throw invalidLifecycleRequest();
   const ref = await assertPersonalAuthority(env, spaceRef);
+  const owner = captureSpaceOwner(ref.authorityDid, ownerIncarnation);
   const handle = Object.freeze({
     spaceRef: ref.ref,
     authorityDid: ref.authorityDid,
+    ownerIncarnation: owner.incarnation,
     nonce,
   });
   if (await getPersonalSpaceDeletion(env, handle)) {
     return { tag: "started", handle };
   }
-  const eligibility = await env.ALTERAN_DB.prepare(`SELECT
-    EXISTS (SELECT 1 FROM space s JOIN space_personal_policy p ON p.space_ref = s.space_ref
-      AND p.authority_did = s.authority_did WHERE s.space_ref = ? AND s.authority_did = ?
+  const eligibility = await env.ALTERAN_DB.prepare(`SELECT 1 AS personal,
+    EXISTS (SELECT 1 FROM space_blob_usage b WHERE b.space_ref = s.space_ref) AS blobs
+    FROM space s JOIN space_personal_policy p ON p.space_ref = s.space_ref AND p.authority_did = s.authority_did
+    JOIN account a ON a.did = p.authority_did AND a.space_incarnation = p.authority_incarnation
+    JOIN account_state state ON state.did = a.did
+    WHERE s.space_ref = ? AND s.authority_did = ? AND p.authority_incarnation = ?
+      AND s.space_ref = 'at://' || s.authority_did || '/space/' || s.space_type || '/' || s.skey
       AND s.deleted_at IS NULL AND p.policy_type = 'com.atproto.personalspace.policy'
-      AND p.notification_state = 'none') AS personal,
-    EXISTS (SELECT 1 FROM space_blob_usage b WHERE b.space_ref = ?) AS blobs`)
-    .bind(ref.ref, ref.authorityDid, ref.ref).first<
+      AND p.notification_state = 'none' AND typeof(state.active) = 'integer' AND state.active = 1
+      AND state.status IS NULL AND state.suspended_until IS NULL`)
+    .bind(ref.ref, ref.authorityDid, owner.incarnation).first<
     { personal: number; blobs: number }
   >();
   if (!eligibility || eligibility.personal !== 1 || eligibility.blobs !== 0) {
@@ -49,10 +57,15 @@ export async function beginPersonalSpaceDeletion(
         (nonce, space_ref, authority_did, epoch_id, status, phase, sequence, last_step_nonce, last_step_phase, last_step_count, created_at)
         SELECT ?, s.space_ref, s.authority_did, h.active_epoch_id, 'deleting', 'records', 0, NULL, NULL, 0, unixepoch()
         FROM space s JOIN space_personal_policy p ON p.space_ref = s.space_ref AND p.authority_did = s.authority_did
+        JOIN account a ON a.did = p.authority_did AND a.space_incarnation = p.authority_incarnation
+        JOIN account_state state ON state.did = a.did
         LEFT JOIN space_repo h ON h.space_ref = s.space_ref AND h.repo_did = s.authority_did
         WHERE s.space_ref = ? AND s.authority_did = ? AND s.deleted_at IS NULL
+          AND s.space_ref = 'at://' || s.authority_did || '/space/' || s.space_type || '/' || s.skey
+          AND p.authority_incarnation = ? AND typeof(state.active) = 'integer' AND state.active = 1
+          AND state.status IS NULL AND state.suspended_until IS NULL
           AND p.policy_type = 'com.atproto.personalspace.policy' AND p.notification_state = 'none'`)
-        .bind(nonce, ref.ref, ref.authorityDid),
+        .bind(nonce, ref.ref, ref.authorityDid, owner.incarnation),
       env.ALTERAN_DB.prepare(`UPDATE space SET deleted_at = unixepoch() * 1000
         WHERE space_ref = ? AND authority_did = ? AND deleted_at IS NULL
           AND EXISTS (SELECT 1 FROM space_personal_deletion_job j
@@ -76,7 +89,12 @@ export async function beginPersonalSpaceDeletion(
         .bind(ref.ref, ref.authorityDid, nonce, ref.ref, ref.authorityDid),
       env.ALTERAN_DB.prepare(`SELECT CASE WHEN EXISTS (
         SELECT 1 FROM space_personal_deletion_job j JOIN space s ON s.space_ref = j.space_ref
+        JOIN space_personal_policy p ON p.space_ref = j.space_ref AND p.authority_did = j.authority_did
+        JOIN account a ON a.did = p.authority_did AND a.space_incarnation = p.authority_incarnation
+        JOIN account_state state ON state.did = a.did
         WHERE j.nonce = ? AND j.space_ref = ? AND j.authority_did = ? AND j.status = 'deleting'
+          AND p.authority_incarnation = ? AND typeof(state.active) = 'integer' AND state.active = 1
+          AND state.status IS NULL AND state.suspended_until IS NULL
           AND j.phase = 'records' AND j.sequence = 0 AND typeof(s.deleted_at) = 'integer'
           AND (j.epoch_id IS NULL OR EXISTS (SELECT 1 FROM space_epoch e WHERE e.id = j.epoch_id
             AND e.space_ref = j.space_ref AND e.repo_did = j.authority_did AND e.state = 'deleting'))
@@ -88,6 +106,7 @@ export async function beginPersonalSpaceDeletion(
         nonce,
         ref.ref,
         ref.authorityDid,
+        owner.incarnation,
       ),
     ]);
   } catch {
@@ -124,11 +143,17 @@ export async function getPersonalSpaceDeletion(
         THEN 1 ELSE 0 END AS epoch_valid
     FROM space_personal_deletion_job j JOIN space s ON s.space_ref = j.space_ref AND s.authority_did = j.authority_did
     JOIN space_personal_policy p ON p.space_ref = j.space_ref AND p.authority_did = j.authority_did
+    JOIN account a ON a.did = p.authority_did AND a.space_incarnation = p.authority_incarnation
+    JOIN account_state state ON state.did = a.did
     WHERE j.nonce = ? AND j.space_ref = ? AND j.authority_did = ? AND typeof(s.deleted_at) = 'integer'
+      AND p.authority_incarnation = ? AND typeof(state.active) = 'integer' AND state.active = 1
+      AND state.status IS NULL AND state.suspended_until IS NULL
+      AND s.space_ref = 'at://' || s.authority_did || '/space/' || s.space_type || '/' || s.skey
       AND p.policy_type = 'com.atproto.personalspace.policy' AND p.notification_state = 'none'
-      AND (j.epoch_id IS NULL OR EXISTS (SELECT 1 FROM space_epoch e WHERE e.id = j.epoch_id
-        AND e.space_ref = j.space_ref AND e.repo_did = j.authority_did AND e.state = 'deleting'))`)
-    .bind(handle.nonce, handle.spaceRef, handle.authorityDid).first<{
+      AND (j.epoch_id IS NULL OR EXISTS (SELECT 1 FROM space_owned_epoch e WHERE e.id = j.epoch_id
+        AND e.space_ref = j.space_ref AND e.repo_did = j.authority_did AND e.state = 'deleting'
+        AND e.owner_incarnation = p.authority_incarnation))`)
+    .bind(handle.nonce, handle.spaceRef, handle.authorityDid, handle.ownerIncarnation).first<{
     status: unknown;
     phase: unknown;
     sequence: unknown;

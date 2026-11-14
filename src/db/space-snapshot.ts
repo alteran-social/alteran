@@ -6,6 +6,7 @@ import { parseCanonicalRepoCid } from '../lib/spaces/repo-cid';
 import { assertLocalSpaceRepo, parseSpaceRef } from './space-ref';
 import { validSpaceRecordBlock } from './space-record-block';
 import { globalLeaseExpiryStatements } from './space-lease-expiry';
+import { isSpaceOwnerIncarnation } from './space-owner-incarnation';
 import { SpaceStorageError } from './space-types';
 
 const LEASE_SECONDS = 60;
@@ -21,6 +22,7 @@ export type SpaceSnapshotLease = {
   readonly token: string;
   readonly spaceRef: string;
   readonly repoDid: string;
+  readonly ownerIncarnation: string;
   readonly epochId: string;
   readonly generation: number;
   readonly rev: string;
@@ -57,11 +59,14 @@ type RecordRow = {
   sentinel: number;
 };
 
+/** The trusted caller supplies the owner captured before asynchronous work. */
 export async function acquireSpaceSnapshot(
   env: Env,
   spaceRef: string,
   repoDid: string,
+  ownerIncarnation: string,
 ): Promise<SpaceSnapshotLease> {
+  if (!isSpaceOwnerIncarnation(ownerIncarnation)) throw unavailable();
   await assertLocalRepo(env, spaceRef, repoDid);
   const id = crypto.randomUUID();
   const token = crypto.randomUUID();
@@ -73,10 +78,10 @@ export async function acquireSpaceSnapshot(
        (id, token, renewal_nonce, space_ref, repo_did, epoch_id, generation, rev, set_hash, expires_at, maximum_expires_at)
        SELECT ?, ?, ?, h.space_ref, h.repo_did, h.active_epoch_id, h.generation, h.rev, h.set_hash,
          unixepoch() + ?, unixepoch() + ?
-       FROM space_repo h JOIN space_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
+       FROM space_repo h JOIN space_owned_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
          AND e.repo_did = h.repo_did AND e.state = 'active'
        JOIN space s ON s.space_ref = h.space_ref AND s.deleted_at IS NULL
-       WHERE h.space_ref = ? AND h.repo_did = ?
+       WHERE h.space_ref = ? AND h.repo_did = ? AND e.owner_incarnation = ?
          AND typeof(h.rev) = 'text' AND length(CAST(h.rev AS BLOB)) = 13
          AND typeof(h.set_hash) = 'blob' AND length(h.set_hash) = 2048
          AND typeof(h.generation) = 'integer' AND h.generation BETWEEN 1 AND 9007199254740991
@@ -84,34 +89,46 @@ export async function acquireSpaceSnapshot(
          AND NOT EXISTS (SELECT 1 FROM space_snapshot_lease l INDEXED BY space_snapshot_lease_owner_expiry
            WHERE l.space_ref = h.space_ref AND l.repo_did = h.repo_did LIMIT 1 OFFSET ?)
          AND NOT EXISTS (SELECT 1 FROM space_snapshot_lease LIMIT 1 OFFSET ?)`,
-    ).bind(id, token, nonce, LEASE_SECONDS, MAXIMUM_LEASE_SECONDS, spaceRef, repoDid,
+    ).bind(id, token, nonce, LEASE_SECONDS, MAXIMUM_LEASE_SECONDS, spaceRef, repoDid, ownerIncarnation,
       MAXIMUM_REPO_LEASES - 1, MAXIMUM_GLOBAL_LEASES - 1),
     env.ALTERAN_DB.prepare(
-      `SELECT CASE WHEN typeof(epoch_id) = 'text' AND length(CAST(epoch_id AS BLOB)) BETWEEN 1 AND 128 THEN epoch_id END AS epoch_id,
-         CASE WHEN typeof(generation) = 'integer' AND generation BETWEEN 1 AND 9007199254740991 THEN generation END AS generation,
-         CASE WHEN typeof(rev) = 'text' AND length(CAST(rev AS BLOB)) = 13 THEN rev END AS rev,
-         CASE WHEN typeof(set_hash) = 'blob' AND length(set_hash) = 2048 THEN set_hash END AS set_hash
-       FROM space_snapshot_lease WHERE id = ? AND token = ? AND renewal_nonce = ? AND space_ref = ? AND repo_did = ?`,
-    ).bind(id, token, nonce, spaceRef, repoDid),
+      `SELECT CASE WHEN typeof(l.epoch_id) = 'text' AND length(CAST(l.epoch_id AS BLOB)) BETWEEN 1 AND 128 THEN l.epoch_id END AS epoch_id,
+         CASE WHEN typeof(l.generation) = 'integer' AND l.generation BETWEEN 1 AND 9007199254740991 THEN l.generation END AS generation,
+         CASE WHEN typeof(l.rev) = 'text' AND length(CAST(l.rev AS BLOB)) = 13 THEN l.rev END AS rev,
+         CASE WHEN typeof(l.set_hash) = 'blob' AND length(l.set_hash) = 2048 THEN l.set_hash END AS set_hash
+       FROM space_snapshot_lease l JOIN space_owned_epoch e ON e.id = l.epoch_id AND e.space_ref = l.space_ref
+         AND e.repo_did = l.repo_did AND e.state = 'active'
+       JOIN space_repo h ON h.space_ref = l.space_ref AND h.repo_did = l.repo_did AND h.active_epoch_id = l.epoch_id
+         AND h.generation = l.generation AND h.rev = l.rev AND h.set_hash IS l.set_hash
+       JOIN space s ON s.space_ref = l.space_ref AND s.deleted_at IS NULL
+       WHERE l.id = ? AND l.token = ? AND l.renewal_nonce = ? AND l.space_ref = ? AND l.repo_did = ?
+         AND e.owner_incarnation = ?`,
+    ).bind(id, token, nonce, spaceRef, repoDid, ownerIncarnation),
     env.ALTERAN_DB.prepare(
       `SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM space_snapshot_lease WHERE id = ?)
-         OR EXISTS (
+         AND EXISTS (SELECT 1 FROM space_repo h JOIN space_owned_epoch e ON e.id = h.active_epoch_id
+           AND e.space_ref = h.space_ref AND e.repo_did = h.repo_did AND e.state = 'active'
+           JOIN space s ON s.space_ref = h.space_ref AND s.deleted_at IS NULL
+           WHERE h.space_ref = ? AND h.repo_did = ? AND e.owner_incarnation = ?)
+         THEN 1 WHEN EXISTS (
            SELECT 1 FROM space_snapshot_lease l
            JOIN space_repo h ON h.space_ref = l.space_ref AND h.repo_did = l.repo_did
              AND h.active_epoch_id = l.epoch_id AND h.generation = l.generation
              AND h.rev = l.rev AND h.set_hash IS l.set_hash
-           JOIN space_epoch e ON e.id = l.epoch_id AND e.space_ref = l.space_ref
+           JOIN space_owned_epoch e ON e.id = l.epoch_id AND e.space_ref = l.space_ref
              AND e.repo_did = l.repo_did AND e.state = 'active'
            JOIN space s ON s.space_ref = l.space_ref AND s.deleted_at IS NULL
            WHERE l.id = ? AND l.token = ? AND l.renewal_nonce = ? AND l.space_ref = ? AND l.repo_did = ?
+             AND e.owner_incarnation = ?
              AND typeof(l.set_hash) = 'blob' AND length(l.set_hash) = 2048
              AND l.expires_at > unixepoch() AND l.maximum_expires_at > unixepoch()
              AND NOT EXISTS (SELECT 1 FROM space_snapshot_lease quota INDEXED BY space_snapshot_lease_owner_expiry
                WHERE quota.space_ref = l.space_ref AND quota.repo_did = l.repo_did LIMIT 1 OFFSET ?)
              AND NOT EXISTS (SELECT 1 FROM space_snapshot_lease LIMIT 1 OFFSET ?)
          ) THEN 1 ELSE json('{') END AS valid`,
-    ).bind(id, id, token, nonce, spaceRef, repoDid, MAXIMUM_REPO_LEASES, MAXIMUM_GLOBAL_LEASES),
-  ]);
+    ).bind(id, spaceRef, repoDid, ownerIncarnation, id, token, nonce, spaceRef, repoDid, ownerIncarnation,
+      MAXIMUM_REPO_LEASES, MAXIMUM_GLOBAL_LEASES),
+  ]).catch(() => { throw unavailable(); });
   const row = selected.results?.[0] as LeaseRow | undefined;
   if (!row) throw unavailable();
   if (!row.epoch_id || !row.rev || !isValidTid(row.rev) || !Number.isSafeInteger(row.generation) ||
@@ -120,7 +137,7 @@ export async function acquireSpaceSnapshot(
     throw new SpaceStorageError('InvalidRepoState', 'Invalid snapshot state');
   }
   const state = Uint8Array.from(row.set_hash);
-  return { id, token, spaceRef, repoDid, epochId: row.epoch_id, generation: row.generation,
+  return { id, token, spaceRef, repoDid, ownerIncarnation, epochId: row.epoch_id, generation: row.generation,
     rev: row.rev, data: spaceSetHashDigest(state), setHash: state };
 }
 
@@ -131,13 +148,20 @@ export async function readSpaceSnapshotPage(
   limit = MAXIMUM_PAGE_RECORDS,
 ): Promise<{ readonly records: readonly SpaceSnapshotRecord[]; readonly cursor: string | null }> {
   const captured = captureLease(lease);
-  const { id, token, spaceRef, repoDid, epochId, generation, rev, setHash } = captured;
+  const { id, token, spaceRef, repoDid, ownerIncarnation, epochId, generation, rev, setHash } = captured;
   await assertLocalRepo(env, spaceRef, repoDid);
   if (!Number.isInteger(limit) || limit < 1 || limit > MAXIMUM_PAGE_RECORDS || (cursor !== null && !validPath(cursor))) {
     throw new SpaceStorageError('InvalidRequest', 'Invalid snapshot page');
   }
   const nonce = crypto.randomUUID();
   const identity = [id, token, spaceRef, repoDid, epochId, generation, rev, setHash.buffer] as const;
+  const validLease = `SELECT 1 FROM space_snapshot_lease l JOIN space_owned_epoch e ON e.id = l.epoch_id
+    AND e.space_ref = l.space_ref AND e.repo_did = l.repo_did AND e.state = 'active'
+    JOIN space_repo h ON h.space_ref = l.space_ref AND h.repo_did = l.repo_did AND h.active_epoch_id = l.epoch_id
+    JOIN space s ON s.space_ref = l.space_ref AND s.deleted_at IS NULL
+    WHERE l.id = ? AND l.token = ? AND l.space_ref = ? AND l.repo_did = ? AND l.epoch_id = ?
+      AND l.generation = ? AND l.rev = ? AND l.set_hash = ? AND l.renewal_nonce = ?
+      AND l.expires_at > unixepoch() AND l.maximum_expires_at > unixepoch() AND e.owner_incarnation = ?`;
   // Seek distinct paths and then the newest prior version so old versions do
   // not turn one page into a scan of the entire history for a path.
   const [, selected] = await env.ALTERAN_DB.batch([
@@ -147,23 +171,16 @@ export async function readSpaceSnapshotPage(
          AND rev = ? AND set_hash = ?
          AND expires_at > unixepoch() AND maximum_expires_at > unixepoch()
          AND EXISTS (
-           SELECT 1 FROM space_repo h JOIN space_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
+           SELECT 1 FROM space_repo h JOIN space_owned_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
              AND e.repo_did = h.repo_did AND e.state = 'active'
            JOIN space s ON s.space_ref = h.space_ref AND s.deleted_at IS NULL
            WHERE h.space_ref = space_snapshot_lease.space_ref AND h.repo_did = space_snapshot_lease.repo_did
              AND h.active_epoch_id = space_snapshot_lease.epoch_id
+             AND e.owner_incarnation = ?
          )`,
-    ).bind(nonce, LEASE_SECONDS, ...identity),
+    ).bind(nonce, LEASE_SECONDS, ...identity, ownerIncarnation),
     env.ALTERAN_DB.prepare(
-      `WITH RECURSIVE valid_lease AS (
-         SELECT 1 FROM space_snapshot_lease l JOIN space_epoch e ON e.id = l.epoch_id
-           AND e.space_ref = l.space_ref AND e.repo_did = l.repo_did AND e.state = 'active'
-         JOIN space_repo h ON h.space_ref = l.space_ref AND h.repo_did = l.repo_did AND h.active_epoch_id = l.epoch_id
-         JOIN space s ON s.space_ref = l.space_ref AND s.deleted_at IS NULL
-         WHERE l.id = ? AND l.token = ? AND l.space_ref = ? AND l.repo_did = ? AND l.epoch_id = ?
-           AND l.generation = ? AND l.rev = ? AND l.set_hash = ? AND l.renewal_nonce = ? AND l.expires_at > unixepoch()
-           AND l.maximum_expires_at > unixepoch()
-       ), paths(path, ordinal) AS (
+      `WITH RECURSIVE valid_lease AS (${validLease}), paths(path, ordinal) AS (
          SELECT (SELECT path FROM space_record_version WHERE epoch_id = ? AND path > ? COLLATE BINARY
            ORDER BY path COLLATE BINARY LIMIT 1), 1 FROM valid_lease
          UNION ALL
@@ -211,10 +228,12 @@ export async function readSpaceSnapshotPage(
        WHERE p.total <= ? OR p.ordinal = 1
        UNION ALL SELECT NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1, 0, 1 FROM valid_lease
        ORDER BY 1`,
-    ).bind(...identity, nonce, epochId, cursor ?? '', epochId, limit, epochId, generation,
+    ).bind(...identity, nonce, ownerIncarnation, epochId, cursor ?? '', epochId, limit, epochId, generation,
       spaceRef, repoDid, generation, epochId, MAXIMUM_PAGE_BYTES, MAXIMUM_PAGE_BYTES,
       MAXIMUM_PAGE_BYTES, epochId, MAXIMUM_PAGE_BYTES),
-  ]);
+    env.ALTERAN_DB.prepare(`SELECT CASE WHEN EXISTS (${validLease}) THEN 1 ELSE json('{') END AS valid`)
+      .bind(...identity, nonce, ownerIncarnation),
+  ]).catch(() => { throw unavailable(); });
   const selectedRows = selected.results as RecordRow[] | undefined;
   if (!selectedRows || selectedRows.filter((row) => row.sentinel === 1).length !== 1) throw unavailable();
   const rows = selectedRows.filter((row) => row.sentinel === 0);
@@ -257,11 +276,12 @@ async function assertLocalRepo(env: Env, spaceRef: string, repoDid: string): Pro
 }
 
 function captureLease(value: SpaceSnapshotLease): SpaceSnapshotLease {
-  const fields = copyPlainRecord(value, ['id', 'token', 'spaceRef', 'repoDid', 'epochId', 'generation', 'rev', 'data', 'setHash']);
+  const fields = copyPlainRecord(value, ['id', 'token', 'spaceRef', 'repoDid', 'ownerIncarnation', 'epochId', 'generation', 'rev', 'data', 'setHash']);
   if (!fields || typeof fields.id !== 'string' || !fields.id || fields.id.length > 128 ||
     typeof fields.token !== 'string' || !fields.token || fields.token.length > 128 ||
     typeof fields.spaceRef !== 'string' || fields.spaceRef.length > 8192 ||
     typeof fields.repoDid !== 'string' || fields.repoDid.length > 2048 ||
+    !isSpaceOwnerIncarnation(fields.ownerIncarnation) ||
     typeof fields.epochId !== 'string' || !fields.epochId || fields.epochId.length > 128 ||
     typeof fields.generation !== 'number' || !Number.isSafeInteger(fields.generation) || fields.generation < 1 ||
     typeof fields.rev !== 'string' || !isValidTid(fields.rev) ||
@@ -277,6 +297,7 @@ function captureLease(value: SpaceSnapshotLease): SpaceSnapshotLease {
     if (data.byteLength !== 32 || setHash.byteLength !== 2048 ||
       spaceSetHashDigest(setHash).some((byte, index) => byte !== data[index])) throw unavailable();
     return { id: fields.id, token: fields.token, spaceRef: fields.spaceRef, repoDid: fields.repoDid,
+      ownerIncarnation: fields.ownerIncarnation,
       epochId: fields.epochId, generation: fields.generation, rev: fields.rev, data, setHash };
   } catch {
     throw unavailable();

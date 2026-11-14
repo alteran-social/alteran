@@ -2,6 +2,7 @@ import { isValidNsid, isValidRecordKey } from "@atproto/syntax-spaces";
 import type { Env } from "../env";
 import { copyPlainRecord } from "../lib/spaces/plain-values";
 import { pruneExpiredSpaceSnapshotLeases } from "./space-lease-expiry";
+import { isSpaceOwnerIncarnation } from "./space-owner-incarnation";
 import { assertLocalSpaceRepo, parseSpaceRef } from "./space-ref";
 import { SpaceStorageError } from "./space-types";
 
@@ -11,6 +12,7 @@ const MAXIMUM_SAFE_INTEGER = 9007199254740991;
 export type SpaceVersionGcCursor = {
   readonly spaceRef: string;
   readonly repoDid: string;
+  readonly ownerIncarnation: string;
   readonly epochId: string;
   readonly untilGeneration: number;
   readonly path: string;
@@ -34,10 +36,10 @@ type CandidateRow = {
 };
 
 const ACTIVE_EPOCH = `FROM space_repo h
-  JOIN space_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
+  JOIN space_owned_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
     AND e.repo_did = h.repo_did AND e.state = 'active'
   JOIN space s ON s.space_ref = h.space_ref AND s.deleted_at IS NULL
-  WHERE h.space_ref = ? AND h.repo_did = ?`;
+  WHERE h.space_ref = ? AND h.repo_did = ? AND e.owner_incarnation = ?`;
 
 const CREATE_ATTEMPT =
   `INSERT INTO space_gc_attempt (id, space_ref, repo_did, epoch_id)
@@ -46,9 +48,9 @@ const CREATE_ATTEMPT =
 const ASSERT_ATTEMPT = `SELECT CASE WHEN EXISTS (
   SELECT 1 FROM space_gc_attempt g JOIN space_repo h ON h.space_ref = g.space_ref AND h.repo_did = g.repo_did
     AND h.active_epoch_id = g.epoch_id
-  JOIN space_epoch e ON e.id = g.epoch_id AND e.space_ref = g.space_ref AND e.repo_did = g.repo_did AND e.state = 'active'
+  JOIN space_owned_epoch e ON e.id = g.epoch_id AND e.space_ref = g.space_ref AND e.repo_did = g.repo_did AND e.state = 'active'
   JOIN space s ON s.space_ref = g.space_ref AND s.deleted_at IS NULL
-  WHERE g.id = ? AND g.space_ref = ? AND g.repo_did = ? AND g.epoch_id = ?
+  WHERE g.id = ? AND g.space_ref = ? AND g.repo_did = ? AND g.epoch_id = ? AND e.owner_incarnation = ?
 ) THEN 1 ELSE json('{') END AS valid`;
 
 const SCAN_FIELDS = `
@@ -59,7 +61,12 @@ const SCAN_FIELDS = `
     THEN v.from_generation END AS from_generation`;
 const SCAN_SOURCE =
   `FROM space_record_version v INDEXED BY space_record_version_gc_candidates
-  WHERE v.epoch_id = ? AND v.space_ref = ? AND v.repo_did = ? AND v.until_generation IS NOT NULL`;
+  WHERE v.epoch_id = ? AND v.space_ref = ? AND v.repo_did = ? AND v.until_generation IS NOT NULL
+    AND EXISTS (SELECT 1 FROM space_owned_epoch e JOIN space_repo h ON h.space_ref = e.space_ref
+      AND h.repo_did = e.repo_did AND h.active_epoch_id = e.id
+      JOIN space s ON s.space_ref = e.space_ref AND s.deleted_at IS NULL
+      WHERE e.id = v.epoch_id AND e.space_ref = v.space_ref AND e.repo_did = v.repo_did
+        AND e.state = 'active' AND e.owner_incarnation = ?)`;
 
 export const SPACE_VERSION_GC_FIRST_SQL = `SELECT ${SCAN_FIELDS} ${SCAN_SOURCE}
   ORDER BY v.until_generation, v.path COLLATE BINARY, v.from_generation LIMIT ?`;
@@ -87,6 +94,11 @@ const MATCH_CANDIDATES =
     AND v.until_generation IS NOT NULL
     AND EXISTS (SELECT 1 FROM space_gc_attempt g WHERE g.id = ? AND g.epoch_id = v.epoch_id
       AND g.space_ref = v.space_ref AND g.repo_did = v.repo_did)
+    AND EXISTS (SELECT 1 FROM space_owned_epoch e JOIN space_repo h ON h.space_ref = e.space_ref
+      AND h.repo_did = e.repo_did AND h.active_epoch_id = e.id
+      JOIN space s ON s.space_ref = e.space_ref AND s.deleted_at IS NULL
+      WHERE e.id = v.epoch_id AND e.space_ref = v.space_ref AND e.repo_did = v.repo_did
+        AND e.state = 'active' AND e.owner_incarnation = ?)
     AND NOT EXISTS (SELECT 1 FROM space_snapshot_lease l INDEXED BY space_snapshot_lease_epoch_generation
       WHERE l.epoch_id = v.epoch_id AND l.space_ref = v.space_ref AND l.repo_did = v.repo_did
         AND l.generation >= v.from_generation AND l.generation < v.until_generation)`;
@@ -100,23 +112,31 @@ const ASSERT_DELETED =
   `SELECT CASE WHEN NOT EXISTS (SELECT 1 ${MATCH_CANDIDATES})
   THEN 1 ELSE json('{') END AS valid`;
 const DELETE_ATTEMPT =
-  "DELETE FROM space_gc_attempt WHERE id = ? AND space_ref = ? AND repo_did = ? AND epoch_id = ?";
+  `DELETE FROM space_gc_attempt WHERE id = ? AND space_ref = ? AND repo_did = ? AND epoch_id = ?
+    AND EXISTS (SELECT 1 FROM space_owned_epoch e JOIN space_repo h ON h.space_ref = e.space_ref
+      AND h.repo_did = e.repo_did AND h.active_epoch_id = e.id
+      JOIN space s ON s.space_ref = e.space_ref AND s.deleted_at IS NULL
+      WHERE e.id = space_gc_attempt.epoch_id AND e.space_ref = space_gc_attempt.space_ref
+        AND e.repo_did = space_gc_attempt.repo_did AND e.state = 'active' AND e.owner_incarnation = ?)`;
 const ASSERT_ATTEMPT_REMOVED =
   `SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM space_gc_attempt WHERE id = ?)
+    AND EXISTS (SELECT 1 ${ACTIVE_EPOCH} AND h.active_epoch_id = ?)
   THEN 1 ELSE json('{') END AS valid`;
 
-/** Process one bounded keyset page. A null cursor starts a new sweep cycle. */
+/** Process one bounded page for a captured owner. A null cursor starts a new cycle. */
 export async function pruneSpaceRecordVersionsPage(
   env: Env,
   spaceRef: string,
   repoDid: string,
+  ownerIncarnation: string,
   inputCursor: SpaceVersionGcCursor | null = null,
   batchSize = MAXIMUM_CANDIDATES,
 ): Promise<SpaceVersionGcPage> {
   parseSpaceRef(spaceRef);
+  if (!isSpaceOwnerIncarnation(ownerIncarnation)) throw invalidRequest();
   const cursor = inputCursor === null
     ? null
-    : captureCursor(inputCursor, spaceRef, repoDid);
+    : captureCursor(inputCursor, spaceRef, repoDid, ownerIncarnation);
   if (
     !Number.isInteger(batchSize) || batchSize < 1 ||
     batchSize > MAXIMUM_CANDIDATES
@@ -127,7 +147,7 @@ export async function pruneSpaceRecordVersionsPage(
     `SELECT CASE WHEN typeof(h.active_epoch_id) = 'text'
     AND length(CAST(h.active_epoch_id AS BLOB)) BETWEEN 1 AND 128 THEN h.active_epoch_id END AS epoch_id ${ACTIVE_EPOCH}`,
   )
-    .bind(spaceRef, repoDid).first<{ epoch_id: unknown }>();
+    .bind(spaceRef, repoDid, ownerIncarnation).first<{ epoch_id: unknown }>();
   if (!head) {
     throw new SpaceStorageError("RepoNotFound", "Space repo is unavailable");
   }
@@ -143,6 +163,7 @@ export async function pruneSpaceRecordVersionsPage(
       epochId,
       spaceRef,
       repoDid,
+      ownerIncarnation,
       cursor.untilGeneration,
       cursor.path,
       cursor.fromGeneration,
@@ -150,12 +171,14 @@ export async function pruneSpaceRecordVersionsPage(
       epochId,
       spaceRef,
       repoDid,
+      ownerIncarnation,
       cursor.untilGeneration,
       cursor.path,
       scanLimit,
       epochId,
       spaceRef,
       repoDid,
+      ownerIncarnation,
       cursor.untilGeneration,
       scanLimit,
       scanLimit,
@@ -164,15 +187,16 @@ export async function pruneSpaceRecordVersionsPage(
       epochId,
       spaceRef,
       repoDid,
+      ownerIncarnation,
       scanLimit,
     );
   const scanResult = await env.ALTERAN_DB.batch([
-    env.ALTERAN_DB.prepare(CREATE_ATTEMPT).bind(...scanIdentity),
-    env.ALTERAN_DB.prepare(ASSERT_ATTEMPT).bind(...scanIdentity),
+    env.ALTERAN_DB.prepare(CREATE_ATTEMPT).bind(scanId, spaceRef, repoDid, ownerIncarnation, epochId),
+    env.ALTERAN_DB.prepare(ASSERT_ATTEMPT).bind(...scanIdentity, ownerIncarnation),
     scan,
-    env.ALTERAN_DB.prepare(ASSERT_ATTEMPT).bind(...scanIdentity),
-    env.ALTERAN_DB.prepare(DELETE_ATTEMPT).bind(...scanIdentity),
-    env.ALTERAN_DB.prepare(ASSERT_ATTEMPT_REMOVED).bind(scanId),
+    env.ALTERAN_DB.prepare(ASSERT_ATTEMPT).bind(...scanIdentity, ownerIncarnation),
+    env.ALTERAN_DB.prepare(DELETE_ATTEMPT).bind(...scanIdentity, ownerIncarnation),
+    env.ALTERAN_DB.prepare(ASSERT_ATTEMPT_REMOVED).bind(scanId, spaceRef, repoDid, ownerIncarnation, epochId),
   ]);
   const candidateRows = scanResult[2]?.results as CandidateRow[] | undefined;
   if (!candidateRows || candidateRows.length > batchSize + 1) {
@@ -183,7 +207,7 @@ export async function pruneSpaceRecordVersionsPage(
   if (!page.length) return { pruned: 0, cursor: null };
   const last = page[page.length - 1];
   const next = candidates.length > batchSize
-    ? Object.freeze({ spaceRef, repoDid, epochId, ...last })
+    ? Object.freeze({ spaceRef, repoDid, ownerIncarnation, epochId, ...last })
     : null;
   const encoded = JSON.stringify(
     page.map((item) => [item.untilGeneration, item.path, item.fromGeneration]),
@@ -196,18 +220,19 @@ export async function pruneSpaceRecordVersionsPage(
     spaceRef,
     repoDid,
     deleteId,
+    ownerIncarnation,
   ] as const;
   const deletion = await env.ALTERAN_DB.batch([
-    env.ALTERAN_DB.prepare(CREATE_ATTEMPT).bind(...deleteIdentity),
-    env.ALTERAN_DB.prepare(ASSERT_ATTEMPT).bind(...deleteIdentity),
+    env.ALTERAN_DB.prepare(CREATE_ATTEMPT).bind(deleteId, spaceRef, repoDid, ownerIncarnation, epochId),
+    env.ALTERAN_DB.prepare(ASSERT_ATTEMPT).bind(...deleteIdentity, ownerIncarnation),
     env.ALTERAN_DB.prepare(SPACE_VERSION_GC_DELETE_SQL).bind(
       ...candidateArguments,
     ),
     env.ALTERAN_DB.prepare("SELECT changes() AS count"),
     env.ALTERAN_DB.prepare(ASSERT_DELETED).bind(...candidateArguments),
-    env.ALTERAN_DB.prepare(ASSERT_ATTEMPT).bind(...deleteIdentity),
-    env.ALTERAN_DB.prepare(DELETE_ATTEMPT).bind(...deleteIdentity),
-    env.ALTERAN_DB.prepare(ASSERT_ATTEMPT_REMOVED).bind(deleteId),
+    env.ALTERAN_DB.prepare(ASSERT_ATTEMPT).bind(...deleteIdentity, ownerIncarnation),
+    env.ALTERAN_DB.prepare(DELETE_ATTEMPT).bind(...deleteIdentity, ownerIncarnation),
+    env.ALTERAN_DB.prepare(ASSERT_ATTEMPT_REMOVED).bind(deleteId, spaceRef, repoDid, ownerIncarnation, epochId),
   ]);
   const count = (deletion[3]?.results?.[0] as { count?: unknown } | undefined)
     ?.count;
@@ -238,10 +263,12 @@ function captureCursor(
   value: SpaceVersionGcCursor,
   spaceRef: string,
   repoDid: string,
+  ownerIncarnation: string,
 ): SpaceVersionGcCursor {
   const fields = copyPlainRecord(value, [
     "spaceRef",
     "repoDid",
+    "ownerIncarnation",
     "epochId",
     "untilGeneration",
     "path",
@@ -249,6 +276,7 @@ function captureCursor(
   ]);
   if (
     !fields || fields.spaceRef !== spaceRef || fields.repoDid !== repoDid ||
+    fields.ownerIncarnation !== ownerIncarnation ||
     typeof fields.epochId !== "string" || !fields.epochId ||
     fields.epochId.length > 128 ||
     typeof fields.untilGeneration !== "number" ||
@@ -262,6 +290,7 @@ function captureCursor(
   return {
     spaceRef,
     repoDid,
+    ownerIncarnation,
     epochId: fields.epochId,
     untilGeneration: fields.untilGeneration,
     path: fields.path,

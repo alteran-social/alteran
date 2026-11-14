@@ -1,8 +1,7 @@
 import { isValidDid } from '@atproto/syntax-spaces';
 import { expect } from '@std/expect';
-import { makeEnv } from './helpers/env';
-import { applySpaceWrites, createLocalSpace } from '../src/db/space-store';
-import { streamSpaceRepoArchive } from '../src/services/space-repo-export';
+import { makeSpaceEnv as makeEnv } from './helpers/space-env';
+import { applySpaceWrites, createLocalSpace, streamSpaceRepoArchive } from './helpers/space-adapters';
 
 const configPath = Deno.env.get('ALTERAN_REFERENCE_INTEROP_CONFIG');
 const COLLECTION = 'com.example.note';

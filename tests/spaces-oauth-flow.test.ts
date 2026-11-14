@@ -18,6 +18,7 @@ import { POST as createSession } from "../src/pages/xrpc/com.atproto.server.crea
 import { createPersonalSpace } from "../src/db/space-lifecycle-create";
 import { applySpaceWrites } from "../src/db/space-store";
 import { readAuthorizedSpaceRecord } from "../src/db/space-authorized-record";
+import { GET as getSpaceRecord } from "../src/pages/xrpc/com.atproto.space.getRecord";
 import * as dagCbor from "@ipld/dag-cbor";
 
 const ORIGIN = "https://pds.example";
@@ -118,12 +119,14 @@ describe("Space read-self OAuth flow", () => {
     const key = await makeDpopKey();
     await createAccount(env, { did: "did:example:test", handle: "test.example", passwordScrypt: await hashPassword("pwd") });
     await setAccountState(env, "did:example:test", { tag: "active" });
+    const owner = (await getAccountByIdentifier(env, "did:example:test"))?.spaceIncarnation;
+    if (!owner) throw new Error("Missing Space owner");
     const space = "at://did:example:test/space/com.example.forum/general";
-    await createPersonalSpace(env, space, { $type: "com.atproto.personalspace.policy" }, crypto.randomUUID());
+    await createPersonalSpace(env, space, { $type: "com.atproto.personalspace.policy" }, crypto.randomUUID(), owner);
     await applySpaceWrites(env, space, "did:example:test", [{
       action: "create", collection: "com.example.other", rkey: "one",
       record: { $type: "com.example.other", text: "private record" },
-    }]);
+    }], owner);
     const { code, html } = await authorizationCode(env, key);
     expect(html).toContain("Read your own repository, including all collections, in matching spaces");
     expect(html).toContain("Read settings, policies, member lists, writer identities and sync state");
@@ -155,6 +158,15 @@ describe("Space read-self OAuth flow", () => {
     if (read.tag !== "found") throw new Error("Private record unavailable");
     expect(dagCbor.decode(read.record.value)).toEqual({ $type: "com.example.other", text: "private record" });
     expect(consumeVerifiedSpacePrincipal(principal, resourceRequest, env.ALTERAN_DB)).toBe(false);
+
+    const httpRequest = new Request(`${path}?${params}`, {
+      headers: { authorization: `DPoP ${body.access_token}`, dpop: await signResourceDpop(env, key, "GET", path, body.access_token) },
+    });
+    const httpResponse = await getSpaceRecord(context(env, httpRequest));
+    expect(httpResponse.status).toBe(200);
+    expect((await httpResponse.json() as { value: unknown }).value)
+      .toEqual({ $type: "com.example.other", text: "private record" });
+    expect(httpResponse.headers.get("cache-control")).toBe("private, no-store");
 
     const refreshed = await token(env, key, { grant_type: "refresh_token", refresh_token: body.refresh_token });
     expect(refreshed.status).toBe(200);

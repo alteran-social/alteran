@@ -1,13 +1,13 @@
 import { describe, it } from './helpers/bdd';
 import { expect } from '@std/expect';
-import { makeEnv } from './helpers/env';
-import { createLocalSpace, applySpaceWrites, getSpaceRecord } from '../src/db/space-store';
-import { acquireSpaceSnapshot, readSpaceSnapshotPage } from '../src/db/space-snapshot';
-import { createPersonalSpace } from '../src/db/space-lifecycle-create';
-import { beginPersonalSpaceDeletion, getPersonalSpaceDeletion } from '../src/db/space-lifecycle-delete';
+import { makeSpaceEnv as makeEnv, spaceOwner } from './helpers/space-env';
+import { createLocalSpace, applySpaceWrites, getSpaceRecord } from './helpers/space-storage';
+import { acquireSpaceSnapshot, readSpaceSnapshotPage, streamSpaceRepoArchive } from './helpers/space-adapters';
+import { createPersonalSpace } from './helpers/space-storage';
+import { beginPersonalSpaceDeletion } from './helpers/space-storage';
+import { getPersonalSpaceDeletion } from '../src/db/space-lifecycle-delete';
 import { stepPersonalSpaceDeletion } from '../src/db/space-lifecycle-cleanup';
 import { assertCleanupCandidates, CLEANUP_PHASES, insertCleanupCandidates } from '../src/db/space-lifecycle-cleanup-sql';
-import { streamSpaceRepoArchive } from '../src/services/space-repo-export';
 import type { PersonalDeletionHandle } from '../src/db/space-lifecycle-types';
 
 const DID = 'did:example:test';
@@ -63,9 +63,11 @@ describe('internal personal Space lifecycle', () => {
     await rejected(() => env.ALTERAN_DB.prepare('UPDATE space_personal_policy SET notification_state = ?').bind('changed').run());
     await rejected(() => env.ALTERAN_DB.prepare('INSERT OR REPLACE INTO space SELECT * FROM space WHERE space_ref = ?').bind(SPACE).run());
     const legacy = `${SPACE}legacy`;
-    await createLocalSpace(env, legacy);
+    await env.ALTERAN_DB.prepare('INSERT INTO space (space_ref, authority_did, space_type, skey, created_at) VALUES (?, ?, ?, ?, unixepoch() * 1000)')
+      .bind(legacy, DID, 'com.example.notes', 'lifecyclelegacy').run();
     expect((await beginPersonalSpaceDeletion(env, legacy, crypto.randomUUID())).tag).toBe('unsupported');
-    expect((await env.ALTERAN_DB.prepare('DELETE FROM space WHERE space_ref = ?').bind(legacy).run()).meta.changes).toBe(1);
+    await rejected(() => env.ALTERAN_DB.prepare('DELETE FROM space WHERE space_ref = ?').bind(legacy).run());
+    await rejected(() => createLocalSpace(env, legacy));
   });
   it('revokes old leases and writers atomically, retains a tombstone and recovers the deletion receipt', async () => {
     const env = await fixture(['a']), lease = await acquireSpaceSnapshot(env, SPACE, DID), nonce = crypto.randomUUID();
@@ -359,12 +361,16 @@ describe('internal personal Space lifecycle', () => {
   });
   it('refuses deletion when a mutation attempt or quarantine receipt retains hash state', async () => {
     const env = await fixture(['a']);
+    const mutation = crypto.randomUUID();
     await env.ALTERAN_DB.prepare(`INSERT INTO space_mutation_attempt
-      SELECT 'orphan', space_ref, repo_did, active_epoch_id, generation, rev, set_hash FROM space_repo WHERE space_ref = ?`).bind(SPACE).run();
+      (mutation_id, space_ref, repo_did, epoch_id, generation, rev, set_hash, owner_incarnation)
+      SELECT ?, space_ref, repo_did, active_epoch_id, generation, rev, set_hash, ? FROM space_repo WHERE space_ref = ?`)
+      .bind(mutation, await spaceOwner(env), SPACE).run();
     expect((await beginPersonalSpaceDeletion(env, SPACE, crypto.randomUUID())).tag).toBe('unavailable');
     expect(await count(env, 'space_personal_deletion_job')).toBe(0);
-    await env.ALTERAN_DB.exec("DELETE FROM space_mutation_attempt WHERE mutation_id = 'orphan'");
+    await env.ALTERAN_DB.prepare('DELETE FROM space_mutation_attempt WHERE mutation_id = ?').bind(mutation).run();
     await env.ALTERAN_DB.exec('DROP TRIGGER space_quarantine_job_insert_guard');
+    await env.ALTERAN_DB.exec('DROP TRIGGER space_quarantine_owner_insert');
     await env.ALTERAN_DB.prepare(`INSERT INTO space_quarantine_job
       (id, token, renewal_nonce, space_ref, repo_did, epoch_id, authority_did, space_type, skey,
        generation, mutation_id, rev, expected_hash, accumulated_hash, cursor, sequence, record_count, lease_until, status, activation_nonce, created_at)
@@ -384,7 +390,7 @@ describe('internal personal Space lifecycle', () => {
     const watched = { ...env, ALTERAN_DB: new Proxy(database, { get(target, key) {
       if (key === 'batch') return async (statements: Parameters<typeof database.batch>[0]) => {
         const result = await database.batch(statements);
-        if (!blocked && statements.length === 2) { blocked = true; paused(); await wait; }
+        if (!blocked && statements.length === 3) { blocked = true; paused(); await wait; }
         return result;
       };
       const value = Reflect.get(target, key, target); return typeof value === 'function' ? value.bind(target) : value;

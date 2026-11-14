@@ -1,23 +1,25 @@
 import { describe, it } from "./helpers/bdd";
 import { expect } from "@std/expect";
-import { makeEnv } from "./helpers/env";
+import { makeSpaceEnv as makeEnv } from "./helpers/space-env";
+import { spaceOwner } from "./helpers/space-env";
 import {
   applySpaceWrites,
   createLocalSpace,
   getSpaceRecord,
-} from "../src/db/space-store";
+} from "./helpers/space-adapters";
 import {
   acquireSpaceSnapshot,
   releaseSpaceSnapshot,
-} from "../src/db/space-snapshot";
+} from "./helpers/space-adapters";
 import {
   pruneSpaceRecordVersionsPage,
   SPACE_VERSION_GC_DELETE_SQL,
   SPACE_VERSION_GC_FIRST_SQL,
   SPACE_VERSION_GC_NEXT_SQL,
   type SpaceVersionGcCursor,
-} from "../src/db/space-version-gc";
+} from "./helpers/space-adapters";
 import { SpaceStorageError } from "../src/db/space-types";
+import { pruneSpaceRecordVersionsPage as pruneCapturedOwner } from "../src/db/space-version-gc";
 
 const DID = "did:example:test";
 const COLLECTION = "com.example.note";
@@ -163,13 +165,14 @@ describe("bounded Space version cleanup", () => {
     const mutable = { ...cursor };
     let resolveDid!: (value: string) => void;
     const did = new Promise<string>((resolve) => resolveDid = resolve);
-    const pending = pruneSpaceRecordVersionsPage(
+    const pending = pruneCapturedOwner(
       {
         ...env,
         PDS_DID: { get: () => did },
       },
       SPACE,
       DID,
+      cursor.ownerIncarnation,
       mutable,
       1,
     );
@@ -361,7 +364,7 @@ describe("bounded Space version cleanup", () => {
       "SELECT active_epoch_id AS epoch FROM space_repo WHERE space_ref = ? AND repo_did = ?",
     )
       .bind(SPACE, DID).first<{ epoch: string }>();
-    const prefix = [identity!.epoch, SPACE, DID] as const;
+    const prefix = [identity!.epoch, SPACE, DID, await spaceOwner(env)] as const;
     const result = await env.ALTERAN_DB.prepare(SPACE_VERSION_GC_NEXT_SQL).bind(
       ...prefix,
       2,
@@ -391,7 +394,7 @@ describe("bounded Space version cleanup", () => {
         .bind(...args).all<{ detail: string }>();
       return result.results.map((row) => row.detail);
     };
-    const prefix = ["epoch", SPACE, DID] as const;
+    const prefix = ["epoch", SPACE, DID, await spaceOwner(env)] as const;
     const first = await plan(SPACE_VERSION_GC_FIRST_SQL, [...prefix, 3]);
     const next = await plan(SPACE_VERSION_GC_NEXT_SQL, [
       ...prefix,
@@ -410,8 +413,9 @@ describe("bounded Space version cleanup", () => {
     ]);
     const deletion = await plan(SPACE_VERSION_GC_DELETE_SQL, [
       "[]",
-      ...prefix,
+      prefix[0], prefix[1], prefix[2],
       "attempt",
+      prefix[3],
     ]);
     expect(first.join(" ")).toContain("space_record_version_gc_candidates");
     expect(

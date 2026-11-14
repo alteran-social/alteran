@@ -3,6 +3,7 @@ export type SpaceQuarantineHandle = {
   readonly token: string;
   readonly spaceRef: string;
   readonly repoDid: string;
+  readonly ownerIncarnation: string;
 };
 
 export type SpaceQuarantineStep =
@@ -26,6 +27,10 @@ export type QuarantineJobRow = {
   accumulated_hash: number[];
 };
 
-export function quarantineJobArgs(handle: SpaceQuarantineHandle, nonce: string) {
+export function quarantineJobKeyArgs(handle: SpaceQuarantineHandle, nonce: string) {
   return [handle.id, handle.token, nonce, handle.spaceRef, handle.repoDid] as const;
+}
+
+export function quarantineJobArgs(handle: SpaceQuarantineHandle, nonce: string) {
+  return [...quarantineJobKeyArgs(handle, nonce), handle.ownerIncarnation] as const;
 }

@@ -6,8 +6,9 @@ import { join } from 'node:path';
 import { describe, it } from './helpers/bdd';
 import type { Env } from '../src/env';
 import { activateSpaceQuarantine } from '../src/db/space-quarantine-activation';
-import { claimSpaceQuarantine, stepSpaceQuarantine } from '../src/db/space-quarantine';
-import { applySpaceWrites } from '../src/db/space-store';
+import { claimSpaceQuarantine, stepSpaceQuarantine } from './helpers/space-adapters';
+import { applySpaceWrites } from './helpers/space-adapters';
+import { bindQuarantineFixtureOwners } from './helpers/space-quarantine-owner';
 
 const DID = 'did:example:test';
 const SPACE = `at://${DID}/space/com.example.notes/recovery`;
@@ -37,6 +38,7 @@ async function setup(options: { wrongHash?: boolean; blobUsage?: boolean } = {})
       .bind(SPACE, DID, '3n2a5tw2wd22l', hash, 'legacy-mutation'),
   ]);
   for (const name of names.filter((name) => name >= '0016')) await apply(name);
+  await bindQuarantineFixtureOwners(database);
   if (options.blobUsage) {
     await database.prepare('DROP TRIGGER space_blob_usage_fence_insert').run();
     await database.prepare(`INSERT INTO space_blob_usage (space_ref, repo_did, collection, rkey, cid, key)
@@ -238,6 +240,7 @@ describe('quarantine recovery', () => {
       expect(await activateSpaceQuarantine(env, handle)).toBe('active');
       await database.prepare('DROP TRIGGER space_quarantine_job_terminal_immutable').run();
       await database.prepare('DROP TRIGGER space_quarantine_job_activation_nonce').run();
+      await database.prepare('DROP TRIGGER space_quarantine_owner_update').run();
       await database.prepare('DROP TRIGGER space_epoch_verification_metadata').run();
       await database.batch([
         database.prepare('UPDATE space_quarantine_job SET activation_nonce = ? WHERE id = ?').bind(oversized, handle.id),

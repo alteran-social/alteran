@@ -1,8 +1,8 @@
 import { expect } from '@std/expect';
 import { describe, it } from './helpers/bdd';
-import { makeEnv } from './helpers/env';
-import { applySpaceWrites, createLocalSpace } from '../src/db/space-store';
-import { commitSpaceWrites, loadSpaceSnapshot } from '../src/db/space-mutation';
+import { makeSpaceEnv as makeEnv } from './helpers/space-env';
+import { applySpaceWrites, createLocalSpace } from './helpers/space-storage';
+import { commitSpaceWrites, loadSpaceSnapshot } from './helpers/space-storage';
 import { parseSpaceRef } from '../src/db/space-ref';
 import { encodeRecordBlock } from '../src/services/repo/blockstore-ops';
 

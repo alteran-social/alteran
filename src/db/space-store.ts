@@ -7,29 +7,17 @@ import { parseSpaceRef } from './space-ref';
 import { decodeSpaceRecord, SPACE_RECORD_COLUMNS, SPACE_RECORD_TABLES, type SpaceRecordRow } from './space-record-projection';
 import { commitSpaceWrites, loadSpaceSnapshot } from './space-mutation';
 import { captureSpaceWrites } from './space-write-input';
+import { createPersonalSpace } from './space-lifecycle-create';
+import { captureSpaceOwner } from './space-owner';
 import { MAX_SPACE_WRITE_BYTES, SpaceStorageError, type PreparedSpaceWrite, type SpaceCommit, type SpaceWrite } from './space-types';
 
 const MAX_RETRIES = 4;
 
-export async function createLocalSpace(env: Env, spaceRef: string): Promise<void> {
+export async function createLocalSpace(env: Env, spaceRef: string, ownerIncarnation: string): Promise<void> {
   const ref = parseSpaceRef(spaceRef);
   const did = await localDid(env);
   if (ref.authorityDid !== did) throw new SpaceStorageError('NotAuthorized', 'Space authority is not local');
-  let result;
-  try {
-    result = await env.ALTERAN_DB.prepare(
-      `INSERT OR IGNORE INTO space (space_ref, authority_did, space_type, skey, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
-    ).bind(ref.ref, ref.authorityDid, ref.spaceType, ref.skey, Date.now()).run();
-  } catch (error) {
-    const existing = await env.ALTERAN_DB.prepare('SELECT 1 AS present FROM space WHERE space_ref = ?')
-      .bind(ref.ref).first<{ present: number }>();
-    if (existing?.present === 1) throw new SpaceStorageError('SpaceAlreadyExists', 'Space already exists or was deleted');
-    throw error;
-  }
-  if (result.meta.changes !== 1) {
-    throw new SpaceStorageError('SpaceAlreadyExists', 'Space already exists or was deleted');
-  }
+  await createPersonalSpace(env, ref.ref, { $type: 'com.atproto.personalspace.policy' }, crypto.randomUUID(), ownerIncarnation);
 }
 
 export async function applySpaceWrites(
@@ -37,15 +25,17 @@ export async function applySpaceWrites(
   spaceRef: string,
   repoDid: string,
   writes: readonly SpaceWrite[],
+  ownerIncarnation: string,
 ): Promise<SpaceCommit | null> {
   const ref = parseSpaceRef(spaceRef);
   const captured = captureSpaceWrites(writes);
   if (repoDid !== await localDid(env)) throw new SpaceStorageError('RepoNotFound', 'Repo is not local');
+  const owner = captureSpaceOwner(repoDid, ownerIncarnation);
   if (captured.length === 0) return null;
 
   const prepared = await prepareWrites(captured);
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const snapshot = await loadSpaceSnapshot(env, ref, repoDid, prepared);
+    const snapshot = await loadSpaceSnapshot(env, ref, repoDid, prepared, owner.incarnation);
     const result = await commitSpaceWrites(env, ref, repoDid, prepared, snapshot);
     if (result.tag === 'committed') return result.commit;
     if (result.tag === 'missingSpace') throw new SpaceStorageError('SpaceNotFound', 'Space does not exist or is deleted');
@@ -75,8 +65,10 @@ export async function getSpaceRecord(
   repoDid: string,
   collection: string,
   rkey: string,
+  ownerIncarnation: string,
 ): Promise<{ readonly cid: string; readonly value: Uint8Array; readonly rev: string } | null> {
   parseSpaceRef(spaceRef);
+  const owner = captureSpaceOwner(repoDid, ownerIncarnation);
   if (repoDid !== await localDid(env)) throw new SpaceStorageError('RepoNotFound', 'Repo is not local');
   if (!isValidNsid(collection) || !isValidRecordKey(rkey)) {
     throw new SpaceStorageError('InvalidRequest', 'Invalid collection or record key');
@@ -84,8 +76,10 @@ export async function getSpaceRecord(
   const row = await env.ALTERAN_DB.prepare(
     `SELECT ${SPACE_RECORD_COLUMNS}
      ${SPACE_RECORD_TABLES}
-     WHERE record.space_ref = ? AND record.repo_did = ? AND record.collection = ? AND record.rkey = ?`,
-  ).bind(MAX_RECORD_SIZE, MAX_RECORD_SIZE, spaceRef, repoDid, collection, rkey)
+     WHERE record.space_ref = ? AND record.repo_did = ? AND record.collection = ? AND record.rkey = ?
+       AND EXISTS (SELECT 1 FROM space_owned_epoch owned WHERE owned.id = e.id AND owned.space_ref = e.space_ref
+         AND owned.repo_did = e.repo_did AND owned.owner_incarnation = ?)`,
+  ).bind(MAX_RECORD_SIZE, MAX_RECORD_SIZE, spaceRef, repoDid, collection, rkey, owner.incarnation)
     .first<SpaceRecordRow>();
   return row ? decodeSpaceRecord(row, collection) : null;
 }

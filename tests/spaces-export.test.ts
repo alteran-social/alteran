@@ -2,11 +2,11 @@ import { describe, it } from './helpers/bdd';
 import { expect } from '@std/expect';
 import * as dagCbor from '@ipld/dag-cbor';
 import { readRepoStar } from '@atproto/space';
-import { makeEnv } from './helpers/env';
-import { applySpaceWrites, createLocalSpace } from '../src/db/space-store';
-import { pruneSpaceRecordVersionsPage } from '../src/db/space-version-gc';
+import { makeSpaceEnv as makeEnv } from './helpers/space-env';
+import { applySpaceWrites, createLocalSpace } from './helpers/space-adapters';
+import { pruneSpaceRecordVersionsPage } from './helpers/space-adapters';
 import { readSpaceRepoArchive } from '../src/lib/spaces/repo-archive';
-import { streamSpaceRepoArchive } from '../src/services/space-repo-export';
+import { streamSpaceRepoArchive } from './helpers/space-adapters';
 import { encodeRecordBlock } from '../src/services/repo/blockstore-ops';
 
 const DID = 'did:example:test';

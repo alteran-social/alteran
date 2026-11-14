@@ -1,11 +1,11 @@
 import { describe, it } from "./helpers/bdd";
 import { expect } from "@std/expect";
 import * as dagCbor from "@ipld/dag-cbor";
-import { makeEnv } from "./helpers/env";
-import { readSpaceRepoOps } from "../src/db/space-ops";
-import { commitSpaceWrites, loadSpaceSnapshot } from "../src/db/space-mutation";
+import { makeSpaceEnv as makeEnv } from "./helpers/space-env";
+import { readSpaceRepoOps } from "./helpers/space-storage";
+import { commitSpaceWrites, loadSpaceSnapshot } from "./helpers/space-storage";
 import { parseSpaceRef } from "../src/db/space-ref";
-import { applySpaceWrites, createLocalSpace } from "../src/db/space-store";
+import { applySpaceWrites, createLocalSpace } from "./helpers/space-storage";
 import { nextSpaceRevision } from "../src/db/space-tid";
 import { SpaceStorageError } from "../src/db/space-types";
 import {

@@ -1,13 +1,13 @@
 import { expect } from '@std/expect';
 import type { D1PreparedStatement } from '@cloudflare/workers-types';
 import { describe, it } from './helpers/bdd';
-import { claimSpaceQuarantine, stepSpaceQuarantine } from '../src/db/space-quarantine';
+import { claimSpaceQuarantine, stepSpaceQuarantine } from './helpers/space-adapters';
 import { activateSpaceQuarantine } from '../src/db/space-quarantine-activation';
 import { did, space, setup } from './helpers/space-quarantine-fixture';
 import { encodeRecordBlock } from '../src/services/repo/blockstore-ops';
 import { applySpaceSetHashChanges, spaceRecordHashElement } from '../src/lib/spaces/lthash';
-import { acquireSpaceSnapshot } from '../src/db/space-snapshot';
-import { getSpaceRecord } from '../src/db/space-store';
+import { acquireSpaceSnapshot } from './helpers/space-adapters';
+import { getSpaceRecord } from './helpers/space-adapters';
 import { QUARANTINE_CURRENT_PAGE } from '../src/db/space-quarantine-sql';
 import { revision } from './helpers/space-quarantine-fixture';
 
@@ -24,7 +24,8 @@ describe('quarantined space verification', () => {
       const job = await database.prepare('SELECT renewal_nonce FROM space_quarantine_job WHERE id = ?')
         .bind(handle!.id).first<{ renewal_nonce: string }>();
       const plan = await database.prepare(`EXPLAIN QUERY PLAN ${QUARANTINE_CURRENT_PAGE}`)
-        .bind(handle!.id, handle!.token, job!.renewal_nonce, space, did, '', 0, new Uint8Array(2048), 0, '').all();
+        .bind(handle!.id, handle!.token, job!.renewal_nonce, space, did, handle!.ownerIncarnation,
+          '', 0, new Uint8Array(2048), 0, '').all();
       expect(JSON.stringify(plan.results)).toContain('space_record_path_idx');
       expect(JSON.stringify(plan.results)).toContain('<expr>>?');
       for (let index = 1; index <= 3; index++) {
@@ -226,7 +227,7 @@ describe('quarantined space verification', () => {
         },
       });
       expect(await stepSpaceQuarantine({ ...env, ALTERAN_DB: monitored }, handle!)).toEqual({ tag: 'unavailable' });
-      expect(selected).toEqual([[], [], []]);
+      expect(selected).toBeUndefined();
       await database.prepare('DROP TRIGGER skip_quarantine_renew').run();
       await database.prepare(
         `CREATE TRIGGER skip_quarantine_progress BEFORE UPDATE OF record_count ON space_quarantine_job

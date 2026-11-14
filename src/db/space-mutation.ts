@@ -20,7 +20,10 @@ import { parseCanonicalRepoCid } from '../lib/spaces/repo-cid';
 import { verifySpaceRecordDataModel } from './space-verify-record';
 import { validSpaceRecordBlock } from './space-record-block';
 import { MAX_SPACE_MUTATION_SNAPSHOT_BYTES, SPACE_MUTATION_SNAPSHOT_SQL } from './space-mutation-snapshot-sql';
-import { EFFECT_GUARD, GUARD, RECORDS_MATCH, SPACE_AVAILABLE, WON_GUARD } from './space-mutation-sql';
+import { SPACE_GENESIS_EMPTY } from './space-genesis-sql';
+import { classifySpaceMutationConflict } from './space-mutation-conflict';
+import { BOOTSTRAP_GUARD, EFFECT_GUARD, GUARD, RECORDS_MATCH, SPACE_AVAILABLE, WON_GUARD } from './space-mutation-sql';
+import { captureSpaceOwner } from './space-owner';
 import {
   MAX_SPACE_WRITE_BYTES,
   MAX_SPACE_WRITES,
@@ -33,6 +36,7 @@ import {
 } from './space-types';
 
 type Snapshot = {
+  readonly ownerIncarnation: string;
   readonly repo: (SpaceRepoState & { readonly mutationId: string; readonly epochId: string }) | null;
   readonly records: ReadonlyMap<string, { readonly cid: string; readonly fromGeneration: number; readonly repoRev: string }>;
 };
@@ -46,8 +50,10 @@ export async function loadSpaceSnapshot(
   ref: SpaceRef,
   repoDid: string,
   writes: readonly PreparedSpaceWrite[],
+  ownerIncarnation: string,
 ): Promise<Snapshot> {
   ref = parseSpaceRef(ref.ref);
+  const owner = captureSpaceOwner(repoDid, ownerIncarnation);
   const count = spaceWriteArrayLength(writes);
   const requested: [string, string][] = [];
   for (let index = 0; index < count; index++) {
@@ -64,7 +70,19 @@ export async function loadSpaceSnapshot(
   const paths = JSON.stringify(requested);
   await assertLocalSpaceRepo(env, repoDid);
   const [spaceResult, repoResult, recordResult] = await env.ALTERAN_DB.batch([
-    env.ALTERAN_DB.prepare('SELECT deleted_at IS NULL AS active FROM space WHERE space_ref = ?').bind(ref.ref),
+    env.ALTERAN_DB.prepare(`WITH t AS MATERIALIZED (SELECT ? AS space_ref, ? AS repo_did, ? AS owner_incarnation)
+      SELECT s.deleted_at IS NULL AS active FROM t
+      JOIN account a ON a.did = t.repo_did AND a.space_incarnation = t.owner_incarnation
+      JOIN account_state state ON state.did = a.did AND typeof(state.active) = 'integer' AND state.active = 1
+        AND state.status IS NULL AND state.suspended_until IS NULL
+      JOIN space s ON s.space_ref = t.space_ref
+        AND s.space_ref = 'at://' || s.authority_did || '/space/' || s.space_type || '/' || s.skey
+      WHERE (s.authority_did != t.repo_did OR EXISTS (SELECT 1 FROM space_personal_policy p
+          WHERE p.space_ref = s.space_ref AND p.authority_did = t.repo_did AND p.authority_incarnation = t.owner_incarnation))
+        AND (EXISTS (SELECT 1 FROM space_repo h JOIN space_owned_epoch e ON e.id = h.active_epoch_id
+            AND e.space_ref = h.space_ref AND e.repo_did = h.repo_did AND e.owner_incarnation = t.owner_incarnation
+          WHERE h.space_ref = t.space_ref AND h.repo_did = t.repo_did)
+          OR (${SPACE_GENESIS_EMPTY}))`).bind(ref.ref, repoDid, owner.incarnation),
     env.ALTERAN_DB.prepare(
       `SELECT CASE WHEN typeof(h.rev) = 'text' AND length(CAST(h.rev AS BLOB)) = 13 THEN h.rev END AS rev,
          CASE WHEN typeof(h.set_hash) = 'blob' AND length(h.set_hash) = 2048 THEN h.set_hash END AS set_hash,
@@ -75,11 +93,12 @@ export async function loadSpaceSnapshot(
          CASE WHEN typeof(h.active_epoch_id) = 'text' AND length(CAST(h.active_epoch_id AS BLOB)) BETWEEN 1 AND 128
            THEN h.active_epoch_id END AS active_epoch_id,
          CASE WHEN e.state = 'active' THEN 'active' END AS epoch_state
-       FROM space_repo h LEFT JOIN space_epoch e ON e.id = h.active_epoch_id
+       FROM space_repo h JOIN space_owned_epoch e ON e.id = h.active_epoch_id
          AND e.space_ref = h.space_ref AND e.repo_did = h.repo_did
-       WHERE h.space_ref = ? AND h.repo_did = ?`,
-    ).bind(ref.ref, repoDid),
-    env.ALTERAN_DB.prepare(SPACE_MUTATION_SNAPSHOT_SQL).bind(paths, ref.ref, repoDid),
+       JOIN space s ON s.space_ref = h.space_ref AND s.deleted_at IS NULL
+       WHERE h.space_ref = ? AND h.repo_did = ? AND e.owner_incarnation = ?`,
+    ).bind(ref.ref, repoDid, owner.incarnation),
+    env.ALTERAN_DB.prepare(SPACE_MUTATION_SNAPSHOT_SQL).bind(paths, ref.ref, repoDid, owner.incarnation),
   ]);
   const space = spaceResult.results?.[0] as { active: number } | undefined;
   if ((space && space.active !== 1) || (!space && ref.authorityDid === repoDid)) {
@@ -117,7 +136,7 @@ export async function loadSpaceSnapshot(
       records.set(recordPath(typed.collection, typed.rkey), { cid: typed.cid, fromGeneration: typed.from_generation, repoRev: typed.record_rev });
     }
   }
-  return { repo, records };
+  return { ownerIncarnation: owner.incarnation, repo, records };
 }
 
 export async function commitSpaceWrites(
@@ -128,6 +147,7 @@ export async function commitSpaceWrites(
   snapshot: Snapshot,
 ): Promise<CommitResult> {
   ref = parseSpaceRef(ref.ref);
+  const owner = captureSpaceOwner(repoDid, snapshot.ownerIncarnation);
   const writeCount = spaceWriteArrayLength(writes);
   if (writeCount === 0) {
     throw new SpaceStorageError('InvalidRequest', 'Invalid number of space writes');
@@ -137,6 +157,7 @@ export async function commitSpaceWrites(
     throw new SpaceStorageError('InvalidRepoState', 'Invalid space snapshot');
   }
   snapshot = {
+    ownerIncarnation: owner.incarnation,
     repo: snapshot.repo ? { ...snapshot.repo, setHash: new Uint8Array(snapshot.repo.setHash) } : null,
     records: new Map([...snapshot.records].map(([path, record]) => [path, { ...record }])),
   };
@@ -277,9 +298,9 @@ export async function commitSpaceWrites(
        SELECT ? || CAST(total_changes() + 2 AS TEXT), 1`,
     ).bind(baselinePrefix),
     env.ALTERAN_DB.prepare(
-      `INSERT INTO space_mutation_attempt (mutation_id, space_ref, repo_did, epoch_id, generation, rev, set_hash)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(mutationId, ref.ref, repoDid, epochId, generation, rev, state),
+      `INSERT INTO space_mutation_attempt (mutation_id, space_ref, repo_did, epoch_id, generation, rev, set_hash, owner_incarnation)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(mutationId, ref.ref, repoDid, epochId, generation, rev, state, owner.incarnation),
     env.ALTERAN_DB.prepare(
       `SELECT CASE WHEN EXISTS (SELECT 1 FROM space_commit_assertion
          WHERE mutation_id = ? || CAST(total_changes() AS TEXT)) THEN 1 ELSE json('{') END AS valid`,
@@ -299,13 +320,13 @@ export async function commitSpaceWrites(
   ];
   if (!snapshot.repo) {
     statements.push(env.ALTERAN_DB.prepare(
-      `INSERT INTO space_epoch (id, space_ref, repo_did, state, created_at)
-       SELECT ?, ?, ?, 'active', unixepoch() WHERE ${WON_GUARD}`,
-    ).bind(epochId, ref.ref, repoDid, ...wonGuard));
+      `INSERT INTO space_epoch (id, space_ref, repo_did, state, created_at, owner_incarnation)
+       SELECT ?, ?, ?, 'active', unixepoch(), ? WHERE ${WON_GUARD}`,
+    ).bind(epochId, ref.ref, repoDid, owner.incarnation, ...wonGuard));
   }
   statements.push(env.ALTERAN_DB.prepare(
       `INSERT INTO space (space_ref, authority_did, space_type, skey, created_at)
-       SELECT ?, ?, ?, ?, ? WHERE ${EFFECT_GUARD} AND NOT EXISTS (SELECT 1 FROM space WHERE space_ref = ?)
+       SELECT ?, ?, ?, ?, ? WHERE ${BOOTSTRAP_GUARD} AND NOT EXISTS (SELECT 1 FROM space WHERE space_ref = ?)
        ON CONFLICT(space_ref) DO NOTHING`,
     ).bind(ref.ref, ref.authorityDid, ref.spaceType, ref.skey, Date.now(), ...effectGuard, ref.ref));
   for (const [pathString, write] of finalWrites) {
@@ -364,7 +385,8 @@ export async function commitSpaceWrites(
          AND NOT EXISTS (SELECT 1 FROM space_commit_assertion WHERE mutation_id = ?) THEN 1
        WHEN ${WON_GUARD}
        AND NOT EXISTS (SELECT 1 FROM space_commit_assertion WHERE mutation_id = ?)
-       AND EXISTS (SELECT 1 FROM space_epoch e WHERE e.id = ? AND e.space_ref = ? AND e.repo_did = ? AND e.state = 'active')
+       AND EXISTS (SELECT 1 FROM space_owned_epoch e WHERE e.id = ? AND e.space_ref = ? AND e.repo_did = ?
+         AND e.state = 'active' AND e.owner_incarnation = ?)
        AND EXISTS (SELECT 1 FROM space s WHERE s.space_ref = ? AND s.deleted_at IS NULL)
        AND ${RECORDS_MATCH}
        AND NOT EXISTS (
@@ -373,7 +395,7 @@ export async function commitSpaceWrites(
        )
        AND (SELECT COUNT(*) FROM space_op WHERE space_ref = ? AND repo_did = ? AND rev = ?) = ?
        THEN 1 ELSE json('{') END AS valid`,
-  ).bind(lost, won, ...wonGuard, lost, epochId, ref.ref, repoDid, ref.ref, ...finalArguments,
+  ).bind(lost, won, ...wonGuard, lost, epochId, ref.ref, repoDid, owner.incarnation, ref.ref, ...finalArguments,
     finalRecords, ref.ref, repoDid, ref.ref, repoDid, rev, operations.length));
   const outcomeIndex = statements.length;
   statements.push(env.ALTERAN_DB.prepare(
@@ -388,21 +410,31 @@ export async function commitSpaceWrites(
   statements.push(env.ALTERAN_DB.prepare(
     `SELECT CASE WHEN EXISTS (SELECT 1 FROM space_commit_assertion WHERE mutation_id IN (?, ?) OR mutation_id GLOB ?)
        OR EXISTS (SELECT 1 FROM space_mutation_attempt WHERE mutation_id = ?)
+       OR NOT EXISTS (SELECT 1 FROM account a JOIN account_state state ON state.did = a.did
+         WHERE a.did = ? AND a.space_incarnation = ? AND typeof(state.active) = 'integer' AND state.active = 1
+           AND state.status IS NULL AND state.suspended_until IS NULL)
+       OR (EXISTS (SELECT 1 FROM space_repo h WHERE h.space_ref = ? AND h.repo_did = ?)
+         AND NOT EXISTS (SELECT 1 FROM space_repo h JOIN space_owned_epoch e ON e.id = h.active_epoch_id
+           AND e.space_ref = h.space_ref AND e.repo_did = h.repo_did AND e.state = 'active'
+           JOIN space s ON s.space_ref = h.space_ref AND s.deleted_at IS NULL
+           WHERE h.space_ref = ? AND h.repo_did = ? AND e.owner_incarnation = ?))
        THEN json('{') ELSE 1 END AS valid`,
-  ).bind(won, lost, baselineGlob, mutationId));
+  ).bind(won, lost, baselineGlob, mutationId, repoDid, owner.incarnation, ref.ref, repoDid,
+    ref.ref, repoDid, owner.incarnation));
 
   await assertLocalSpaceRepo(env, repoDid);
   const results = await env.ALTERAN_DB.batch(statements);
+  if (!Array.isArray(results) || results.length !== statements.length || results.some((result) => result?.success !== true) ||
+    results.at(-1)?.results?.length !== 1 || results.at(-1)?.results?.[0]?.valid !== 1) {
+    throw new SpaceStorageError('InvalidRepoState', 'Invalid space commit result');
+  }
   const outcome = results[outcomeIndex].results;
   if (outcome?.length !== 1) throw new SpaceStorageError('InvalidRepoState', 'Missing space commit outcome');
   if (outcome[0].mutation_id === won) {
     return { tag: 'committed', commit: { rev, setHash: state, data: spaceSetHashDigest(state), generation, operations } };
   }
   if (outcome[0].mutation_id !== lost) throw new SpaceStorageError('InvalidRepoState', 'Invalid space commit outcome');
-  const spaceStatus = await env.ALTERAN_DB.prepare(`SELECT ${SPACE_AVAILABLE} AS ok`)
-    .bind(ref.ref, ref.authorityDid, repoDid, ref.ref).first<{ ok: number }>();
-  if (!spaceStatus?.ok) return { tag: 'missingSpace' };
-  return { tag: 'conflict' };
+  return await classifySpaceMutationConflict(env, ref, owner);
 }
 
 function decodeRepoState(row: {

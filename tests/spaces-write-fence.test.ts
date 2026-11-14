@@ -1,10 +1,9 @@
 import { expect } from '@std/expect';
 import * as dagCbor from '@ipld/dag-cbor';
 import { describe, it } from './helpers/bdd';
-import { makeEnv } from './helpers/env';
-import { applySpaceWrites, createLocalSpace, getSpaceRecord } from '../src/db/space-store';
-import { acquireSpaceSnapshot, releaseSpaceSnapshot } from '../src/db/space-snapshot';
-import { pruneSpaceRecordVersionsPage } from '../src/db/space-version-gc';
+import { makeSpaceEnv as makeEnv } from './helpers/space-env';
+import { applySpaceWrites, createLocalSpace, getSpaceRecord } from './helpers/space-storage';
+import { acquireSpaceSnapshot, releaseSpaceSnapshot, pruneSpaceRecordVersionsPage } from './helpers/space-adapters';
 
 const did = 'did:example:test';
 const space = `at://${did}/space/com.example.notes/a`;

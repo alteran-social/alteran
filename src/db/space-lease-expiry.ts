@@ -44,7 +44,7 @@ export async function pruneExpiredSpaceSnapshotLeases(
   spaceRef: string,
   repoDid: string,
   batchSize = 50,
-): Promise<number> {
+): Promise<void> {
   assertBatchSize(batchSize);
   parseSpaceRef(spaceRef);
   await assertLocalSpaceRepo(env, repoDid);
@@ -80,7 +80,6 @@ export async function pruneExpiredSpaceSnapshotLeases(
       "Invalid expired lease cleanup result",
     );
   }
-  return first + second;
 }
 
 function assertBatchSize(value: number): void {

@@ -2,7 +2,7 @@ import { expect } from '@std/expect';
 import { describe, it } from './helpers/bdd';
 import { authorizedReadFixture, interceptRead, COLLECTION, DID, OTHER_COLLECTION, SPACE } from './helpers/spaces-authorized-read';
 import { readAuthorizedSpaceRecord } from '../src/db/space-authorized-record';
-import { beginPersonalSpaceDeletion } from '../src/db/space-lifecycle-delete';
+import { beginPersonalSpaceDeletion } from './helpers/space-storage';
 import { createAccount } from '../src/db/account';
 import { setAccountState } from '../src/db/dal';
 import type { VerifiedSpacePrincipal } from '../src/lib/oauth/space-principal';
@@ -79,7 +79,10 @@ describe('private Space record authorization', () => {
     } });
     const { principal, request } = await f.principal(target, watched.env);
     watched.arm();
-    expect((await readAuthorizedSpaceRecord(watched.env, principal, request, SPACE, DID, COLLECTION, 'one')).tag).toBe('notFound');
+    const result = await readAuthorizedSpaceRecord(watched.env, principal, request, SPACE, DID, COLLECTION, 'one');
+    expect(result.tag).toBe('notFound');
+    if (result.tag !== 'notFound') throw new Error('Expected bounded absence');
+    expect(await result.complete(request, watched.env.ALTERAN_DB)).toBe(false);
     const rows = watched.returned() as { sentinel: number; value_cbor: unknown }[];
     expect(rows).toHaveLength(1);
     expect(rows[0].sentinel).toBe(1);
@@ -90,7 +93,10 @@ describe('private Space record authorization', () => {
     for (const change of ['revoke', 'deactivate', 'delete'] as const) {
       const f = await authorizedReadFixture();
       const { principal, request } = await f.principal();
-      if (change === 'delete') await f.env.ALTERAN_DB.exec('DROP TRIGGER space_lifecycle_update');
+      if (change === 'delete') {
+        await f.env.ALTERAN_DB.exec('DROP TRIGGER space_lifecycle_update');
+        await f.env.ALTERAN_DB.exec('DROP TRIGGER space_owner_space_update');
+      }
       const operation = change === 'revoke'
         ? `UPDATE oauth_session SET revoked_at = 1 WHERE id = '${f.sessionId}';`
         : change === 'deactivate'
@@ -99,7 +105,7 @@ describe('private Space record authorization', () => {
       await f.env.ALTERAN_DB.exec(`CREATE TRIGGER test_after_read AFTER UPDATE ON oauth_replay_clock
         WHEN OLD.nonce = NEW.nonce BEGIN ${operation} END`.replaceAll('\n', ' '));
       const result = await readAuthorizedSpaceRecord(f.env, principal, request, SPACE, DID, COLLECTION, 'one');
-      expect(result.tag).toBe(change === 'delete' ? 'notFound' : 'unauthorized');
+      expect(result.tag).toBe('unauthorized');
     }
   });
 

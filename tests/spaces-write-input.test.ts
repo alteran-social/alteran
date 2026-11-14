@@ -1,9 +1,9 @@
 import { expect } from '@std/expect';
 import * as dagCbor from '@ipld/dag-cbor';
 import { describe, it } from './helpers/bdd';
-import { makeEnv } from './helpers/env';
-import { applySpaceWrites, createLocalSpace, getSpaceRecord } from '../src/db/space-store';
-import { commitSpaceWrites, loadSpaceSnapshot } from '../src/db/space-mutation';
+import { makeSpaceEnv as makeEnv } from './helpers/space-env';
+import { applySpaceWrites, createLocalSpace, getSpaceRecord } from './helpers/space-storage';
+import { commitSpaceWrites, loadSpaceSnapshot } from './helpers/space-storage';
 import { parseSpaceRef } from '../src/db/space-ref';
 import { SpaceStorageError } from '../src/db/space-types';
 import { encodeRecordBlock } from '../src/services/repo/blockstore-ops';

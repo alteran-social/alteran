@@ -2,17 +2,19 @@ import { expect } from '@std/expect';
 import * as dagCbor from '@ipld/dag-cbor';
 import type { D1PreparedStatement } from '@cloudflare/workers-types';
 import { describe, it } from './helpers/bdd';
-import { makeEnv } from './helpers/env';
+import { makeSpaceEnv as makeEnv } from './helpers/space-env';
+import { spaceOwner } from './helpers/space-env';
 import { seedLegacySpaceBlobUsage } from './helpers/space-legacy';
-import { applySpaceWrites, createLocalSpace, getSpaceRecord } from '../src/db/space-store';
-import { acquireSpaceSnapshot, readSpaceSnapshotPage, releaseSpaceSnapshot } from '../src/db/space-snapshot';
+import { applySpaceWrites, createLocalSpace, getSpaceRecord } from './helpers/space-adapters';
+import { acquireSpaceSnapshot, readSpaceSnapshotPage, releaseSpaceSnapshot } from './helpers/space-adapters';
 import { pruneExpiredSpaceSnapshotLeases } from '../src/db/space-lease-expiry';
-import { pruneSpaceRecordVersionsPage } from '../src/db/space-version-gc';
+import { pruneSpaceRecordVersionsPage } from './helpers/space-adapters';
 import { applySpaceSetHashChanges, spaceRecordHashElement, spaceSetHashDigest } from '../src/lib/spaces/lthash';
 import { SpaceStorageError } from '../src/db/space-types';
 import { parseSpaceRef } from '../src/db/space-ref';
-import { commitSpaceWrites, loadSpaceSnapshot } from '../src/db/space-mutation';
+import { commitSpaceWrites, loadSpaceSnapshot } from './helpers/space-adapters';
 import { encodeRecordBlock } from '../src/services/repo/blockstore-ops';
+import { beginPersonalSpaceDeletion } from '../src/db/space-lifecycle-delete';
 
 const did = 'did:example:test';
 const firstSpace = `at://${did}/space/com.example.notes/a`;
@@ -142,7 +144,8 @@ describe('space snapshot leases', () => {
     const lease = await acquireSpaceSnapshot(env, firstSpace, did);
     await applySpaceWrites(env, firstSpace, did, [update(collection, 'a', 'new')]);
     expect(await pruneSpaceRecordVersions(env, firstSpace, did)).toBe(0);
-    expect(await pruneExpiredSpaceSnapshotLeases(env, firstSpace, did)).toBe(0);
+    await pruneExpiredSpaceSnapshotLeases(env, firstSpace, did);
+    expect((await env.ALTERAN_DB.prepare('SELECT COUNT(*) AS n FROM space_snapshot_lease').first())?.n).toBe(1);
     for (let index = 0; index < 4; index++) {
       const [page, pruned] = await Promise.all([
         readSpaceSnapshotPage(env, lease, null), pruneSpaceRecordVersions(env, firstSpace, did),
@@ -162,9 +165,10 @@ describe('space snapshot leases', () => {
     expect(pruned).toBe(1);
     expect(await pruneSpaceRecordVersions(env, firstSpace, did)).toBe(0);
     await expectError(() => readSpaceSnapshotPage(env, lease, null), 'SpaceSnapshotUnavailable');
-    expect(await pruneExpiredSpaceSnapshotLeases(env, firstSpace, did)).toBe(0);
+    await pruneExpiredSpaceSnapshotLeases(env, firstSpace, did);
+    expect((await env.ALTERAN_DB.prepare('SELECT COUNT(*) AS n FROM space_snapshot_lease').first())?.n).toBe(0);
     expect(await pruneSpaceRecordVersions(env, firstSpace, did)).toBe(0);
-    expect(await pruneExpiredSpaceSnapshotLeases(env, firstSpace, did)).toBe(0);
+    await pruneExpiredSpaceSnapshotLeases(env, firstSpace, did);
     await releaseSpaceSnapshot(env, lease);
   });
 
@@ -189,7 +193,7 @@ describe('space snapshot leases', () => {
       },
     });
     await expectError(() => readSpaceSnapshotPage({ ...env, ALTERAN_DB: database }, lease, null), 'SpaceSnapshotUnavailable');
-    expect(selected).toEqual([]);
+    expect(selected).toBeUndefined();
   });
 
   it('does not report an empty page when the renewed lease is no longer valid', async () => {
@@ -260,7 +264,8 @@ describe('space snapshot leases', () => {
     const remote = 'at://did:example:remote/space/com.example.notes/shared';
     const [cid, value] = await encodeRecordBlock({ $type: collection, text: 'new' });
     const write = { action: 'update' as const, collection, rkey: 'a', cid: cid.toString(), value, blobs: [] };
-    const snapshot = { repo: null, records: new Map([[`${collection}/a`, { cid: cid.toString(), fromGeneration: 1 }]]) };
+    const snapshot = { ownerIncarnation: await spaceOwner(env), repo: null,
+      records: new Map([[`${collection}/a`, { cid: cid.toString(), fromGeneration: 1 }]]) };
     await expectError(() => commitSpaceWrites(env, parseSpaceRef(remote), did, [write], snapshot), 'InvalidRepoState');
     for (const table of ['space', 'space_repo', 'space_epoch', 'space_record_version', 'space_op']) {
       expect((await env.ALTERAN_DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first())?.count).toBe(0);
@@ -273,7 +278,7 @@ describe('space snapshot leases', () => {
     const ref = parseSpaceRef(firstSpace);
     const [cid, value] = await encodeRecordBlock({ $type: collection, text: 'new' });
     const write = { action: 'create' as const, collection, rkey: 'a', cid: cid.toString(), value, blobs: [] };
-    const empty = { repo: null, records: new Map() };
+    const empty = { ownerIncarnation: await spaceOwner(env), repo: null, records: new Map() };
     await expectError(() => loadSpaceSnapshot(env, ref, remoteRepo, [write]), 'RepoNotFound');
     await expectError(() => commitSpaceWrites(env, ref, remoteRepo, [write], empty), 'RepoNotFound');
     const forged = { ...ref, authorityDid: remoteRepo };
@@ -313,7 +318,7 @@ describe('space snapshot leases', () => {
     await expectError(() => commitSpaceWrites(env, ref, did, [write], {
       ...loaded, repo: { ...loaded.repo!, setHash: new Uint8Array(2047) },
     }), 'InvalidRepoState');
-    const snapshot = { repo: { ...loaded.repo!, setHash: new Uint8Array(loaded.repo!.setHash) }, records: new Map(loaded.records) };
+    const snapshot = { ...loaded, repo: { ...loaded.repo!, setHash: new Uint8Array(loaded.repo!.setHash) }, records: new Map(loaded.records) };
     const pending = commitSpaceWrites(env, ref, did, [write], snapshot);
     ref.ref = secondSpace;
     snapshot.repo.setHash.fill(0);
@@ -354,7 +359,7 @@ describe('space snapshot leases', () => {
     await expectError(() => acquireSpaceSnapshot(env, firstSpace, 'did:example:other'), 'RepoNotFound');
     await expectError(() => readSpaceSnapshotPage(env, { ...lease, spaceRef: secondSpace }, null), 'SpaceSnapshotUnavailable');
     await expectError(() => pruneSpaceRecordVersions(env, firstSpace, 'did:example:other'), 'RepoNotFound');
-    await env.ALTERAN_DB.prepare('UPDATE space SET deleted_at = unixepoch() WHERE space_ref = ?').bind(firstSpace).run();
+    expect((await beginPersonalSpaceDeletion(env, firstSpace, crypto.randomUUID(), await spaceOwner(env))).tag).toBe('started');
     await expectError(() => readSpaceSnapshotPage(env, lease, null), 'SpaceSnapshotUnavailable');
   });
 });

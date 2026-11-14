@@ -27,30 +27,36 @@ export const PINNED_QUARANTINE_JOB = `SELECT ${QUARANTINE_JOB_COLUMNS} FROM spac
   JOIN space_repo h ON h.space_ref = j.space_ref AND h.repo_did = j.repo_did
     AND h.active_epoch_id = j.epoch_id AND h.generation = j.generation
     AND h.mutation_id = j.mutation_id AND h.rev = j.rev AND h.set_hash = j.expected_hash
-  JOIN space_epoch e ON e.id = j.epoch_id AND e.space_ref = j.space_ref
+  JOIN space_owned_epoch e ON e.id = j.epoch_id AND e.space_ref = j.space_ref
     AND e.repo_did = j.repo_did AND e.state = 'quarantined'
   JOIN space s ON s.space_ref = j.space_ref AND s.deleted_at IS NULL
     AND s.authority_did = j.authority_did AND s.space_type = j.space_type AND s.skey = j.skey
   WHERE j.id = ? AND j.token = ? AND j.renewal_nonce = ? AND j.space_ref = ? AND j.repo_did = ?
+    AND e.owner_incarnation = ?
     AND j.lease_until > unixepoch() AND ${VALID_QUARANTINE_JOB_SQL}`;
 
 export const LIVE_QUARANTINE_JOB = `${PINNED_QUARANTINE_JOB} AND j.status = 'running'`;
 const PAGE_QUARANTINE_JOB = `${LIVE_QUARANTINE_JOB}
   AND j.cursor = ? AND j.sequence = ? AND j.accumulated_hash = ? AND j.record_count = ?`;
 
-export const COMPLETE_QUARANTINE_CURSOR = `SELECT CASE WHEN ${boundedText('cursor', 830, 0)} THEN cursor END AS cursor
-  FROM space_quarantine_job WHERE id = ? AND token = ? AND space_ref = ? AND repo_did = ?
-    AND status = 'complete' AND lease_until > unixepoch()`;
+export const COMPLETE_QUARANTINE_CURSOR = `SELECT CASE WHEN ${boundedText('j.cursor', 830, 0)} THEN j.cursor END AS cursor
+  FROM space_quarantine_job j JOIN space_owned_epoch e ON e.id = j.epoch_id AND e.space_ref = j.space_ref
+    AND e.repo_did = j.repo_did AND e.state = 'quarantined'
+  JOIN space_repo h ON h.space_ref = j.space_ref AND h.repo_did = j.repo_did AND h.active_epoch_id = j.epoch_id
+  JOIN space s ON s.space_ref = j.space_ref AND s.deleted_at IS NULL
+  WHERE j.id = ? AND j.token = ? AND j.space_ref = ? AND j.repo_did = ? AND e.owner_incarnation = ?
+    AND j.status = 'complete' AND j.lease_until > unixepoch()`;
 
 export const COMPLETE_QUARANTINE_RESULT = `SELECT ${QUARANTINE_JOB_COLUMNS} FROM space_quarantine_job j
   JOIN space_repo h ON h.space_ref = j.space_ref AND h.repo_did = j.repo_did
     AND h.active_epoch_id = j.epoch_id AND h.generation = j.generation
     AND h.mutation_id = j.mutation_id AND h.rev = j.rev AND h.set_hash = j.expected_hash
-  JOIN space_epoch e ON e.id = j.epoch_id AND e.space_ref = j.space_ref
+  JOIN space_owned_epoch e ON e.id = j.epoch_id AND e.space_ref = j.space_ref
     AND e.repo_did = j.repo_did AND e.state = 'quarantined'
   JOIN space s ON s.space_ref = j.space_ref AND s.deleted_at IS NULL
     AND s.authority_did = j.authority_did AND s.space_type = j.space_type AND s.skey = j.skey
   WHERE j.id = ? AND j.token = ? AND j.space_ref = ? AND j.repo_did = ?
+    AND e.owner_incarnation = ?
     AND j.cursor = ?
     AND ${VALID_QUARANTINE_JOB_SQL}
     AND j.status = 'complete' AND j.failure_reason IS NULL AND j.lease_until > unixepoch()
@@ -61,9 +67,13 @@ export const COMPLETE_QUARANTINE_RESULT = `SELECT ${QUARANTINE_JOB_COLUMNS} FROM
     AND NOT EXISTS (SELECT 1 FROM space_record r WHERE r.space_ref = j.space_ref AND r.repo_did = j.repo_did
       AND (r.collection || '/' || r.rkey) COLLATE BINARY > ? COLLATE BINARY)`;
 
-export const FAILED_QUARANTINE_RESULT = `SELECT failure_reason FROM space_quarantine_job
-  WHERE id = ? AND token = ? AND space_ref = ? AND repo_did = ? AND status = 'failed'
-    AND failure_reason IN ('invalid', 'unsupported')`;
+export const FAILED_QUARANTINE_RESULT = `SELECT j.failure_reason FROM space_quarantine_job j
+  JOIN space_owned_epoch e ON e.id = j.epoch_id AND e.space_ref = j.space_ref
+    AND e.repo_did = j.repo_did AND e.state = 'quarantined'
+  JOIN space_repo h ON h.space_ref = j.space_ref AND h.repo_did = j.repo_did AND h.active_epoch_id = j.epoch_id
+  JOIN space s ON s.space_ref = j.space_ref AND s.deleted_at IS NULL
+  WHERE j.id = ? AND j.token = ? AND j.space_ref = ? AND j.repo_did = ? AND e.owner_incarnation = ?
+    AND j.status = 'failed' AND j.failure_reason IN ('invalid', 'unsupported')`;
 
 const validVersion = `${boundedText('v.path', 830)} AND ${boundedText('v.collection', 317)}
   AND ${boundedText('v.rkey', 512)} AND ${boundedText('v.cid', 128)} AND ${boundedText('v.repo_rev', 13, 13)}

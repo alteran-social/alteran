@@ -24,18 +24,22 @@ export type SpaceRepoExport = {
   readonly body: ReadableStream<Uint8Array>;
 };
 
-/** The caller authorizes the repo and authenticates the returned commit. */
+/**
+ * The caller authorizes the repo and authenticates the returned commit.
+ * Each page is fenced at its D1 read; already emitted bytes cannot be recalled.
+ */
 export async function streamSpaceRepoArchive(
   env: Env,
   space: string,
   repo: string,
+  ownerIncarnation: string,
   signal?: AbortSignal,
 ): Promise<SpaceRepoExport> {
   if (signal?.aborted) throw abortReason(signal);
   if (!isSpaceDid(repo)) {
     throw new SpaceStorageError("RepoNotFound", "Space repo is unavailable");
   }
-  const lease = await acquireSpaceSnapshot(env, space, repo);
+  const lease = await acquireSpaceSnapshot(env, space, repo, ownerIncarnation);
   const commit: SpaceCommit = {
     ver: 1,
     space: SpaceRef.parse(space).toString(),

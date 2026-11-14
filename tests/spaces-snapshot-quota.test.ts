@@ -1,8 +1,8 @@
 import { describe, it } from "./helpers/bdd";
 import { expect } from "@std/expect";
-import { makeEnv } from "./helpers/env";
-import { applySpaceWrites, createLocalSpace } from "../src/db/space-store";
-import { acquireSpaceSnapshot } from "../src/db/space-snapshot";
+import { makeSpaceEnv as makeEnv } from "./helpers/space-env";
+import { applySpaceWrites, createLocalSpace } from "./helpers/space-adapters";
+import { acquireSpaceSnapshot } from "./helpers/space-adapters";
 import {
   GLOBAL_LEASE_EXPIRY_SQL,
   GLOBAL_LEASE_MAXIMUM_EXPIRY_SQL,
@@ -37,7 +37,7 @@ async function seedLeases(
   const sql = `INSERT INTO space_snapshot_lease
     (id, token, renewal_nonce, space_ref, repo_did, epoch_id, generation, rev, set_hash, expires_at, maximum_expires_at)
     VALUES (?, ?, ?, ?, ?, ?, 1, '2222222222222', ?, ?, ?)`;
-  await env.ALTERAN_DB.batch(
+  await withLegacyLeaseInsert(env, () => env.ALTERAN_DB.batch(
     Array.from(
       { length: count },
       (_, index) =>
@@ -53,7 +53,16 @@ async function seedLeases(
           maximumExpiresAt,
         ),
     ),
-  );
+  ));
+}
+
+async function withLegacyLeaseInsert(env: TestEnv, action: () => Promise<unknown>) {
+  const trigger = await env.ALTERAN_DB.prepare(
+    "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'space_snapshot_owner_insert'",
+  ).first<{ sql: string }>();
+  if (!trigger?.sql) throw new Error('Missing snapshot owner trigger');
+  await env.ALTERAN_DB.exec('DROP TRIGGER space_snapshot_owner_insert');
+  try { await action(); } finally { await env.ALTERAN_DB.exec(trigger.sql.replace(/\n/g, ' ')); }
 }
 
 async function leaseCount(env: TestEnv): Promise<number> {
@@ -113,7 +122,7 @@ describe("Space snapshot quotas and bounded expiry", () => {
       (id, token, renewal_nonce, space_ref, repo_did, epoch_id, generation, rev, set_hash, expires_at, maximum_expires_at)
       VALUES (?, ?, ?, ?, ?, ?, 1, '2222222222222', ?, ?, ?)`;
     const state = new Uint8Array(2048).buffer;
-    await env.ALTERAN_DB.batch([
+    await withLegacyLeaseInsert(env, () => env.ALTERAN_DB.batch([
       env.ALTERAN_DB.prepare(sql).bind(
         "expiry",
         "a",
@@ -136,8 +145,8 @@ describe("Space snapshot quotas and bounded expiry", () => {
         now + 100,
         now - 1,
       ),
-    ]);
-    expect(await pruneExpiredSpaceSnapshotLeases(env, SPACE, DID, 1)).toBe(2);
+    ]));
+    await pruneExpiredSpaceSnapshotLeases(env, SPACE, DID, 1);
     expect(await leaseCount(env)).toBe(0);
   });
 

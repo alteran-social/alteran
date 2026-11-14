@@ -3,7 +3,8 @@ import { Miniflare } from 'miniflare';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { encodeRecordBlock } from '../src/services/repo/blockstore-ops';
-import { claimSpaceQuarantine, stepSpaceQuarantine } from '../src/db/space-quarantine';
+import { claimSpaceQuarantine, stepSpaceQuarantine } from './helpers/space-adapters';
+import { bindQuarantineFixtureOwners } from './helpers/space-quarantine-owner';
 
 Deno.test({ name: 'quarantine legacy metadata remains bounded when rejected', sanitizeOps: false, sanitizeResources: false, async fn() {
   const service = new Miniflare({ d1Databases: { DB: ':memory:' }, compatibilityDate: '2025-10-02',
@@ -29,6 +30,7 @@ Deno.test({ name: 'quarantine legacy metadata remains bounded when rejected', sa
   await database.prepare('INSERT INTO space_record (space_ref, repo_did, collection, rkey, cid, value_cbor, repo_rev) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .bind(space, did, 'com.example.note', `\0${'x'.repeat(400_000)}`, cid.toString(), value, rev).run();
   for (const name of names.filter((name) => name >= '0016')) await apply(name);
+  await bindQuarantineFixtureOwners(database);
   const env = { ALTERAN_DB: database, PDS_DID: did } as any;
   const handle = await claimSpaceQuarantine(env, space, did);
   if (!handle) throw new Error('Missing quarantine handle');

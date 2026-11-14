@@ -3,6 +3,7 @@ import type { Env } from '../env';
 import { applySpaceSetHashChanges, spaceRecordHashElement } from '../lib/spaces/lthash';
 import { copyPlainRecord } from '../lib/spaces/plain-values';
 import { assertLocalSpaceRepo, parseSpaceRef } from './space-ref';
+import { isSpaceOwnerIncarnation } from './space-owner-incarnation';
 import { checkpointQuarantine, finishQuarantine } from './space-quarantine-checkpoint';
 import { COMPLETE_QUARANTINE_CURSOR, COMPLETE_QUARANTINE_RESULT, FAILED_QUARANTINE_RESULT, LIVE_QUARANTINE_JOB, PINNED_QUARANTINE_JOB, QUARANTINE_CURRENT_PAGE, QUARANTINE_RECORD_BYTES, QUARANTINE_VERSION_PAGE } from './space-quarantine-sql';
 import { quarantineJobArgs, type QuarantineJobRow, type SpaceQuarantineHandle, type SpaceQuarantineStep } from './space-quarantine-types';
@@ -22,25 +23,31 @@ type CurrentRow = {
   actual_size: number; value_type: string; valid: number; sentinel: number;
 };
 
-/** Start or reclaim a verification job; the quarantined repo remains unavailable. */
+/** Start or reclaim a job for a captured owner; the repo remains quarantined. */
 export async function claimSpaceQuarantine(
   env: Env,
   spaceRef: string,
   repoDid: string,
+  ownerIncarnation: string,
 ): Promise<SpaceQuarantineHandle | null> {
   const ref = parseSpaceRef(spaceRef);
+  if (!isSpaceOwnerIncarnation(ownerIncarnation)) return null;
   await assertLocalSpaceRepo(env, repoDid);
   try {
     const existing = await env.ALTERAN_DB.prepare(
       `SELECT CASE WHEN typeof(j.id) = 'text' AND length(CAST(j.id AS BLOB)) = 36 THEN j.id END AS id
        FROM space_quarantine_job j JOIN space_repo h ON h.space_ref = j.space_ref
-       AND h.repo_did = j.repo_did AND h.active_epoch_id = j.epoch_id WHERE j.space_ref = ? AND j.repo_did = ?`,
-    ).bind(spaceRef, repoDid).first<{ id: string | null }>();
+       AND h.repo_did = j.repo_did AND h.active_epoch_id = j.epoch_id
+       JOIN space_owned_epoch e ON e.id = j.epoch_id AND e.space_ref = j.space_ref
+         AND e.repo_did = j.repo_did AND e.state = 'quarantined'
+       JOIN space s ON s.space_ref = j.space_ref AND s.deleted_at IS NULL
+       WHERE j.space_ref = ? AND j.repo_did = ? AND e.owner_incarnation = ?`,
+    ).bind(spaceRef, repoDid, ownerIncarnation).first<{ id: string | null }>();
     if (existing && !validUuid(existing.id)) return null;
     const id = existing?.id ?? crypto.randomUUID();
     const token = crypto.randomUUID();
     const nonce = crypto.randomUUID();
-    const identity = [id, token, nonce, spaceRef, repoDid] as const;
+    const identity = [id, token, nonce, spaceRef, repoDid, ownerIncarnation] as const;
     const [, , selected] = await env.ALTERAN_DB.batch([
       env.ALTERAN_DB.prepare(
         `INSERT INTO space_quarantine_job
@@ -49,10 +56,10 @@ export async function claimSpaceQuarantine(
           lease_until, status, created_at)
          SELECT ?, ?, ?, h.space_ref, h.repo_did, h.active_epoch_id, s.authority_did, s.space_type, s.skey,
           h.generation, h.mutation_id, h.rev, h.set_hash, zeroblob(2048), '', 0, 0, unixepoch() + ?, 'running', unixepoch()
-         FROM space_repo h JOIN space_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
+         FROM space_repo h JOIN space_owned_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
            AND e.repo_did = h.repo_did AND e.state = 'quarantined'
          JOIN space s ON s.space_ref = h.space_ref AND s.deleted_at IS NULL
-         WHERE h.space_ref = ? AND h.repo_did = ?
+         WHERE h.space_ref = ? AND h.repo_did = ? AND e.owner_incarnation = ?
            AND typeof(h.active_epoch_id) = 'text' AND length(CAST(h.active_epoch_id AS BLOB)) BETWEEN 1 AND 128
            AND typeof(h.generation) = 'integer' AND h.generation BETWEEN 1 AND 9007199254740991
            AND typeof(h.mutation_id) = 'text' AND length(CAST(h.mutation_id AS BLOB)) BETWEEN 1 AND 8192
@@ -63,12 +70,13 @@ export async function claimSpaceQuarantine(
              WHERE existing.id = ? OR (existing.space_ref = h.space_ref
                AND existing.repo_did = h.repo_did AND existing.epoch_id = h.active_epoch_id))
          ON CONFLICT(space_ref, repo_did, epoch_id) DO NOTHING`,
-      ).bind(id, token, nonce, LEASE_SECONDS, spaceRef, repoDid, ref.authorityDid, ref.spaceType, ref.skey, id),
+      ).bind(id, token, nonce, LEASE_SECONDS, spaceRef, repoDid, ownerIncarnation,
+        ref.authorityDid, ref.spaceType, ref.skey, id),
       env.ALTERAN_DB.prepare(
         `UPDATE space_quarantine_job SET token = ?, renewal_nonce = ?, lease_until = unixepoch() + ?, sequence = sequence + 1
          WHERE id = ? AND space_ref = ? AND repo_did = ? AND status IN ('running', 'complete') AND lease_until <= unixepoch()
            AND sequence < ? AND EXISTS (
-             SELECT 1 FROM space_repo h JOIN space_epoch e ON e.id = h.active_epoch_id
+             SELECT 1 FROM space_repo h JOIN space_owned_epoch e ON e.id = h.active_epoch_id
                AND e.space_ref = h.space_ref AND e.repo_did = h.repo_did AND e.state = 'quarantined'
              JOIN space s ON s.space_ref = h.space_ref AND s.deleted_at IS NULL
              WHERE h.space_ref = space_quarantine_job.space_ref AND h.repo_did = space_quarantine_job.repo_did
@@ -76,12 +84,15 @@ export async function claimSpaceQuarantine(
                AND h.mutation_id = space_quarantine_job.mutation_id AND h.rev = space_quarantine_job.rev
                AND h.set_hash = space_quarantine_job.expected_hash AND s.authority_did = space_quarantine_job.authority_did
                AND s.space_type = space_quarantine_job.space_type AND s.skey = space_quarantine_job.skey
+               AND e.owner_incarnation = ?
            )`,
-      ).bind(token, nonce, LEASE_SECONDS, id, spaceRef, repoDid, MAX_SAFE),
+      ).bind(token, nonce, LEASE_SECONDS, id, spaceRef, repoDid, MAX_SAFE, ownerIncarnation),
       env.ALTERAN_DB.prepare(`${PINNED_QUARANTINE_JOB} AND j.status IN ('running', 'complete')`).bind(...identity),
+      env.ALTERAN_DB.prepare(`SELECT CASE WHEN EXISTS (${PINNED_QUARANTINE_JOB} AND j.status IN ('running', 'complete'))
+        THEN 1 ELSE json('{') END AS valid`).bind(...identity),
     ]);
     if (selected.results?.length !== 1 || !validUuid(id)) return null;
-    return Object.freeze({ id, token, spaceRef, repoDid });
+    return Object.freeze({ id, token, spaceRef, repoDid, ownerIncarnation });
   } catch {
     return null;
   }
@@ -108,7 +119,7 @@ export async function stepSpaceQuarantine(env: Env, input: SpaceQuarantineHandle
         `UPDATE space_quarantine_job SET renewal_nonce = ?, lease_until = unixepoch() + ?
          WHERE id = ? AND token = ? AND space_ref = ? AND repo_did = ? AND status = 'running' AND lease_until > unixepoch()
            AND EXISTS (
-             SELECT 1 FROM space_repo h JOIN space_epoch e ON e.id = h.active_epoch_id
+             SELECT 1 FROM space_repo h JOIN space_owned_epoch e ON e.id = h.active_epoch_id
                AND e.space_ref = h.space_ref AND e.repo_did = h.repo_did AND e.state = 'quarantined'
              JOIN space s ON s.space_ref = h.space_ref AND s.deleted_at IS NULL
              WHERE h.space_ref = space_quarantine_job.space_ref AND h.repo_did = space_quarantine_job.repo_did
@@ -116,11 +127,19 @@ export async function stepSpaceQuarantine(env: Env, input: SpaceQuarantineHandle
                AND h.mutation_id = space_quarantine_job.mutation_id AND h.rev = space_quarantine_job.rev
                AND h.set_hash = space_quarantine_job.expected_hash AND s.authority_did = space_quarantine_job.authority_did
                AND s.space_type = space_quarantine_job.space_type AND s.skey = space_quarantine_job.skey
+               AND e.owner_incarnation = ?
            )`,
-      ).bind(nonce, LEASE_SECONDS, handle.id, handle.token, handle.spaceRef, handle.repoDid),
+      ).bind(nonce, LEASE_SECONDS, handle.id, handle.token, handle.spaceRef, handle.repoDid, handle.ownerIncarnation),
       env.ALTERAN_DB.prepare(LIVE_QUARANTINE_JOB).bind(...identity),
-      env.ALTERAN_DB.prepare(COMPLETE_QUARANTINE_CURSOR).bind(handle.id, handle.token, handle.spaceRef, handle.repoDid),
-      env.ALTERAN_DB.prepare(FAILED_QUARANTINE_RESULT).bind(handle.id, handle.token, handle.spaceRef, handle.repoDid),
+      env.ALTERAN_DB.prepare(COMPLETE_QUARANTINE_CURSOR)
+        .bind(handle.id, handle.token, handle.spaceRef, handle.repoDid, handle.ownerIncarnation),
+      env.ALTERAN_DB.prepare(FAILED_QUARANTINE_RESULT)
+        .bind(handle.id, handle.token, handle.spaceRef, handle.repoDid, handle.ownerIncarnation),
+      env.ALTERAN_DB.prepare(`SELECT CASE WHEN EXISTS (${LIVE_QUARANTINE_JOB})
+        OR EXISTS (${COMPLETE_QUARANTINE_CURSOR}) OR EXISTS (${FAILED_QUARANTINE_RESULT})
+        THEN 1 ELSE json('{') END AS valid`).bind(...identity,
+          handle.id, handle.token, handle.spaceRef, handle.repoDid, handle.ownerIncarnation,
+          handle.id, handle.token, handle.spaceRef, handle.repoDid, handle.ownerIncarnation),
     ]);
     const completedJob = completed.results?.[0] as { cursor: unknown } | undefined;
     if (completedJob) {
@@ -253,7 +272,8 @@ async function fail(
   if (await finishQuarantine(env, handle, nonce, job, tag)) return { tag };
   try {
     const failed = await env.ALTERAN_DB.prepare(FAILED_QUARANTINE_RESULT)
-      .bind(handle.id, handle.token, handle.spaceRef, handle.repoDid).first<{ failure_reason?: unknown }>();
+      .bind(handle.id, handle.token, handle.spaceRef, handle.repoDid, handle.ownerIncarnation)
+      .first<{ failure_reason?: unknown }>();
     return failed ? failedResult(failed) : { tag: 'unavailable' };
   } catch {
     return { tag: 'unavailable' };
@@ -266,7 +286,8 @@ function completedResult(job: QuarantineJobRow): SpaceQuarantineStep {
 
 async function readCompletedResult(env: Env, handle: SpaceQuarantineHandle, cursor: string): Promise<SpaceQuarantineStep> {
   const completed = await env.ALTERAN_DB.prepare(COMPLETE_QUARANTINE_RESULT)
-    .bind(handle.id, handle.token, handle.spaceRef, handle.repoDid, cursor, cursor, cursor).first<QuarantineJobRow>();
+    .bind(handle.id, handle.token, handle.spaceRef, handle.repoDid, handle.ownerIncarnation, cursor, cursor, cursor)
+    .first<QuarantineJobRow>();
   return completed ? completedResult(completed) : { tag: 'unavailable' };
 }
 
@@ -282,11 +303,12 @@ function validBytes(value: unknown, length: number): value is number[] {
 
 export function copyQuarantineHandle(value: SpaceQuarantineHandle): SpaceQuarantineHandle | null {
   try {
-    const fields = copyPlainRecord(value, ['id', 'token', 'spaceRef', 'repoDid']);
+    const fields = copyPlainRecord(value, ['id', 'token', 'spaceRef', 'repoDid', 'ownerIncarnation']);
     if (!fields) return null;
-    const { id, token, spaceRef, repoDid } = fields;
-    if (!validUuid(id) || !validUuid(token) || typeof spaceRef !== 'string' || typeof repoDid !== 'string') return null;
-    return { id, token, spaceRef, repoDid };
+    const { id, token, spaceRef, repoDid, ownerIncarnation } = fields;
+    if (!validUuid(id) || !validUuid(token) || typeof spaceRef !== 'string' || typeof repoDid !== 'string' ||
+      !isSpaceOwnerIncarnation(ownerIncarnation)) return null;
+    return { id, token, spaceRef, repoDid, ownerIncarnation };
   } catch {
     return null;
   }

@@ -4,11 +4,11 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { CID } from 'multiformats/cid';
 import { create as createDigest } from 'multiformats/hashes/digest';
 import { describe, it } from './helpers/bdd';
-import { makeEnv } from './helpers/env';
+import { makeSpaceEnv as makeEnv } from './helpers/space-env';
 import { checkRecordCborBounds } from '../src/lib/spaces/record-cbor-bounds';
 import { validSpaceRecordBlock } from '../src/db/space-record-block';
-import { createLocalSpace } from '../src/db/space-store';
-import { commitSpaceWrites, loadSpaceSnapshot } from '../src/db/space-mutation';
+import { createLocalSpace } from './helpers/space-storage';
+import { commitSpaceWrites, loadSpaceSnapshot } from './helpers/space-storage';
 import { parseSpaceRef } from '../src/db/space-ref';
 
 const DID = 'did:example:test';

@@ -1,6 +1,7 @@
 # AT Protocol Spaces readiness
 
-Alteran does not yet implement Spaces. The AT Protocol team's
+Alteran has limited Space foundations and an owner-only record read; it is not
+yet a Spaces-capable PDS. The AT Protocol team's
 [beta announcement](https://atproto.com/blog/getting-ready-for-the-spaces-public-beta)
 schedules the public beta and reference-PDS rollout to start on December 1,
 2026. Other PDS implementations must add their own support. The team advises
@@ -14,15 +15,16 @@ records or advertised as encrypted.
 ## Current behavior
 
 - Alteran has one public MST repository per account and serves its commits via
-  public sync and the firehose. Internal space storage and protocol helpers are
-  under development; no space repositories or space host are accessible yet.
-- Space and policy XRPC namespaces return `NotImplemented`. OAuth can issue an
-  explicitly requested `read_self` Space grant, with or without a collection
-  parameter, but no public Space endpoint accepts it yet. The grant covers every
-  collection in the user's own repo for matching Spaces, even when the request
-  names a collection. Other Space grants
-  remain unavailable. An independently granted `transition:generic` scope
-  continues to authorize its existing public-repository operations.
+  public sync and the firehose. Space records and their history are stored
+  separately and are not published through those public paths.
+- `com.atproto.space.getRecord` supports an unsigned, DPoP-authenticated read
+  of the user's own repository for an explicitly granted `read_self` Space
+  scope. The scope covers every collection in matching Spaces whether or not
+  the request names a collection. Requests for a record MAC are rejected.
+  Space creation, writes, policy operations, credentials and synchronization
+  are not exposed; other Space grants remain unavailable. An independently
+  granted `transition:generic` scope continues to authorize its existing
+  public-repository operations.
 - `com.atproto.sync.getBlob` authorizes public downloads using public record
   usage and sends public, immutable cache headers. The public blob usage path
   must never treat a space-only reference as public authorization.
@@ -260,6 +262,14 @@ before applying them, apply them in order, and do not restart old versions.
 Apply `0038` atomically or recover from a backup if a manual application is
 interrupted. The backfill, trigger behavior and indexed cleanup still require
 validation on the target D1 deployment before enabling Space access.
+
+Migrations `0042` and `0043` bind Space epochs and personal policy state to an
+account incarnation. Drain older Workers before applying either migration,
+apply them in order, and do not restart old versions. Existing NULL ownership
+remains quarantined; it is not automatically assigned to a recreated account.
+Space identities and tombstones are retained until a separately fenced recovery
+and retention procedure is available. Verify the migration and restore process
+on the target D1 deployment before enabling Space reads.
 
 The login and consent lockout uses the Cloudflare-provided `CF-Connecting-IP`
 header; absent or invalid values share an `unknown` bucket. This assumes the

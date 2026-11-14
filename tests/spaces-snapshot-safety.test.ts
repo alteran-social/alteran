@@ -1,15 +1,15 @@
 import { describe, it } from "./helpers/bdd";
 import { expect } from "@std/expect";
 import * as dagCbor from "@ipld/dag-cbor";
-import { makeEnv } from "./helpers/env";
-import { applySpaceWrites, createLocalSpace } from "../src/db/space-store";
+import { makeSpaceEnv as makeEnv } from "./helpers/space-env";
+import { applySpaceWrites, createLocalSpace } from "./helpers/space-adapters";
 import {
   acquireSpaceSnapshot,
   readSpaceSnapshotPage,
   releaseSpaceSnapshot,
-} from "../src/db/space-snapshot";
+} from "./helpers/space-adapters";
 import { pruneExpiredSpaceSnapshotLeases } from "../src/db/space-lease-expiry";
-import { pruneSpaceRecordVersionsPage } from "../src/db/space-version-gc";
+import { pruneSpaceRecordVersionsPage } from "./helpers/space-adapters";
 import { nextSpaceRevision } from "../src/db/space-tid";
 import { SpaceStorageError } from "../src/db/space-types";
 import { spaceSetHashDigest } from "../src/lib/spaces/lthash";
@@ -324,13 +324,10 @@ describe("Space snapshot integrity and expiry", () => {
       "SELECT COUNT(*) AS count FROM space_snapshot_lease",
     ).first<{ count: number }>();
     expect(count?.count).toBe(1);
-    expect(
-      await pruneExpiredSpaceSnapshotLeases(
-        clockEnv(env, Math.floor(Date.now() / 1000) + 120),
-        SPACE,
-        DID,
-      ),
-    ).toBe(1);
+    await pruneExpiredSpaceSnapshotLeases(
+      clockEnv(env, Math.floor(Date.now() / 1000) + 120), SPACE, DID,
+    );
+    expect((await env.ALTERAN_DB.prepare('SELECT COUNT(*) AS n FROM space_snapshot_lease').first())?.n).toBe(0);
   });
 
   it("never revives a lease after the database clock moves forward and backward", async () => {
@@ -349,7 +346,8 @@ describe("Space snapshot integrity and expiry", () => {
       () => readSpaceSnapshotPage(past, lease, null),
       "SpaceSnapshotUnavailable",
     );
-    expect(await pruneExpiredSpaceSnapshotLeases(future, SPACE, DID)).toBe(0);
+    await pruneExpiredSpaceSnapshotLeases(future, SPACE, DID);
+    expect((await env.ALTERAN_DB.prepare('SELECT COUNT(*) AS n FROM space_snapshot_lease').first())?.n).toBe(0);
   });
 
   it("keeps a purged lease invalid after its database response is lost", async () => {
@@ -364,7 +362,8 @@ describe("Space snapshot integrity and expiry", () => {
       () => readSpaceSnapshotPage(clockEnv(env, now), lease, null),
       "SpaceSnapshotUnavailable",
     );
-    expect(await pruneExpiredSpaceSnapshotLeases(future, SPACE, DID)).toBe(0);
+    await pruneExpiredSpaceSnapshotLeases(future, SPACE, DID);
+    expect((await env.ALTERAN_DB.prepare('SELECT COUNT(*) AS n FROM space_snapshot_lease').first())?.n).toBe(0);
     expect(await pruneSpaceRecordVersions(future, SPACE, DID)).toBe(1);
   });
 
@@ -384,7 +383,8 @@ describe("Space snapshot integrity and expiry", () => {
       )
         .bind(SPACE).run(),
     ).rejects.toThrow();
-    expect(await pruneExpiredSpaceSnapshotLeases(env, SPACE, DID)).toBe(1);
+    await pruneExpiredSpaceSnapshotLeases(env, SPACE, DID);
+    expect((await env.ALTERAN_DB.prepare('SELECT COUNT(*) AS n FROM space_snapshot_lease').first())?.n).toBe(0);
     await env.ALTERAN_DB.prepare(
       "DELETE FROM space_record_version WHERE space_ref = ? AND until_generation IS NOT NULL",
     )

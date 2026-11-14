@@ -10,6 +10,7 @@ import { parseCanonicalRepoCid } from "../lib/spaces/repo-cid";
 import { assertLocalSpaceRepo, parseSpaceRef } from "./space-ref";
 import { validSpaceRecordBlock } from "./space-record-block";
 import { SpaceStorageError } from "./space-types";
+import { captureSpaceOwner } from "./space-owner";
 
 const MAX_PAGE_OPERATIONS = 1000;
 const MAX_PAGE_VALUE_BYTES = 1024 * 1024;
@@ -67,8 +68,10 @@ export async function readSpaceRepoOps(
     readonly limit?: number;
     readonly excludeValues?: boolean;
   },
+  ownerIncarnation: string,
 ): Promise<SpaceRepoOpsPage> {
   parseSpaceRef(space);
+  const owner = captureSpaceOwner(repo, ownerIncarnation);
   const options = copyPlainRecordWithExtensions(input, 4);
   if (
     !options ||
@@ -103,19 +106,19 @@ export async function readSpaceRepoOps(
           SELECT 1 FROM space_op o WHERE o.space_ref = h.space_ref AND o.repo_did = h.repo_did AND o.rev = ?3
         )) AS known_since
       FROM space_repo h
-      JOIN space_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
+      JOIN space_owned_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
         AND e.repo_did = h.repo_did AND e.state = 'active'
       JOIN space s ON s.space_ref = h.space_ref AND s.deleted_at IS NULL
-      WHERE h.space_ref = ?1 AND h.repo_did = ?2
-    `).bind(space, repo, since),
+      WHERE h.space_ref = ?1 AND h.repo_did = ?2 AND e.owner_incarnation = ?4
+    `).bind(space, repo, since, owner.incarnation),
     env.ALTERAN_DB.prepare(`
       WITH repo AS (
         SELECT h.space_ref, h.repo_did, h.active_epoch_id, h.generation
         FROM space_repo h
-        JOIN space_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
+        JOIN space_owned_epoch e ON e.id = h.active_epoch_id AND e.space_ref = h.space_ref
           AND e.repo_did = h.repo_did AND e.state = 'active'
         JOIN space s ON s.space_ref = h.space_ref AND s.deleted_at IS NULL
-        WHERE h.space_ref = ?1 AND h.repo_did = ?2 AND (
+        WHERE h.space_ref = ?1 AND h.repo_did = ?2 AND e.owner_incarnation = ?10 AND (
           h.rev = ?3 OR EXISTS (SELECT 1 FROM space_op o
             WHERE o.space_ref = h.space_ref AND o.repo_did = h.repo_did AND o.rev = ?3)
         )
@@ -172,6 +175,7 @@ export async function readSpaceRepoOps(
       excludeValues ? 0 : 1,
       limit,
       MAX_PAGE_VALUE_BYTES,
+      owner.incarnation,
     ),
   ]);
 

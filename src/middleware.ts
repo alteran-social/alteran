@@ -2,6 +2,7 @@ import { defineMiddleware, sequence } from 'astro/middleware';
 import { env as cloudflareEnv } from 'cloudflare:workers';
 import type { Env } from './env';
 import { resolveEnvSecrets } from './lib/secrets';
+import { mergeHeaderTokens } from './lib/http-headers';
 
 // Response.redirect() (and a few other constructors) returns a Response whose
 // headers are immutable. Re-wrap into a fresh Response so downstream middleware
@@ -12,6 +13,7 @@ function ensureMutableResponse(response: Response): Response {
 }
 
 const cors = defineMiddleware(async ({ request }, next) => {
+  const isPrivateSpaceRead = new URL(request.url).pathname === '/xrpc/com.atproto.space.getRecord';
   // Match atproto CORS implementation: use wildcard for public endpoints
   // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin
   // For requests without credentials, "*" can be specified as a wildcard
@@ -42,7 +44,8 @@ const cors = defineMiddleware(async ({ request }, next) => {
     response = new Response(
       JSON.stringify({
         error: 'InternalError',
-        message: error instanceof Error ? error.message : 'Internal server error',
+        message: isPrivateSpaceRead ? 'Internal server error' :
+          error instanceof Error ? error.message : 'Internal server error',
       }),
       { status: 500, headers: { 'Content-Type': 'application/json' } },
     );
@@ -50,12 +53,19 @@ const cors = defineMiddleware(async ({ request }, next) => {
 
   // Set CORS headers on all responses (atproto standard)
   response.headers.set('Access-Control-Allow-Origin', '*');
+  if (isPrivateSpaceRead) {
+    response.headers.set('Cache-Control', 'private, no-store');
+    mergeHeaderTokens(response.headers, 'Vary', ['Accept-Signature', 'Authorization', 'DPoP']);
+  }
 
   // Expose DPoP-Nonce header for OAuth clients (atproto standard)
   // This allows clients to read the DPoP-Nonce header from responses
   const dpopNonce = response.headers.get('DPoP-Nonce');
   if (dpopNonce) {
-    response.headers.set('Access-Control-Expose-Headers', 'DPoP-Nonce');
+    mergeHeaderTokens(response.headers, 'Access-Control-Expose-Headers', ['DPoP-Nonce']);
+  }
+  if (response.headers.has('WWW-Authenticate')) {
+    mergeHeaderTokens(response.headers, 'Access-Control-Expose-Headers', ['WWW-Authenticate']);
   }
 
   return response;
@@ -108,6 +118,7 @@ const logger = defineMiddleware(async ({ request, locals }, next) => {
     return response;
   } catch (error) {
     const dur = Date.now() - start;
+    const isPrivateSpaceRead = url.pathname === '/xrpc/com.atproto.space.getRecord';
 
     // Log error
     console.log(JSON.stringify({
@@ -117,8 +128,8 @@ const logger = defineMiddleware(async ({ request, locals }, next) => {
       method: request.method,
       path: url.pathname,
       duration: dur,
-      error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
+      error: isPrivateSpaceRead ? 'Private request failed' : error instanceof Error ? error.message : String(error),
+      stack: !isPrivateSpaceRead && error instanceof Error ? error.stack : undefined,
       timestamp: new Date().toISOString(),
     }));
 

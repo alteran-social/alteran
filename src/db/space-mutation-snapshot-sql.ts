@@ -1,11 +1,25 @@
 import { MAX_RECORD_SIZE } from '@atproto/space';
+import { SPACE_GENESIS_EMPTY } from './space-genesis-sql';
 
 /** Maximum existing record bytes compared for a single mutation. */
 export const MAX_SPACE_MUTATION_SNAPSHOT_BYTES = 4 * 1024 * 1024;
 
 export const SPACE_MUTATION_SNAPSHOT_SQL = `WITH requested AS MATERIALIZED (
   SELECT json_extract(value, '$[0]') AS collection, json_extract(value, '$[1]') AS rkey FROM json_each(?)
-), target AS MATERIALIZED (SELECT ? AS space_ref, ? AS repo_did), budget AS MATERIALIZED (
+), input AS MATERIALIZED (SELECT ? AS space_ref, ? AS repo_did, ? AS owner_incarnation),
+target AS MATERIALIZED (
+  SELECT t.* FROM input t JOIN account a ON a.did = t.repo_did AND a.space_incarnation = t.owner_incarnation
+  JOIN account_state state ON state.did = a.did AND typeof(state.active) = 'integer' AND state.active = 1
+    AND state.status IS NULL AND state.suspended_until IS NULL
+  WHERE EXISTS (SELECT 1 FROM space_repo h JOIN space_owned_epoch e ON e.id = h.active_epoch_id
+      AND e.space_ref = h.space_ref AND e.repo_did = h.repo_did AND e.state = 'active'
+    JOIN space s ON s.space_ref = h.space_ref AND s.deleted_at IS NULL
+    WHERE h.space_ref = t.space_ref AND h.repo_did = t.repo_did AND e.owner_incarnation = t.owner_incarnation)
+    OR ((${SPACE_GENESIS_EMPTY}) AND NOT EXISTS (SELECT 1 FROM space s WHERE s.space_ref = t.space_ref
+      AND (s.deleted_at IS NOT NULL OR s.space_ref != 'at://' || s.authority_did || '/space/' || s.space_type || '/' || s.skey
+        OR (s.authority_did = t.repo_did AND NOT EXISTS (SELECT 1 FROM space_personal_policy p
+          WHERE p.space_ref = s.space_ref AND p.authority_did = t.repo_did AND p.authority_incarnation = t.owner_incarnation)))))
+), budget AS MATERIALIZED (
   SELECT COALESCE(SUM(CASE WHEN typeof(r.value_cbor) = 'blob' AND length(r.value_cbor) <= ${MAX_RECORD_SIZE}
     THEN length(r.value_cbor) ELSE 0 END), 0) AS bytes
   FROM requested p CROSS JOIN target t LEFT JOIN space_record r ON r.space_ref = t.space_ref AND r.repo_did = t.repo_did

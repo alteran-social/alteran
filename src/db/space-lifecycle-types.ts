@@ -1,11 +1,13 @@
 import type { Env } from "../env";
 import { copyPlainRecord } from "../lib/spaces/plain-values";
 import { assertLocalSpaceRepo, parseSpaceRef } from "./space-ref";
+import { isSpaceOwnerIncarnation } from "./space-owner-incarnation";
 import { SpaceStorageError } from "./space-types";
 
 export type PersonalDeletionHandle = {
   readonly spaceRef: string;
   readonly authorityDid: string;
+  readonly ownerIncarnation: string;
   readonly nonce: string;
 };
 export type PersonalDeletionPhase = "records" | "versions" | "ops" | "done";
@@ -33,10 +35,11 @@ export function validLifecycleNonce(value: unknown): value is string {
 export function captureDeletionHandle(
   value: PersonalDeletionHandle,
 ): PersonalDeletionHandle {
-  const fields = copyPlainRecord(value, ["spaceRef", "authorityDid", "nonce"]);
+  const fields = copyPlainRecord(value, ["spaceRef", "authorityDid", "ownerIncarnation", "nonce"]);
   if (
     !fields || typeof fields.spaceRef !== "string" ||
     typeof fields.authorityDid !== "string" ||
+    !isSpaceOwnerIncarnation(fields.ownerIncarnation) ||
     !validLifecycleNonce(fields.nonce)
   ) throw invalidLifecycleRequest();
   const ref = parseSpaceRef(fields.spaceRef);
@@ -44,6 +47,7 @@ export function captureDeletionHandle(
   return {
     spaceRef: fields.spaceRef,
     authorityDid: fields.authorityDid,
+    ownerIncarnation: fields.ownerIncarnation,
     nonce: fields.nonce,
   };
 }

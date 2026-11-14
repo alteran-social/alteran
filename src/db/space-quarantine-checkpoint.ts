@@ -1,6 +1,6 @@
 import type { Env } from '../env';
 import { LIVE_QUARANTINE_JOB, PINNED_QUARANTINE_JOB } from './space-quarantine-sql';
-import { quarantineJobArgs, type QuarantineJobRow, type SpaceQuarantineHandle } from './space-quarantine-types';
+import { quarantineJobArgs, quarantineJobKeyArgs, type QuarantineJobRow, type SpaceQuarantineHandle } from './space-quarantine-types';
 
 const PREVIOUS = `id = ? AND token = ? AND renewal_nonce = ? AND space_ref = ? AND repo_did = ?
   AND sequence = ? AND cursor = ? AND accumulated_hash = ? AND lease_until > unixepoch()
@@ -21,7 +21,7 @@ export async function checkpointQuarantine(
       env.ALTERAN_DB.prepare(
         `UPDATE space_quarantine_job SET cursor = ?, accumulated_hash = ?, sequence = sequence + 1,
            record_count = record_count + 1 WHERE ${PREVIOUS}`,
-      ).bind(path, nextHash, ...identity, job.sequence, job.cursor, oldHash, ...identity),
+      ).bind(path, nextHash, ...quarantineJobKeyArgs(handle, nonce), job.sequence, job.cursor, oldHash, ...identity),
       env.ALTERAN_DB.prepare(
         `WITH live AS (${LIVE_QUARANTINE_JOB}) SELECT CASE WHEN EXISTS (
            SELECT 1 FROM live WHERE sequence = ? AND cursor = ? AND accumulated_hash = ? AND record_count = ?
@@ -59,7 +59,7 @@ export async function finishQuarantine(
     await env.ALTERAN_DB.batch([
       env.ALTERAN_DB.prepare(
         `UPDATE space_quarantine_job SET status = ?, failure_reason = ?, sequence = sequence + 1 WHERE ${PREVIOUS} ${completion}`,
-      ).bind(status, failureReason, ...identity, job.sequence, job.cursor, oldHash, ...identity,
+      ).bind(status, failureReason, ...quarantineJobKeyArgs(handle, nonce), job.sequence, job.cursor, oldHash, ...identity,
         ...(outcome === 'complete' ? [job.cursor, job.cursor] : [])),
       env.ALTERAN_DB.prepare(
         `WITH pinned AS (${PINNED_QUARANTINE_JOB}) SELECT CASE WHEN EXISTS (

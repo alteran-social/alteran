@@ -9,6 +9,9 @@ import { encodeRecordBlock } from '../src/services/repo/blockstore-ops';
 import { applySpaceSetHashChanges, spaceRecordHashElement } from '../src/lib/spaces/lthash';
 import { acquireSpaceSnapshot } from '../src/db/space-snapshot';
 import { applySpaceWrites, getSpaceRecord } from '../src/db/space-store';
+import { createAccount } from '../src/db/account';
+import { setAccountState } from '../src/db/dal';
+import { spaceOwner } from './helpers/space-env';
 
 const did = 'did:example:test';
 const space = `at://${did}/space/com.example.notes/a`;
@@ -59,6 +62,12 @@ async function applySnapshotMigrations(database: D1Database): Promise<void> {
   }
 }
 
+async function activeLegacyOwner(env: Env): Promise<string> {
+  await createAccount(env, { did, handle: 'test.example', passwordScrypt: null });
+  await setAccountState(env, did, { tag: 'active' });
+  return await spaceOwner(env, did);
+}
+
 describe('space snapshot backfill', () => {
   it('copies existing records and quarantines the epoch until independent verification exists', async () => {
     const { database, dispose } = await legacyDatabase();
@@ -76,13 +85,16 @@ describe('space snapshot backfill', () => {
       expect(row!.cid).toBe(legacy.cid);
       expect(Uint8Array.from(row!.value_cbor)).toEqual(legacy.bytes);
       const env = { ALTERAN_DB: database, PDS_DID: did } as unknown as Env;
-      expect(await getSpaceRecord(env, space, did, collection, 'a')).toBeNull();
-      await expect(acquireSpaceSnapshot(env, space, did)).rejects.toThrow();
+      const owner = await activeLegacyOwner(env);
+      expect((await database.prepare('SELECT owner_incarnation FROM space_epoch WHERE space_ref = ?')
+        .bind(space).first())?.owner_incarnation).toBeNull();
+      expect(await getSpaceRecord(env, space, did, collection, 'a', owner)).toBeNull();
+      await expect(acquireSpaceSnapshot(env, space, did, owner)).rejects.toThrow();
       await expect(database.prepare("UPDATE space_epoch SET state = 'active' WHERE space_ref = ?")
         .bind(space).run()).rejects.toThrow();
       await expect(applySpaceWrites(env, space, did, [
         { action: 'create', collection, rkey: 'b', record: { $type: collection } },
-      ])).rejects.toThrow();
+      ], owner)).rejects.toThrow();
     } finally {
       await dispose();
     }
@@ -94,8 +106,9 @@ describe('space snapshot backfill', () => {
       await seedLegacy(database, true);
       await applySnapshotMigrations(database);
       const env = { ALTERAN_DB: database, PDS_DID: did } as unknown as Env;
-      expect(await getSpaceRecord(env, space, did, collection, 'a')).toBeNull();
-      await expect(acquireSpaceSnapshot(env, space, did)).rejects.toThrow();
+      const owner = await activeLegacyOwner(env);
+      expect(await getSpaceRecord(env, space, did, collection, 'a', owner)).toBeNull();
+      await expect(acquireSpaceSnapshot(env, space, did, owner)).rejects.toThrow();
       expect((await database.prepare('SELECT state FROM space_epoch WHERE space_ref = ?').bind(space).first())?.state)
         .toBe('quarantined');
     } finally {

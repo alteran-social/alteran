@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { Env } from '../../src/env';
 import { encodeRecordBlock } from '../../src/services/repo/blockstore-ops';
 import { applySpaceSetHashChanges, spaceRecordHashElement } from '../../src/lib/spaces/lthash';
+import { bindQuarantineFixtureOwners } from './space-quarantine-owner';
 
 export const did = 'did:example:test';
 export const space = `at://${did}/space/com.example.notes/a`;
@@ -52,6 +53,7 @@ export async function setup(
   ]);
   if (beforeMigrations) await beforeMigrations(database);
   for (const name of names.filter((name) => name >= '0016')) await applyFile(database, name);
+  await bindQuarantineFixtureOwners(database);
   return { env: { ALTERAN_DB: database, PDS_DID: did } as unknown as Env, database, dispose: () => miniflare.dispose() };
 }
 

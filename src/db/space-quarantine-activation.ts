@@ -17,11 +17,16 @@ export async function activateSpaceQuarantine(
     await assertLocalSpaceRepo(env, handle.repoDid);
     if (await hasActiveReceipt(env, handle)) return 'active';
     const selected = await env.ALTERAN_DB.prepare(
-      `SELECT CASE WHEN typeof(renewal_nonce) = 'text' AND length(CAST(renewal_nonce AS BLOB)) = 36
-         THEN renewal_nonce END AS renewal_nonce FROM space_quarantine_job
-       WHERE id = ? AND token = ? AND space_ref = ? AND repo_did = ?
-         AND status = 'complete' AND lease_until > unixepoch()`,
-    ).bind(handle.id, handle.token, handle.spaceRef, handle.repoDid).first<{ renewal_nonce: string }>();
+      `SELECT CASE WHEN typeof(j.renewal_nonce) = 'text' AND length(CAST(j.renewal_nonce AS BLOB)) = 36
+         THEN j.renewal_nonce END AS renewal_nonce FROM space_quarantine_job j
+       JOIN space_owned_epoch e ON e.id = j.epoch_id AND e.space_ref = j.space_ref
+         AND e.repo_did = j.repo_did AND e.state = 'quarantined'
+       JOIN space_repo h ON h.space_ref = j.space_ref AND h.repo_did = j.repo_did AND h.active_epoch_id = j.epoch_id
+       JOIN space s ON s.space_ref = j.space_ref AND s.deleted_at IS NULL
+       WHERE j.id = ? AND j.token = ? AND j.space_ref = ? AND j.repo_did = ? AND e.owner_incarnation = ?
+         AND j.status = 'complete' AND j.lease_until > unixepoch()`,
+    ).bind(handle.id, handle.token, handle.spaceRef, handle.repoDid, handle.ownerIncarnation)
+      .first<{ renewal_nonce: string }>();
     if (!selected || typeof selected.renewal_nonce !== 'string') return 'unavailable';
     const identity = quarantineJobArgs(handle, selected.renewal_nonce);
     const job = await env.ALTERAN_DB.prepare(COMPLETED_JOB).bind(...identity).first<QuarantineJobRow>();
@@ -86,7 +91,7 @@ export async function activateSpaceQuarantine(
 
 async function hasActiveReceipt(env: Env, handle: SpaceQuarantineHandle, nonce?: string): Promise<boolean> {
   const receipt = await env.ALTERAN_DB.prepare(ACTIVE_QUARANTINE_RECEIPT).bind(
-    handle.id, handle.token, handle.spaceRef, handle.repoDid, nonce ?? null, nonce ?? null,
+    handle.id, handle.token, handle.spaceRef, handle.repoDid, handle.ownerIncarnation, nonce ?? null, nonce ?? null,
   ).first<{ activation_nonce: unknown }>();
   return typeof receipt?.activation_nonce === 'string' &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(receipt.activation_nonce);

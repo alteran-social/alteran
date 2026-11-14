@@ -1,9 +1,9 @@
 import * as dagCbor from "@ipld/dag-cbor";
 import { isValidDid } from "@atproto/syntax-spaces";
 import { expect } from "@std/expect";
-import { makeEnv } from "./helpers/env";
-import { readSpaceRepoOps } from "../src/db/space-ops";
-import { applySpaceWrites, createLocalSpace } from "../src/db/space-store";
+import { makeSpaceEnv as makeEnv } from "./helpers/space-env";
+import { readSpaceRepoOps } from "./helpers/space-storage";
+import { applySpaceWrites, createLocalSpace } from "./helpers/space-storage";
 
 const configPath = Deno.env.get("ALTERAN_REFERENCE_INTEROP_CONFIG");
 const COLLECTION = "com.example.note";

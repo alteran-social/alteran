@@ -1,7 +1,7 @@
 import { expect } from '@std/expect';
 import type { D1PreparedStatement } from '@cloudflare/workers-types';
 import { describe, it } from './helpers/bdd';
-import { claimSpaceQuarantine, stepSpaceQuarantine } from '../src/db/space-quarantine';
+import { claimSpaceQuarantine, stepSpaceQuarantine } from './helpers/space-adapters';
 import { activateSpaceQuarantine } from '../src/db/space-quarantine-activation';
 import { did, space, setup } from './helpers/space-quarantine-fixture';
 import { COMPLETE_QUARANTINE_RESULT, QUARANTINE_CURRENT_PAGE, QUARANTINE_VERSION_PAGE } from '../src/db/space-quarantine-sql';
@@ -21,7 +21,8 @@ describe('quarantined space verification paging', () => {
       const cursor = 'com.example.note/k0590';
       await database.prepare('UPDATE space_quarantine_job SET cursor = ? WHERE id = ?').bind(cursor, handle.id).run();
       const result = await database.prepare(QUARANTINE_CURRENT_PAGE)
-        .bind(handle.id, handle.token, nonce, space, did, cursor, 0, new Uint8Array(2048), 0, cursor)
+        .bind(handle.id, handle.token, nonce, space, did, handle.ownerIncarnation,
+          cursor, 0, new Uint8Array(2048), 0, cursor)
         .all<{ path: string | null; sentinel: number }>();
       expect(result.results.find((row) => row.sentinel === 0)?.path).toBe('com.example.note/k0591');
       expect(result.meta.rows_read).toBeLessThan(50);
@@ -57,7 +58,7 @@ describe('quarantined space verification paging', () => {
       expect(await stepSpaceQuarantine({ ...env, ALTERAN_DB: wrapped }, handle)).toEqual({ tag: 'complete', records: 601 });
       expect(Math.max(...batches.flat())).toBeLessThan(100);
       const readback = await database.prepare(COMPLETE_QUARANTINE_RESULT)
-        .bind(handle.id, handle.token, space, did, cursor, cursor, cursor).all();
+        .bind(handle.id, handle.token, space, did, handle.ownerIncarnation, cursor, cursor, cursor).all();
       expect(readback.results).toHaveLength(1);
       expect(readback.meta.rows_read).toBeLessThan(100);
       await database.prepare('DROP TRIGGER space_epoch_quarantine_guard').run();
@@ -79,7 +80,7 @@ describe('quarantined space verification paging', () => {
           get(target, property) {
             if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
               const result = await target.batch(statements);
-              if (statements.length === 4 && !changed) {
+              if (statements.length === 5 && !changed) {
                 changed = true;
                 if (change === 'snapshot') {
                   await target.prepare("UPDATE space_quarantine_job SET cursor = ?, sequence = sequence + 1, record_count = 1 WHERE id = ?")
@@ -138,7 +139,8 @@ describe('quarantined space verification paging', () => {
       const handle = (await claimSpaceQuarantine(env, space, did))!;
       const nonce = (await database.prepare('SELECT renewal_nonce FROM space_quarantine_job WHERE id = ?')
         .bind(handle.id).first<{ renewal_nonce: string }>())!.renewal_nonce;
-      const args = [handle.id, handle.token, nonce, space, did, '', 0, new Uint8Array(2048), 0, ''] as const;
+      const args = [handle.id, handle.token, nonce, space, did, handle.ownerIncarnation,
+        '', 0, new Uint8Array(2048), 0, ''] as const;
       await database.prepare('DROP TRIGGER space_version_fence_update').run();
       await database.prepare('DROP TRIGGER space_record_version_update_guard').run();
       await database.prepare('DROP TRIGGER space_record_fence_update').run();

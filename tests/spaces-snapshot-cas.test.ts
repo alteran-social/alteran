@@ -1,8 +1,8 @@
 import { expect } from '@std/expect';
 import * as dagCbor from '@ipld/dag-cbor';
 import { describe, it } from './helpers/bdd';
-import { makeEnv } from './helpers/env';
-import { applySpaceWrites, createLocalSpace, getSpaceRecord } from '../src/db/space-store';
+import { makeSpaceEnv as makeEnv } from './helpers/space-env';
+import { applySpaceWrites, createLocalSpace, getSpaceRecord } from './helpers/space-adapters';
 import { applySpaceSetHashChanges, spaceRecordHashElement, spaceSetHashDigest } from '../src/lib/spaces/lthash';
 
 const did = 'did:example:test';

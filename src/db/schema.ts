@@ -1,5 +1,6 @@
 import { sqliteTable, text, integer, blob, index, primaryKey, uniqueIndex, check } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
+export { oauth_replay_clock } from './schema-oauth-clock';
 
 export const secret = sqliteTable('secret', {
   key: text('key').primaryKey().notNull(),
@@ -15,16 +16,6 @@ export const secret = sqliteTable('secret', {
       AND json_type(${table.value}, '$.exp') IN ('integer', 'real')
       THEN CAST(json_extract(${table.value}, '$.exp') AS REAL)
     ELSE NULL END ELSE NULL END)`, table.key).where(sql`${table.key} GLOB 'oauth:dpop:jti:*' OR ${table.key} GLOB 'oauth:client-assertion:jti:*'`),
-}));
-
-export const oauth_replay_clock = sqliteTable('oauth_replay_clock', {
-  id: integer('id').primaryKey().notNull(),
-  seconds: integer('seconds', { mode: 'number' }).notNull(),
-  nonce: text('nonce').notNull(),
-}, (table) => ({
-  singleton: check('oauth_replay_clock_singleton', sql`${table.id} = 1`),
-  validSeconds: check('oauth_replay_clock_seconds', sql`typeof(${table.seconds}) = 'integer' AND ${table.seconds} BETWEEN 0 AND 9007199254740991`),
-  validNonce: check('oauth_replay_clock_nonce', sql`length(${table.nonce}) = 32`),
 }));
 
 export const account = sqliteTable('account', {
@@ -162,12 +153,15 @@ export const space = sqliteTable('space', {
 export const space_personal_policy = sqliteTable('space_personal_policy', {
   spaceRef: text('space_ref').primaryKey().notNull(),
   authorityDid: text('authority_did').notNull(),
+  authorityIncarnation: text('authority_incarnation'),
   policyType: text('policy_type').notNull(),
   creationNonce: text('creation_nonce').notNull(),
   notificationState: text('notification_state').notNull(),
   createdAt: integer('created_at').notNull(),
 }, (table) => ({
   nonce: uniqueIndex('space_personal_policy_creation_nonce').on(table.creationNonce),
+  incarnation: index('space_personal_policy_bound_incarnation').on(table.authorityIncarnation)
+    .where(sql`${table.authorityIncarnation} IS NOT NULL`),
   policy: check('space_personal_policy_type', sql`${table.policyType} = 'com.atproto.personalspace.policy'`),
   notifications: check('space_personal_policy_notifications', sql`${table.notificationState} = 'none'`),
 }));
@@ -176,11 +170,14 @@ export const space_personal_creation_attempt = sqliteTable('space_personal_creat
   nonce: text('nonce').primaryKey().notNull(),
   spaceRef: text('space_ref').notNull(),
   authorityDid: text('authority_did').notNull(),
+  authorityIncarnation: text('authority_incarnation'),
   spaceType: text('space_type').notNull(),
   skey: text('skey').notNull(),
   createdAt: integer('created_at').notNull(),
 }, (table) => ({
   space: uniqueIndex('space_personal_creation_attempt_space').on(table.spaceRef),
+  incarnation: index('space_personal_creation_bound_incarnation').on(table.authorityIncarnation)
+    .where(sql`${table.authorityIncarnation} IS NOT NULL`),
 }));
 
 export const space_personal_deletion_job = sqliteTable('space_personal_deletion_job', {
@@ -216,6 +213,7 @@ export const space_personal_deletion_attempt = sqliteTable('space_personal_delet
   expectedBytes: integer('expected_bytes').notNull(),
 }, (table) => ({
   job: uniqueIndex('space_personal_deletion_attempt_job').on(table.jobNonce),
+  owner: index('space_personal_deletion_attempt_owner').on(table.spaceRef, table.authorityDid),
   status: check('space_personal_deletion_attempt_status', sql`${table.status} IN ('building', 'sealed')`),
   counts: check('space_personal_deletion_attempt_counts', sql`${table.sequence} >= 0 AND ${table.maximumCount} BETWEEN 1 AND 32 AND ${table.expectedCount} BETWEEN 0 AND ${table.maximumCount} AND ${table.expectedBytes} BETWEEN 0 AND 4194304`),
 }));
@@ -246,6 +244,7 @@ export const space_epoch = sqliteTable('space_epoch', {
   id: text('id').primaryKey().notNull(),
   spaceRef: text('space_ref').notNull(),
   repoDid: text('repo_did').notNull(),
+  ownerIncarnation: text('owner_incarnation'),
   state: text('state').notNull(),
   createdAt: integer('created_at').notNull(),
   verifiedJobId: text('verified_job_id'),
@@ -254,6 +253,8 @@ export const space_epoch = sqliteTable('space_epoch', {
   activeOwner: uniqueIndex('space_epoch_active_owner').on(table.spaceRef, table.repoDid)
     .where(sql`${table.state} = 'active'`),
   spaceOwner: index('space_epoch_space_owner').on(table.spaceRef, table.repoDid, table.id),
+  incarnation: index('space_epoch_bound_incarnation').on(table.ownerIncarnation)
+    .where(sql`${table.ownerIncarnation} IS NOT NULL`),
   validState: check('space_epoch_state', sql`${table.state} in ('active', 'quarantined', 'retired', 'deleting')`),
 }));
 
@@ -315,12 +316,15 @@ export const space_mutation_attempt = sqliteTable('space_mutation_attempt', {
   mutationId: text('mutation_id').primaryKey().notNull(),
   spaceRef: text('space_ref').notNull(),
   repoDid: text('repo_did').notNull(),
+  ownerIncarnation: text('owner_incarnation'),
   epochId: text('epoch_id').notNull(),
   generation: integer('generation').notNull(),
   rev: text('rev').notNull(),
   setHash: blob('set_hash', { mode: 'buffer' }).notNull(),
 }, (table) => ({
   owner: index('space_mutation_attempt_owner').on(table.spaceRef, table.repoDid),
+  incarnation: index('space_mutation_attempt_bound_incarnation').on(table.ownerIncarnation)
+    .where(sql`${table.ownerIncarnation} IS NOT NULL`),
   validGeneration: check('space_mutation_attempt_generation', sql`${table.generation} >= 1`),
   hashSize: check('space_mutation_attempt_hash_size', sql`length(${table.setHash}) = 2048`),
 }));
@@ -330,7 +334,9 @@ export const space_gc_attempt = sqliteTable('space_gc_attempt', {
   spaceRef: text('space_ref').notNull(),
   repoDid: text('repo_did').notNull(),
   epochId: text('epoch_id').notNull(),
-});
+}, (table) => ({
+  owner: index('space_gc_attempt_owner').on(table.spaceRef, table.repoDid),
+}));
 
 export const space_quarantine_job = sqliteTable('space_quarantine_job', {
   id: text('id').primaryKey().notNull(),

@@ -5,6 +5,10 @@ export const GUARD = `EXISTS (
   SELECT 1 FROM space_repo
   WHERE space_ref = ? AND repo_did = ? AND generation = ? AND mutation_id = ? AND active_epoch_id = ?
     AND rev = ? AND set_hash = ?
+    AND EXISTS (SELECT 1 FROM space_mutation_attempt a JOIN account owner ON owner.did = a.repo_did
+      AND owner.space_incarnation = a.owner_incarnation JOIN account_state state ON state.did = owner.did
+      WHERE a.mutation_id = space_repo.mutation_id AND a.space_ref = space_repo.space_ref AND a.repo_did = space_repo.repo_did
+        AND typeof(state.active) = 'integer' AND state.active = 1 AND state.status IS NULL AND state.suspended_until IS NULL)
 )`;
 
 export const WON_GUARD = `(${GUARD} AND EXISTS (
@@ -12,7 +16,15 @@ export const WON_GUARD = `(${GUARD} AND EXISTS (
 ))`;
 
 export const EFFECT_GUARD = `(${WON_GUARD} AND EXISTS (
-  SELECT 1 FROM space_epoch e WHERE e.id = ? AND e.space_ref = ? AND e.repo_did = ? AND e.state = 'active'
+  SELECT 1 FROM space_owned_epoch e WHERE e.id = ? AND e.space_ref = ? AND e.repo_did = ? AND e.state = 'active'
+))`;
+
+// A foreign Space row may be installed after its first local epoch is created.
+export const BOOTSTRAP_GUARD = `(${WON_GUARD} AND EXISTS (
+  SELECT 1 FROM space_epoch e JOIN account owner ON owner.did = e.repo_did
+    AND owner.space_incarnation = e.owner_incarnation JOIN account_state state ON state.did = owner.did
+  WHERE e.id = ? AND e.space_ref = ? AND e.repo_did = ? AND e.state = 'active'
+    AND typeof(state.active) = 'integer' AND state.active = 1 AND state.status IS NULL AND state.suspended_until IS NULL
 ))`;
 
 export const RECORDS_MATCH = `NOT EXISTS (

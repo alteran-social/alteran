@@ -1,11 +1,11 @@
 import { expect } from '@std/expect';
 import * as dagCbor from '@ipld/dag-cbor';
 import { describe, it } from './helpers/bdd';
-import { makeEnv } from './helpers/env';
-import { applySpaceWrites, createLocalSpace } from '../src/db/space-store';
-import { acquireSpaceSnapshot, readSpaceSnapshotPage, releaseSpaceSnapshot } from '../src/db/space-snapshot';
+import { makeSpaceEnv as makeEnv } from './helpers/space-env';
+import { applySpaceWrites, createLocalSpace } from './helpers/space-adapters';
+import { acquireSpaceSnapshot, readSpaceSnapshotPage, releaseSpaceSnapshot } from './helpers/space-adapters';
 import { readSpaceRepoArchive } from '../src/lib/spaces/repo-archive';
-import { streamSpaceRepoArchive } from '../src/services/space-repo-export';
+import { streamSpaceRepoArchive } from './helpers/space-adapters';
 
 const DID = 'did:example:test';
 const COLLECTION = 'com.example.note';

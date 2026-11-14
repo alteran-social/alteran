@@ -18,11 +18,11 @@ const CLIENT = 'https://client.example/metadata';
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === '/setup') return setup(env);
+    if (url.pathname === '/setup') return setup(env, url.searchParams.has('collection-free'));
     try {
       const auth = await verifyResourceRequest(env, request);
       if (!auth?.spacePrincipal) return new Response(null, { status: 401 });
-      const forwarded = url.searchParams.has('clone') ? request.clone() : request;
+      const forwarded = url.searchParams.has('clone') ? request.clone() as unknown as Request : request;
       const result = await readAuthorizedSpaceRecord(env, auth.spacePrincipal, forwarded, SPACE, DID, COLLECTION, 'one');
       return Response.json({ tag: result.tag });
     } catch {
@@ -31,23 +31,23 @@ export default {
   },
 };
 
-async function setup(env: Env): Promise<Response> {
+async function setup(env: Env, collectionFree: boolean): Promise<Response> {
   await createAccount(env, { did: DID, handle: 'test.example', passwordScrypt: null });
   await setAccountState(env, DID, { tag: 'active' });
   const account = await env.ALTERAN_DB.prepare('SELECT space_incarnation FROM account WHERE did = ?')
     .bind(DID).first<{ space_incarnation: string }>();
   if (!account) throw new Error('Missing test account');
-  await createPersonalSpace(env, SPACE, { $type: 'com.atproto.personalspace.policy' }, crypto.randomUUID());
+  await createPersonalSpace(env, SPACE, { $type: 'com.atproto.personalspace.policy' }, crypto.randomUUID(), account.space_incarnation);
   await applySpaceWrites(env, SPACE, DID, [{
     action: 'create', collection: COLLECTION, rkey: 'one', record: { $type: COLLECTION, text: 'worker context' },
-  }]);
+  }], account.space_incarnation);
   const pair = await generateKeyPair('ES256', { extractable: true });
   const publicJwk = await exportJWK(pair.publicKey);
   const privateJwk = await exportJWK(pair.privateKey);
   const jkt = await jwkThumbprint(publicJwk as JsonWebKey);
   const consent = await createExplicitSpaceConsent({ subject: DID, accountIncarnation: account.space_incarnation,
     clientId: CLIENT, dpopJkt: jkt, clientAuthMethod: 'none', clientAuthKeyId: null, clientAuthKeyBinding: null },
-    `atproto space:com.example.notes?skey=worker-context&collection=${COLLECTION}&action=read_self`);
+    `atproto space:com.example.notes?skey=worker-context&${collectionFree ? '' : `collection=${COLLECTION}&`}action=read_self`);
   if (!consent) throw new Error('Invalid test consent');
   const session = crypto.randomUUID().replaceAll('-', ''), accessJti = crypto.randomUUID().replaceAll('-', '');
   const tokens = await issueSessionTokens(env, DID, { clientId: CLIENT, dpopJkt: jkt, oauthSessionId: session,

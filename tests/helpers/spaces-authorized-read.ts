@@ -26,11 +26,11 @@ export async function authorizedReadFixture(accessLifetime?: number) {
   const account = await env.ALTERAN_DB.prepare('SELECT space_incarnation FROM account WHERE did = ?')
     .bind(DID).first<{ space_incarnation: string }>();
   if (!account) throw new Error('Missing test account');
-  await createPersonalSpace(env, SPACE, { $type: 'com.atproto.personalspace.policy' }, crypto.randomUUID());
+  await createPersonalSpace(env, SPACE, { $type: 'com.atproto.personalspace.policy' }, crypto.randomUUID(), account.space_incarnation);
   await applySpaceWrites(env, SPACE, DID, [
     { action: 'create', collection: COLLECTION, rkey: 'one', record: { $type: COLLECTION, text: 'private' } },
     { action: 'create', collection: OTHER_COLLECTION, rkey: 'two', record: { $type: OTHER_COLLECTION, text: 'also private' } },
-  ]);
+  ], account.space_incarnation);
   const key = await makeDpopKey();
   const consent = await createExplicitSpaceConsent({
     subject: DID, accountIncarnation: account.space_incarnation, clientId: CLIENT, dpopJkt: key.jkt, clientAuthMethod: 'none',
