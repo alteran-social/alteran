@@ -55,6 +55,17 @@ records or advertised as encrypted.
   authority or incarnation may instead make it ineligible. Member and managed
   policies, legacy bearer credentials and the reference's `NotAuthorized`
   response for another authority remain unsupported.
+- `com.atproto.space.listSpaces` supports an explicitly filtered local
+  authority and Space type with a matching DPoP `read_self` grant covering all
+  keys. It lists verified current-incarnation personal Spaces in ascending
+  reference order, including a repo revision and digest for an active repo.
+  An empty cursor is treated as absent; a nonempty cursor must be a valid Space
+  reference. References for other authorities or types and references with
+  fragments are compared literally in BINARY order. The request URL is limited
+  to 16,384 characters.
+  Pages are live views, not a stable snapshot. Omitted or foreign-authority
+  filters and `spaceRev` are unsupported. A listing cannot identify the
+  outcome of a timed-out generated-key creation.
 - `com.atproto.sync.getBlob` authorizes public downloads using public record
   usage and sends public, immutable cache headers. The public blob usage path
   must never treat a space-only reference as public authorization.
@@ -146,9 +157,11 @@ including Lex JSON links, bytes and escaped text.
 The genesis-list test compares empty pages before the first record, including
 collection filters, cursors and metadata-only mode.
 The integer test checks signed 64-bit values through a reference archive and
-rejects silently rounded JSON. Reference revision `16bfeba` preserves those
-values in its binary archive but returns an error for values outside JavaScript's
-safe integer range on the tested record and list routes.
+rejects silently rounded JSON. The tested Spaces alpha PDS image, labeled with
+OCI revision `83d473dec69bbf19fe95fcbbb20a39842779db82`, preserves those values
+in its binary archive but returns an error for values outside JavaScript's safe
+integer range on the tested record and list routes. The separately inspected
+source checkout is at revision `16bfeba`.
 The policy test compares personal-Space reads before the first record and after
 deletion, using a disposable Space in the reference PDS.
 An interrupted request may leave test data behind. Keep the configuration file
@@ -383,6 +396,39 @@ remains quarantined; it is not automatically assigned to a recreated account.
 Space identities and tombstones are retained until a separately fenced recovery
 and retention procedure is available. Verify the migration and restore process
 on the target D1 deployment before enabling Space reads.
+
+Migration `0044` builds an owner/incarnation/type listing index and a quarantine
+catalog keyed by the exact BINARY Space reference. A malformed or unindexable
+reference sets a permanent global quarantine sentinel instead. Listing is
+denied while a matching marker, an unclassifiable authority, or the sentinel
+exists. A denial can expose an availability bit to an authorized wildcard grant
+without identifying the affected Space. Older Workers must be drained before the
+migration and must not write to the upgraded schema. The supported lifecycle and
+mutation paths assert catalog effects in their D1 transactions; they depend on
+the installed D1 schema and trigger definitions being trusted. Ordinary runtime
+code does not remove or reconfigure these guards.
+
+The migration preflight accepts at most 4,096 Space rows and 4,096 policy rows,
+at most 16 MiB of budgeted identity metadata, and at most 8,388,608 units of
+authority-validation work. Each text authority of 7–2,048 bytes is charged its
+byte length multiplied by its number of percent signs; the charge bounds work
+in percent-escape validation and conservatively includes inactive or malformed
+rows. The metadata budget charges oversized
+fields at their individual cap plus one byte; it does not bound the physical
+bytes D1 must read for corrupt oversized values. If a populated database exceeds
+these limits, stop and develop a separately reviewed staged or offline migration;
+the limit does not constrain Spaces created after the migration. Apply the
+migration atomically and verify rollback behavior on the target deployment.
+
+Unclassified legacy ownership and the global sentinel have no implemented
+recovery workflow and can block listing indefinitely. Do not clear either
+without independently authenticated, offline reconciliation of the affected
+data. A logical SQLite reload test checks that a changed rowid cannot retarget
+a reference-keyed marker; it does not establish Cloudflare's export or restore
+behavior. Backfill, index build, trigger behavior, D1 transactions, query cost,
+and recovery require validation on the target deployment. Any schema-integrity
+seal must be atomically rebaselined for this migration and coordinated with
+the old-Worker cutover.
 
 Restoring D1 and its account incarnations can also restore obsolete Space policy
 or membership decisions. Restored private data must remain unavailable until its

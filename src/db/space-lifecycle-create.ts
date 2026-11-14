@@ -2,6 +2,7 @@ import type { Env } from "../env";
 import { parseSpacePolicy } from "../lib/spaces/policy";
 import { SpaceStorageError } from "./space-types";
 import { captureSpaceOwner } from "./space-owner";
+import { SPACE_OWNER_POLICY_LISTED } from "./space-owner-listing-sql";
 import {
   assertPersonalAuthority,
   invalidLifecycleRequest,
@@ -80,7 +81,7 @@ export async function createPersonalSpace(
         WHERE s.space_ref = ? AND s.authority_did = ? AND s.space_type = ? AND s.skey = ? AND s.deleted_at IS NULL
           AND p.creation_nonce = ? AND p.authority_incarnation = ? AND p.policy_type = 'com.atproto.personalspace.policy'
           AND p.notification_state = 'none' AND typeof(state.active) = 'integer' AND state.active = 1
-          AND state.status IS NULL AND state.suspended_until IS NULL
+          AND state.status IS NULL AND state.suspended_until IS NULL AND ${SPACE_OWNER_POLICY_LISTED}
       ) THEN 1 ELSE json('{') END AS valid`).bind(
         ref.ref,
         ref.authorityDid,
@@ -100,7 +101,7 @@ export async function createPersonalSpace(
         AND a.space_incarnation = p.authority_incarnation JOIN account_state state ON state.did = a.did
         WHERE s.space_ref = ? AND s.authority_did = ? AND s.space_type = ? AND s.skey = ? AND s.deleted_at IS NULL
           AND p.creation_nonce = ? AND p.authority_incarnation = ? AND typeof(state.active) = 'integer'
-          AND state.active = 1 AND state.status IS NULL AND state.suspended_until IS NULL)
+          AND state.active = 1 AND state.status IS NULL AND state.suspended_until IS NULL AND ${SPACE_OWNER_POLICY_LISTED})
       THEN 1 ELSE json('{') END AS valid`).bind(nonce, ref.ref, ref.authorityDid, ref.spaceType, ref.skey, nonce, owner.incarnation),
     ]);
   } catch (error) {
@@ -156,7 +157,7 @@ async function hasCreationReceipt(
       AND p.created_at = s.created_at
       AND p.creation_nonce = ? AND p.authority_incarnation = ? AND p.policy_type = 'com.atproto.personalspace.policy'
       AND p.notification_state = 'none' AND typeof(state.active) = 'integer' AND state.active = 1
-      AND state.status IS NULL AND state.suspended_until IS NULL`,
+      AND state.status IS NULL AND state.suspended_until IS NULL AND ${SPACE_OWNER_POLICY_LISTED}`,
   )
     .bind(spaceRef, authorityDid, spaceType, skey, nonce, authorityIncarnation).first<
     { present: number }

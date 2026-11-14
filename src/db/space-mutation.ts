@@ -24,6 +24,7 @@ import { SPACE_GENESIS_EMPTY } from './space-genesis-sql';
 import { classifySpaceMutationConflict } from './space-mutation-conflict';
 import { BOOTSTRAP_GUARD, EFFECT_GUARD, GUARD, RECORDS_MATCH, SPACE_AVAILABLE, WON_GUARD } from './space-mutation-sql';
 import { captureSpaceOwner } from './space-owner';
+import { SPACE_OWNER_CATALOG_PRESENT } from './space-owner-listing-sql';
 import {
   MAX_SPACE_WRITE_BYTES,
   MAX_SPACE_WRITES,
@@ -388,6 +389,7 @@ export async function commitSpaceWrites(
        AND EXISTS (SELECT 1 FROM space_owned_epoch e WHERE e.id = ? AND e.space_ref = ? AND e.repo_did = ?
          AND e.state = 'active' AND e.owner_incarnation = ?)
        AND EXISTS (SELECT 1 FROM space s WHERE s.space_ref = ? AND s.deleted_at IS NULL)
+       AND ${SPACE_OWNER_CATALOG_PRESENT}
        AND ${RECORDS_MATCH}
        AND NOT EXISTS (
          SELECT 1 FROM json_each(?) requested JOIN space_blob_usage b ON b.space_ref = ? AND b.repo_did = ?
@@ -395,7 +397,7 @@ export async function commitSpaceWrites(
        )
        AND (SELECT COUNT(*) FROM space_op WHERE space_ref = ? AND repo_did = ? AND rev = ?) = ?
        THEN 1 ELSE json('{') END AS valid`,
-  ).bind(lost, won, ...wonGuard, lost, epochId, ref.ref, repoDid, owner.incarnation, ref.ref, ...finalArguments,
+  ).bind(lost, won, ...wonGuard, lost, epochId, ref.ref, repoDid, owner.incarnation, ref.ref, ref.ref, ...finalArguments,
     finalRecords, ref.ref, repoDid, ref.ref, repoDid, rev, operations.length));
   const outcomeIndex = statements.length;
   statements.push(env.ALTERAN_DB.prepare(

@@ -102,6 +102,8 @@ export async function beginPersonalSpaceDeletion(
           AND NOT EXISTS (SELECT 1 FROM space_blob_usage b WHERE b.space_ref = j.space_ref)
           AND NOT EXISTS (SELECT 1 FROM space_quarantine_job q WHERE q.space_ref = j.space_ref)
           AND NOT EXISTS (SELECT 1 FROM space_mutation_attempt m WHERE m.space_ref = j.space_ref)
+          AND NOT EXISTS (SELECT 1 FROM space_owner_listing listing WHERE listing.space_ref = j.space_ref)
+          AND NOT EXISTS (SELECT 1 FROM space_owner_unclassified quarantine WHERE quarantine.space_ref = s.space_ref COLLATE BINARY)
       ) THEN 1 ELSE json('{') END AS valid`).bind(
         nonce,
         ref.ref,

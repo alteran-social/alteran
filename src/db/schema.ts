@@ -497,3 +497,4 @@ export const private_blob_staging = sqliteTable('private_blob_staging', {
   state: check('private_blob_staging_state', sql`${table.state} IN ('reserved', 'putting', 'ready', 'uncertain')`),
   charge: check('private_blob_staging_charge', sql`typeof(${table.reservedBytes}) = 'integer' AND ${table.reservedBytes} = 5242880`),
 }));
+export { space_owner_listing, space_owner_unclassified, space_owner_quarantine_global } from "./space-owner-listing-schema";
