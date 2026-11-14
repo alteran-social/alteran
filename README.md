@@ -28,7 +28,7 @@ export default defineConfig({
 });
 ```
 
-By default the integration injects all `/xrpc/*` ATProto routes, health/ready checks, and the Cloudflare Worker entrypoint that wires `locals.runtime`. Optional flags let you expose the `/debug/*` utilities or keep your own homepage:
+By default the integration injects all `/xrpc/*` ATProto routes, health/ready checks, and the Cloudflare Worker entrypoint that supplies `locals.env`. Optional flags let you expose the `/debug/*` utilities or keep your own homepage:
 
 ```ts
 alteran({
@@ -41,14 +41,18 @@ The integration automatically:
 - Resolves all injected routes against the packaged runtime without requiring a Vite alias
 - Registers the middleware that applies structured logging and CORS enforcement
 - Injects all PDS HTTP endpoints into the host project
-- Owns the Cloudflare worker entrypoint (wraps `@astrojs/cloudflare/handler` so PDS concerns like CORS preflight, Sequencer routing, and config validation run before Astro)
+- By default, aliases the Cloudflare adapter entrypoint to a wrapper for PDS concerns such as CORS, Sequencer routing, and config validation
 - Publishes ambient env typings so `Env` and `App.Locals` are available from TypeScript
 
-When deploying, continue to configure Wrangler/D1/R2 secrets exactly as before—the integration does not change the runtime requirements.
+Configure the Worker identity, D1, R2 and credentials for the intended deployment.
+
+Provide Alteran's runtime settings as Worker vars or secrets. The credentials
+listed in [Configuration](docs/CONFIGURATION.md) also support Secret Store
+bindings. Alteran does not use Astro's global env accessor.
 
 ### Custom Worker Entrypoint
 
-The integration always sets `build.serverEntry` to alteran's packaged worker so the PDS routing can wrap `@astrojs/cloudflare/handler`. If you need to export additional Durable Objects alongside `Sequencer`, compose alteran's runtime helpers from `@alteran-social/astro/worker` instead of replacing the entrypoint.
+By default, the integration aliases the Cloudflare adapter's server entrypoints to Alteran's wrapper. Existing aliases are left unchanged. To export additional Durable Objects alongside `Sequencer`, compose Alteran's runtime helpers from `@alteran-social/astro/worker`.
 
 ```ts
 // src/_worker.ts in your Astro project
@@ -66,6 +70,17 @@ export { MyDurableObject } from './worker/my-durable-object';
 ```
 
 Helpers like `onRequest`, `seed`, and `validateConfigOrThrow` are also exported from `@alteran-social/astro/worker` if you need to build more advanced wrappers (for example, to add request instrumentation before delegating to the PDS handler).
+
+Enable Cloudflare's `nodejs_compat` flag for the request-local Env handoff.
+When invoking `onRequest` without the Worker wrapper, set `locals.env` to the
+current request's Worker Env; the middleware fails closed if it is absent.
+An existing adapter entrypoint alias or custom entrypoint must compose
+`createPdsFetchHandler` or supply `locals.env` itself.
+
+For incoming client-disconnect signals on compatibility dates before
+2026-11-17, enable `enable_request_signal` in your own Worker configuration.
+An observed disconnect does not cancel an already-dispatched D1 operation.
+See [Cloudflare's compatibility guidance](https://developers.cloudflare.com/changelog/post/2026-11-02-request-signal-default/).
 
 To install dependencies:
 
@@ -85,12 +100,15 @@ Cloudflare local dev (optional):
 deno run -A npm:wrangler dev --local
 ```
 
-Build and deploy:
+Build locally or deploy the configured production environment:
 
 ```bash
 deno task build
 deno task deploy
 ```
+
+Production deployment requires explicit account and resource configuration;
+see [Deployment](docs/DEPLOYMENT.md).
 
 Health endpoints: `GET /health` and `GET /ready` return `200 ok`.
 
@@ -98,10 +116,8 @@ Auth (JWT)
 - `POST /xrpc/com.atproto.server.createSession` returns `accessJwt` and `refreshJwt` (HS256).
 - `POST /xrpc/com.atproto.server.refreshSession` expects `Authorization: Bearer <refreshJwt>` and issues a new pair.
 - Use `Authorization: Bearer <accessJwt>` on write routes.
-- Secrets to set (Wrangler secrets or local bindings):
-  - `USER_PASSWORD` (dev login password)
-  - `ACCESS_TOKEN`, `REFRESH_TOKEN` (HMAC keys)
-  - `PDS_DID`, `PDS_HANDLE`
+- Configure the account identity, `USER_PASSWORD` and `REPO_SIGNING_KEY`.
+  Modern sessions use `SESSION_JWT_SECRET`, or a key generated in D1 if unset.
 
 Rate limiting & limits
 - Per‑IP rate limit (best‑effort, D1‑backed): set `PDS_RATE_LIMIT_PER_MIN` (default writes=1000/min counted per record written, blobs=30/min). Responses include `x-ratelimit-*` headers.
@@ -116,11 +132,11 @@ This project uses Drizzle Kit for database schema management and migrations.
 
 ### Migration Workflow
 
-1. **Modify Schema**: Edit [`src/db/schema.ts`](src/db/schema.ts:1) to add/modify tables or indexes
+1. **Modify Schema**: Edit [`src/db/schema.ts`](src/db/schema.ts) to add/modify tables or indexes
 2. **Generate Migration**: Run `deno task db:generate` to create a new migration file in `migrations/`
 3. **Review Migration**: Check the generated SQL in `migrations/XXXX_*.sql`
-4. **Apply Locally**: Run `deno task db:apply:local` to apply to local D1 database
-5. **Apply to Production**: Run `wrangler d1 migrations apply pds --remote` after deployment
+4. **Apply Locally**: Run `deno run -A npm:wrangler d1 migrations apply ALTERAN_DB --env dev --local`
+5. **Apply to Production**: After verifying the account, database and backup, use `deno run -A npm:wrangler d1 migrations apply ALTERAN_DB --env production --remote`
 
 ### Migration Versioning
 
@@ -147,12 +163,12 @@ DROP INDEX IF EXISTS `record_cid_idx`;
 
 **Commit Log**: Stores full commit history for firehose and sync
 - Default retention: Last 10,000 commits
-- Pruning: Use [`pruneOldCommits()`](src/lib/commit-log-pruning.ts:19) utility
+- Pruning: Use [`pruneOldCommits()`](src/lib/commit-log-pruning.ts) utility
 - Older commits can be safely removed as current state is in MST
 
 **Blockstore**: Stores MST nodes (Merkle Search Tree blocks)
 - Retention: Blocks referenced by recent commits
-- GC: Use [`pruneOrphanedBlocks()`](src/lib/blockstore-gc.ts:127) utility
+- GC: Use [`pruneOrphanedBlocks()`](src/lib/blockstore-gc.ts) utility
 - Orphaned blocks (not in recent commits) can be removed
 
 **Token Revocation**: Stores revoked JWT tokens
@@ -160,179 +176,7 @@ DROP INDEX IF EXISTS `record_cid_idx`;
 - Manual cleanup: Use token cleanup utility
 ## Configuration Management
 
-### Environment Setup
-
-This PDS supports multiple environments (dev, staging, production) with separate configurations.
-
-**Deploy to specific environment:**
-```bash
-# Development
-wrangler deploy --env dev
-
-# Staging
-wrangler deploy --env staging
-
-# Production
-wrangler deploy --env production
-```
-
-### Required Secrets
-
-Set these secrets for each environment using `wrangler secret put <NAME> --env <environment>`:
-
-| Secret | Description | Example |
-|--------|-------------|---------|
-| `PDS_DID` | Your DID identifier | `did:plc:abc123` or `did:web:example.com` |
-| `PDS_HANDLE` | Your handle | `user.bsky.social` |
-| `USER_PASSWORD` | Login password | Strong password |
-| `ACCESS_TOKEN` | JWT access token secret | Random 32+ char string |
-| `REFRESH_TOKEN` | JWT refresh token secret | Random 32+ char string |
-| `REPO_SIGNING_KEY` | secp256k1 signing key (hex or base64 32 bytes). Used for commits and service-auth | From `scripts/setup-secrets.ts` |
-
-**Generate secrets:**
-```bash
-# One-shot bootstrap (recommended)
-# Generates all required secrets and prints wrangler commands
-deno run -A scripts/setup-secrets.ts --env production --did did:web:example.com --handle user.example.com
-
-# After generation, set secrets (example for production)
-wrangler secret put PDS_DID --env production
-wrangler secret put PDS_HANDLE --env production
-wrangler secret put USER_PASSWORD --env production
-wrangler secret put ACCESS_TOKEN --env production
-wrangler secret put REFRESH_TOKEN --env production
-wrangler secret put REPO_SIGNING_KEY --env production
-```
-
-### Using Cloudflare Secret Store (optional)
-
-Instead of Wrangler Secrets, you may bind secrets from Cloudflare Secret Store. This repo now supports both. Bind each secret you want to source from Secret Store via `secrets_store_secrets` in `wrangler.jsonc`:
-
-```jsonc
-{
-  // ...
-  "secrets_store_secrets": [
-    { "binding": "USER_PASSWORD", "secret_name": "user_password", "store_id": "<your-store-id>" },
-    { "binding": "ACCESS_TOKEN", "secret_name": "access_token", "store_id": "<your-store-id>" },
-    { "binding": "REFRESH_TOKEN", "secret_name": "refresh_token", "store_id": "<your-store-id>" },
-    { "binding": "PDS_DID", "secret_name": "pds_did", "store_id": "<your-store-id>" },
-    { "binding": "PDS_HANDLE", "secret_name": "pds_handle", "store_id": "<your-store-id>" }
-  ]
-}
-```
-
-Notes:
-- Bindings can use the same names as the existing env vars. Only one source should be configured per secret (Wrangler Secret OR Secret Store binding).
-- At runtime, the worker resolves Secret Store bindings via `await env.<BINDING>.get()` and passes them to the app as plain strings.
-
-### Optional Configuration
-
-These can be set as environment variables in [`wrangler.jsonc`](wrangler.jsonc:1) or as secrets:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PDS_ALLOWED_MIME` | `image/jpeg,image/png,...` | Comma-separated MIME types |
-| `PDS_MAX_BLOB_SIZE` | `5242880` (5MB) | Max blob size in bytes |
-| `PDS_MAX_JSON_BYTES` | `1048576` (1MB) | Max JSON body size |
-| `PDS_RATE_LIMIT_PER_MIN` | `1000` | Records written per minute (an `applyWrites` call counts once per write, so keep this at 200 or more) |
-| `PDS_CORS_ORIGIN` | `*` (dev), specific (prod) | Allowed CORS origins |
-| `PDS_SEQ_WINDOW` | `512` | Firehose sequence window |
-| `PDS_HOSTNAME` | - | Public hostname |
-| `PDS_ACCESS_TTL_SEC` | `3600` (1 hour) | Access token TTL |
-| `PDS_REFRESH_TTL_SEC` | `2592000` (30 days) | Refresh token TTL |
-
-### Configuration Validation
-
-The PDS validates configuration on startup and will fail fast if required secrets are missing:
-
-```typescript
-// Automatic validation in src/_worker.ts
-validateConfigOrThrow(env);
-```
-
-**Validation checks:**
-- All required secrets are present
-- CORS is not wildcard in production
-- DID format is valid
-- Handle format is valid
-- Numeric values are positive
-
-### Cloudflare Security Rules
-
-`com.atproto.server.refreshSession` is a valid bodyless `POST`. Production deployments must allow this request shape through to the XRPC handler:
-
-```txt
-(http.request.method eq "POST" and http.request.uri.path eq "/xrpc/com.atproto.server.refreshSession")
-```
-
-Astro's SSR origin-check middleware rejects unsafe requests with no `Origin` header before project middleware runs. Alteran normalizes `/xrpc/*` requests at the Worker entrypoint so bearer-token XRPC clients can send bodyless POSTs without tripping Astro's form CSRF guard.
-
-If Cloudflare WAF/API Shield also protects the deployment, keep any exception narrow to the expression above. This exception is not configured in `wrangler.jsonc`; Wrangler only manages the Worker deployment and bindings.
-
-### Environment-Specific Settings
-
-See [`wrangler.jsonc`](wrangler.jsonc:40) for environment-specific configurations:
-
-- **Development**: Relaxed CORS, larger blob limits, local D1/R2
-- **Staging**: Production-like settings, separate D1/R2 instances
-- **Production**: Strict CORS, production D1/R2, observability enabled
-
-
-Debugging & storage
-- D1 schema/migrations: generated with Drizzle Kit into `drizzle/`. Generate with `deno run -A npm:drizzle-kit generate`.
-- Apply schema locally: `deno run -A npm:wrangler d1 migrations apply pds --local` (requires dev DB named `pds`).
-- Bootstrap route (alt): `POST /debug/db/bootstrap` creates a minimal `record` table.
-- Insert a test record: `POST /debug/record` with `{ "uri": "at://did:example/app.bsky.feed.post/123", "json": {"msg":"hi"} }`.
-- Get a record: `GET /debug/record?uri=at://did:example/app.bsky.feed.post/123`.
-- Run GC: `POST /debug/gc/blobs` removes eligible unreferenced blob metadata.
-
-XRPC surface
-- `GET /xrpc/com.atproto.server.describeServer`
-- `POST /xrpc/com.atproto.server.createSession` (returns JWTs)
-- `POST /xrpc/com.atproto.server.refreshSession`
-- `GET /xrpc/com.atproto.repo.getRecord?uri=...` (reads from D1 `record` table) or `repo+collection+rkey`
-- `POST /xrpc/com.atproto.repo.createRecord` (auth required)
-- `POST /xrpc/com.atproto.repo.putRecord` (auth required)
-- `POST /xrpc/com.atproto.repo.deleteRecord` (auth required)
-- `POST /xrpc/com.atproto.repo.uploadBlob` (auth + MIME allowlist)
-  - Stores blob metadata in `blob` table (`cid`=sha256 b64url, `mime`, `size`)
-  - Blob references inside records tracked by R2 key; deleting a record drops usage and GC can reclaim orphaned objects
-
-Sync (minimal JSON variants)
-- `GET /xrpc/com.atproto.sync.getHead` → `{ root, rev }`
-- `GET /xrpc/com.atproto.sync.getRepo.json?did=<did>` → `{ did, head, rev, records: [{uri,cid,value}] }`
-- `GET /xrpc/com.atproto.sync.getCheckout.json?did=<did>` → same as above
-- `GET /xrpc/com.atproto.sync.getBlocks.json?cids=<cid1,cid2>` → `{ blocks: [{cid,value}] }`
-
-Sync (CAR v1)
-- `GET /xrpc/com.atproto.sync.getRepo?did=<did>` → `application/vnd.ipld.car` snapshot
-- `GET /xrpc/com.atproto.sync.getCheckout?did=<did>` → same as above
-- `GET /xrpc/com.atproto.sync.getBlocks?cids=<cid1,cid2>` → `application/vnd.ipld.car` with requested blocks
-  - Blocks are DAG-CBOR encoded; CIDs are CIDv1 (dag-cbor + sha2-256)
-
-Firehose (WebSocket)
-- `GET /xrpc/com.atproto.sync.subscribeRepos` upgrades to WebSocket.
-- On writes, the worker POSTs a small commit frame to the `Sequencer` Durable Object, which broadcasts to all subscribers.
-- Frames (subject to change):
-  - `{"type":"hello","now":<ms>}` once on connect
-  - `{"type":"commit","did":"...","commitCid":"...","rev":<n>,"ts":<ms>}` on each write
-
-Blob storage
-- Keys are content-addressed: `blobs/by-cid/<sha256-b64url>`; upload response `$link` equals this key.
-- Allowed MIME types via `PDS_ALLOWED_MIME` (CSV). Size limit via `PDS_MAX_BLOB_SIZE` (bytes).
-
-Secrets & config (Wrangler)
-- Required:
-  - `PDS_DID`, `PDS_HANDLE`, `USER_PASSWORD`
-  - `ACCESS_TOKEN`, `REFRESH_TOKEN`
-- Optional:
-  - `PDS_ALLOWED_MIME`, `PDS_MAX_BLOB_SIZE`, `PDS_MAX_JSON_BYTES`, `PDS_RATE_LIMIT_PER_MIN`, `PDS_CORS_ORIGIN`
-- Durable Objects: ensure binding for `Sequencer` exists and migration tag added (see `wrangler.jsonc`).
-
-Identity (DID)
-- This single‑user PDS uses `did:web`.
-- Host `/.well-known/atproto-did` on your production domain with the DID value.
-- Set `PDS_DID` and `PDS_HANDLE` secrets to match your deployment.
+See [Configuration](docs/CONFIGURATION.md) and [Deployment](docs/DEPLOYMENT.md).
 
 ## P0 Implementation - Core Protocol Compliance ✅
 
@@ -366,33 +210,41 @@ This PDS now implements full AT Protocol core compliance with:
 ## Setup Instructions
 
 ### 1. Generate Secrets
+
+For a new deployment, generate credentials with the bootstrap script. Do not
+replace an existing repository signing key without a reviewed rotation plan.
+
 ```bash
-# Recommended: bootstrap all secrets (prints wrangler commands)
-deno run -A scripts/setup-secrets.ts --env production --did did:web:example.com --handle user.example.com
+# Prints sensitive credentials and environment-specific Wrangler commands
+deno run -A scripts/setup-secrets.ts --env production --did did:web:example.com --handle user.example.com --hostname user.example.com
 
 # Alternatively, supply your own secp256k1 key (32‑byte hex/base64)
 ```
 
 ### 2. Configure Secrets
 
-**Required Secrets:**
+Set `PDS_DID`, `PDS_HANDLE` and `PDS_HOSTNAME` in the named production
+`vars` in `wrangler.jsonc`. Replace the checked-in identity with your intended
+values and verify that same-name remote secrets do not conflict. After
+verifying the account and Worker, configure the credentials:
+
 ```bash
-wrangler secret put REPO_SIGNING_KEY         # secp256k1 (from setup-secrets)
-wrangler secret put PDS_DID                  # Your DID
-wrangler secret put PDS_HANDLE               # Your handle
-wrangler secret put USER_PASSWORD            # Login password
-wrangler secret put REFRESH_TOKEN
-wrangler secret put REFRESH_TOKEN_SECRET
+deno run -A npm:wrangler secret put REPO_SIGNING_KEY --env production
+deno run -A npm:wrangler secret put USER_PASSWORD --env production
+# Optional: otherwise the session key is generated and stored in D1
+deno run -A npm:wrangler secret put SESSION_JWT_SECRET --env production
 ```
+
+Clients holding older-format JWTs must authenticate again after upgrading.
 
 **For Local Development (.dev.vars):**
 ```env
 PDS_DID=did:plc:your-did-here
 PDS_HANDLE=your-handle.bsky.social
+PDS_HOSTNAME=your-handle.bsky.social
 REPO_SIGNING_KEY=<hex-secp256k1-private-key>
 USER_PASSWORD=your-password
-REFRESH_TOKEN=your-access-secret
-REFRESH_TOKEN_SECRET=your-refresh-secret
+SESSION_JWT_SECRET=your-session-secret
 PDS_SEQ_WINDOW=512
 ```
 
@@ -402,8 +254,7 @@ limits, and timeouts.
 
 ### 3. Run Database Migration
 ```bash
-deno task db:generate
-deno task db:apply:local
+deno run -A npm:wrangler d1 migrations apply ALTERAN_DB --env dev --local
 ```
 
 Upgrade note: migration `0009_oauth_session_state` revokes existing refresh
@@ -470,9 +321,8 @@ curl "http://localhost:4321/xrpc/com.atproto.repo.listRecords?repo=did:example:s
 
 ## Documentation
 
-- [`P0_COMPLETE.md`](P0_COMPLETE.md) - Full P0 implementation details
-- [`P0_IMPLEMENTATION_SUMMARY.md`](P0_IMPLEMENTATION_SUMMARY.md) - Technical summary
-- [`PROGRESS.md`](PROGRESS.md) - Development progress notes
+- [Configuration](docs/CONFIGURATION.md) and [Deployment](docs/DEPLOYMENT.md)
+- [Additional repository documentation](https://github.com/alteran-social/alteran/tree/main/docs)
 
 Repo signing key (REQUIRED)
   
@@ -577,11 +427,6 @@ Returns `503` if any dependency is unhealthy.
 4. **Monitor failed login attempts** - Check logs for suspicious activity
 5. **Set appropriate token TTLs** - Balance security and user experience
 
-### Documentation
-
-- [`P1_IMPLEMENTATION_SUMMARY.md`](P1_IMPLEMENTATION_SUMMARY.md) - Full P1 implementation details
-- [`P1.md`](P1.md) - P1 task breakdown and requirements
-
 ## P3 Implementation - Optimization & Interoperability 🚀
 
 This PDS now includes optimization for Cloudflare Workers and interoperability features:
@@ -643,10 +488,5 @@ deno test -A tests/federation.test.ts
 # Compliance tests
 deno test -A tests/compliance.test.ts
 ```
-
-### Documentation
-
-- [`P3_IMPLEMENTATION_SUMMARY.md`](P3_IMPLEMENTATION_SUMMARY.md) - Full P3 implementation details
-- [`P3.md`](P3.md) - P3 task breakdown and requirements
 
 - Used for signing all repository commits

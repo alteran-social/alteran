@@ -21,8 +21,7 @@ Deno.test({
     }).output();
     if (!build.success) throw new Error(`Astro build failed: ${new TextDecoder().decode(build.stderr)}`);
     const bindings = { PDS_DID: 'did:example:test', PDS_HANDLE: 'test.example', USER_PASSWORD: 'pwd',
-      ACCESS_TOKEN: 'test-only-access-secret', REFRESH_TOKEN: 'test-only-refresh-secret',
-      REFRESH_TOKEN_SECRET: 'test-only-refresh-secret', SESSION_JWT_SECRET: 'test-only-session-secret', PDS_RELAY_NOTIFY: 'false' };
+      SESSION_JWT_SECRET: 'test-only-session-secret', PDS_RELAY_NOTIFY: 'false' };
     const modules: { type: 'ESModule'; path: string }[] = [{ type: 'ESModule', path: join(root, 'dist/server/entry.mjs') }];
     for (const directory of ['', 'chunks']) {
       for await (const file of Deno.readDir(join(root, 'dist/server', directory))) {

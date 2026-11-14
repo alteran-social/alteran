@@ -38,8 +38,7 @@ Deno.test({
 
     const bindings = {
       PDS_DID: 'did:example:test', PDS_HANDLE: 'test.example', USER_PASSWORD: 'pwd',
-      ACCESS_TOKEN: 'test-only-access-secret', REFRESH_TOKEN: 'test-only-refresh-secret',
-      REFRESH_TOKEN_SECRET: 'test-only-refresh-secret', SESSION_JWT_SECRET: 'test-only-session-secret',
+      SESSION_JWT_SECRET: 'test-only-session-secret',
       PDS_RELAY_NOTIFY: 'false',
     };
     const modules: { type: 'ESModule'; path: string }[] = [{ type: 'ESModule', path: join(root, 'dist/server/entry.mjs') }];

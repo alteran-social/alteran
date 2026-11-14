@@ -24,8 +24,6 @@ export type Env = {
   USER_PASSWORD?: string | SecretsStoreSecret;
   PDS_MAX_BLOB_SIZE?: string;
   PDS_BLOB_QUOTA_BYTES?: string;
-  REFRESH_TOKEN?: string | SecretsStoreSecret;
-  REFRESH_TOKEN_SECRET?: string | SecretsStoreSecret;
   SESSION_JWT_SECRET?: string | SecretsStoreSecret;
   PDS_ACCESS_TTL_SEC?: string;
   PDS_REFRESH_TTL_SEC?: string;
@@ -55,7 +53,7 @@ export type Env = {
 };
 
 export type PdsLocals = {
-  // Resolved environment bindings (Secret Store values materialized to strings).
+  // Request Env with eagerly used secrets materialized; the Spaces KEM key is lazy.
   // Set by the alteran middleware on every request.
   env: Env;
   // Cloudflare ExecutionContext — Astro v6 surfaces it via `locals.cfContext`.

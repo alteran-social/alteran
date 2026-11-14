@@ -22,6 +22,16 @@ jobs:
         run: deno task build
       - name: Tests
         run: deno task test
+      - name: Verify production build configuration
+        run: RUN_APP_TESTS=true deno test -A --no-check tests/deploy-build.e2e.test.ts
+      - name: Verify built Worker authentication
+        env:
+          RUN_APP_TESTS: 'true'
+        run: |
+          export MINIFLARE_WORKERD_PATH="$(deno eval --frozen 'import workerd from "npm:workerd@1.20260511.1"; console.log(workerd.default)')"
+          test -x "$MINIFLARE_WORKERD_PATH"
+          deno test -A --no-check tests/legacy-jwt-worker.e2e.test.ts
+          deno test -A --no-check tests/consumer-env-isolation.e2e.test.ts
       - name: Typecheck
         run: deno task check
       - name: Test Worker request signals and private reads

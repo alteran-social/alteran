@@ -1,18 +1,21 @@
-import type { Env } from '../env';
-import { AuthTokenExpiredError, expiredToken } from './auth-errors';
-import { verifyJwt, type JwtClaims } from './jwt';
-import { handleResourceAuthError, verifyResourceRequestHybrid } from './oauth/resource';
-import { bearerToken } from './util';
-import { getAccountState } from '../db/dal';
+import type { Env } from "../env";
+import { AuthTokenExpiredError, expiredToken } from "./auth-errors";
+import { type JwtClaims, verifyJwt } from "./jwt";
 import {
+  handleResourceAuthError,
+  verifyResourceRequestHybrid,
+} from "./oauth/resource";
+import { bearerToken } from "./util";
+import { getAccountState } from "../db/dal";
+import {
+  type AuthAccessContext,
+  type AuthAccountStatus,
   bearerAccessContext,
   canAccessFullAccount,
   isBearerAccessScope,
   oauthAccessContext,
   withAccountStatus,
-  type AuthAccessContext,
-  type AuthAccountStatus,
-} from './auth-scope';
+} from "./auth-scope";
 
 export interface AuthContext {
   token: string;
@@ -21,42 +24,53 @@ export interface AuthContext {
 }
 
 function authScheme(request: Request): string | null {
-  const auth = request.headers.get('authorization');
+  const auth = request.headers.get("authorization");
   const match = auth?.match(/^(\S+)\s+(.+)$/);
   return match?.[1]?.toLowerCase() ?? null;
 }
 
-export async function isAuthorized(request: Request, env: Env): Promise<boolean> {
+export async function isAuthorized(
+  request: Request,
+  env: Env,
+): Promise<boolean> {
   const auth = await authenticateRequest(request, env);
   return !!auth && canAccessFullAccount(auth.access);
 }
 
 export function unauthorized() {
-  return new Response(JSON.stringify({ error: 'AuthRequired' }), { status: 401 });
+  return new Response(JSON.stringify({ error: "AuthRequired" }), {
+    status: 401,
+  });
 }
 
-export async function authErrorResponse(env: Env, error: unknown): Promise<Response | null> {
+export async function authErrorResponse(
+  env: Env,
+  error: unknown,
+): Promise<Response | null> {
   if (error instanceof AuthTokenExpiredError) {
     return expiredToken();
   }
   return handleResourceAuthError(env, error);
 }
 
-export async function authenticateRequest(request: Request, env: Env): Promise<AuthContext | null> {
-  if (authScheme(request) === 'dpop') {
+export async function authenticateRequest(
+  request: Request,
+  env: Env,
+): Promise<AuthContext | null> {
+  if (authScheme(request) === "dpop") {
     const result = await verifyResourceRequestHybrid(env, request);
     if (!result) return null;
     const access = await withResolvedAccountStatus(
       env,
       result.did,
-      oauthAccessContext(result.scope ?? 'atproto'),
+      oauthAccessContext(result.scope ?? "atproto"),
     );
     return {
       token: result.token,
       claims: {
         sub: result.did,
         scope: result.scope,
-        t: 'access',
+        t: "access",
       } as JwtClaims,
       access,
     };
@@ -71,12 +85,12 @@ export async function authenticateRequest(request: Request, env: Env): Promise<A
     if (error instanceof AuthTokenExpiredError) {
       throw error;
     }
-    console.error('JWT verification error:', error);
+    console.error("JWT verification failed");
     return null;
   }
   if (!ver || !ver.valid) return null;
   const claims = ver.payload as JwtClaims;
-  if (claims.t !== 'access') return null;
+  if (claims.t !== "access") return null;
   if (!isBearerAccessScope(claims.scope)) return null;
   const access = await withResolvedAccountStatus(
     env,
@@ -86,7 +100,7 @@ export async function authenticateRequest(request: Request, env: Env): Promise<A
   return { token, claims, access };
 }
 
-export { AuthTokenExpiredError, expiredToken } from './auth-errors';
+export { AuthTokenExpiredError, expiredToken } from "./auth-errors";
 
 async function withResolvedAccountStatus(
   env: Env,
@@ -94,6 +108,6 @@ async function withResolvedAccountStatus(
   access: AuthAccessContext,
 ): Promise<AuthAccessContext> {
   const state = await getAccountState(env, did);
-  const accountStatus: AuthAccountStatus = state?.tag ?? 'active';
+  const accountStatus: AuthAccountStatus = state?.tag ?? "active";
   return withAccountStatus(access, accountStatus);
 }

@@ -62,8 +62,7 @@ export default defineConfig({ output: 'server', adapter: cloudflare({ mode: 'adv
         }
       }
       const bindings = { PDS_DID: 'did:example:test', PDS_HANDLE: 'test.example', USER_PASSWORD: 'pwd',
-        ACCESS_TOKEN: 'test-only-access-secret', REFRESH_TOKEN: 'test-only-refresh-secret',
-        REFRESH_TOKEN_SECRET: 'test-only-refresh-secret', SESSION_JWT_SECRET: 'test-only-session-secret', PDS_RELAY_NOTIFY: 'false' };
+        SESSION_JWT_SECRET: 'test-only-session-secret', PDS_RELAY_NOTIFY: 'false' };
       worker = new Miniflare({ modules, modulesRoot: server, compatibilityDate: compatibility.compatibilityDate,
         compatibilityFlags: compatibility.compatibilityFlags, d1Databases: { ALTERAN_DB: ':memory:' },
         r2Buckets: ['ALTERAN_BLOBS'], bindings });

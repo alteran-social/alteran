@@ -150,7 +150,8 @@ A single-user ATProto Personal Data Server on Cloudflare Workers, packaged as an
 
 ### Directory map
 
-- `src/handlers/` — XRPC and HTTP endpoints. One file per endpoint or tight namespace (e.g. `xrpc.repo.core.ts`, `xrpc.server.createSession.ts`). Handlers are thin: parse, authenticate, delegate to a service, format the response.
+- `src/pages/xrpc/` — XRPC endpoint handlers registered by `index.js`. Handlers parse, authenticate, delegate to a service, and format the response.
+- `src/handlers/` — Shared HTTP entrypoints, including the root handler.
 - `src/services/` — Domain logic. `repo-manager.ts`, `r2-blob-store.ts`, `car.ts`. Services own the business rules; handlers own the protocol.
 - `src/lib/` — Small, single-concept utilities. `jwt.ts`, `did-document.ts`, `errors.ts`, `auth-errors.ts`, `logger.ts`, `handle.ts`. If a file in `lib/` starts to grow, split it.
 - `src/db/` — Drizzle schema and generated migrations.
@@ -169,8 +170,8 @@ A single-user ATProto Personal Data Server on Cloudflare Workers, packaged as an
 | Deploy (build + wrangler) | `deno task deploy` |
 | Generate migrations | `deno task db:generate` |
 | Apply migrations locally | `deno task db:apply:local` |
-| Apply migrations to prod D1 | `deno task db:apply` |
-| Reset local DB and migrations | `deno task db:reset:local` |
+| Apply migrations to prod D1 | `deno task db:apply:production` |
+| Local DB reset (currently disabled) | `deno task db:reset:local` |
 | Set up secrets | `deno task secrets:setup` |
 | IaC plan / deploy / destroy | `deno task iac:plan` / `deno task iac:deploy` / `deno task iac:destroy` |
 | Tests | `deno task test` |
@@ -179,11 +180,11 @@ A single-user ATProto Personal Data Server on Cloudflare Workers, packaged as an
 ### Conventions
 
 **Adding an XRPC endpoint:**
-1. New file in `src/handlers/`, named `xrpc.<namespace>.<method>.ts`.
-2. Export an async function that takes the Astro `APIContext` (or Hono `Context`, depending on the surrounding wiring).
+1. New file in `src/pages/xrpc/`, named for its XRPC method.
+2. Export an async HTTP method handler that takes the Astro `APIContext`.
 3. Authenticate, parse the body once, delegate to a service in `src/services/`.
 4. Translate service errors via the codes in `src/lib/errors.ts` / `src/lib/auth-errors.ts`.
-5. Wire it into the Hono app where its siblings are mounted.
+5. Register the route in `index.js` alongside its siblings.
 
 **Adding a table:**
 1. Edit `src/db/schema.ts` (add the table, indexes, and any relations).

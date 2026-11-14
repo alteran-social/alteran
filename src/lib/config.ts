@@ -1,33 +1,33 @@
-import type { Env } from '../env';
-import { logger } from './logger';
+import type { Env } from "../env";
+import { logger } from "./logger";
 
 /**
  * Required environment variables/secrets
  */
 const REQUIRED_SECRETS = [
-  'PDS_DID',
-  'PDS_HANDLE',
+  "PDS_DID",
+  "PDS_HANDLE",
 ] as const;
 
 /**
  * Optional environment variables with defaults
  */
 const OPTIONAL_VARS = {
-  PDS_ALLOWED_MIME: 'image/jpeg,image/png,image/webp,image/gif,image/avif',
-  PDS_MAX_BLOB_SIZE: '5242880', // 5MB
-  PDS_MAX_JSON_BYTES: '1048576', // 1MB
-  PDS_RATE_LIMIT_PER_MIN: '1000',
-  PDS_CORS_ORIGIN: '*',
-  PDS_SEQ_WINDOW: '512',
-  ENVIRONMENT: 'development',
-  PDS_BSKY_APP_VIEW_URL: 'https://api.bsky.app',
-  PDS_BSKY_APP_VIEW_DID: 'did:web:api.bsky.app',
-  PDS_BSKY_APP_VIEW_CDN_URL_PATTERN: '',
+  PDS_ALLOWED_MIME: "image/jpeg,image/png,image/webp,image/gif,image/avif",
+  PDS_MAX_BLOB_SIZE: "5242880", // 5MB
+  PDS_MAX_JSON_BYTES: "1048576", // 1MB
+  PDS_RATE_LIMIT_PER_MIN: "1000",
+  PDS_CORS_ORIGIN: "*",
+  PDS_SEQ_WINDOW: "512",
+  ENVIRONMENT: "development",
+  PDS_BSKY_APP_VIEW_URL: "https://api.bsky.app",
+  PDS_BSKY_APP_VIEW_DID: "did:web:api.bsky.app",
+  PDS_BSKY_APP_VIEW_CDN_URL_PATTERN: "",
   // Additional proxied services
-  PDS_BSKY_CHAT_URL: 'https://api.bsky.chat',
-  PDS_BSKY_CHAT_DID: 'did:web:api.bsky.chat',
-  PDS_OZONE_URL: 'https://mod.bsky.app',
-  PDS_OZONE_DID: 'did:plc:ar7c4by46qjdydhdevvrndac',
+  PDS_BSKY_CHAT_URL: "https://api.bsky.chat",
+  PDS_BSKY_CHAT_DID: "did:web:api.bsky.chat",
+  PDS_OZONE_URL: "https://mod.bsky.app",
+  PDS_OZONE_DID: "did:plc:ar7c4by46qjdydhdevvrndac",
 } as const;
 
 /**
@@ -41,6 +41,12 @@ export interface ConfigValidationResult {
     readonly required: Readonly<Record<string, string>>;
     readonly optional: Readonly<Record<string, string>>;
   };
+}
+
+function positiveInteger(value: unknown): boolean {
+  if (typeof value !== "string" && typeof value !== "number") return false;
+  const parsed = parseInt(String(value));
+  return !isNaN(parsed) && parsed > 0;
 }
 
 /**
@@ -59,10 +65,10 @@ export function validateConfig(env: Env): ConfigValidationResult {
   // Check required secrets
   for (const secret of REQUIRED_SECRETS) {
     const value = env[secret];
-    if (!value || value === '') {
+    if (!value || value === "") {
       missing.push(secret);
     } else {
-      required[secret] = '***'; // Mask secret values in logs
+      required[secret] = "***"; // Mask secret values in logs
     }
   }
 
@@ -76,41 +82,44 @@ export function validateConfig(env: Env): ConfigValidationResult {
 
   // CORS validation
   const corsOrigin = optional.PDS_CORS_ORIGIN;
-  if (corsOrigin === '*' && optional.ENVIRONMENT === 'production') {
-    warnings.push('PDS_CORS_ORIGIN is set to wildcard (*) in production - this is insecure');
+  if (corsOrigin === "*" && optional.ENVIRONMENT === "production") {
+    warnings.push(
+      "PDS_CORS_ORIGIN is set to wildcard (*) in production - this is insecure",
+    );
   }
 
   // DID format validation
-  const did = typeof env.PDS_DID === 'string' ? env.PDS_DID : undefined;
-  if (did && !did.startsWith('did:')) {
-    warnings.push(`PDS_DID should start with 'did:' (got: ${did})`);
+  const did = typeof env.PDS_DID === "string" ? env.PDS_DID : undefined;
+  if (did && !did.startsWith("did:")) {
+    warnings.push("PDS_DID should start with 'did:'");
   }
 
   // Handle format validation
-  const handle = typeof env.PDS_HANDLE === 'string' ? env.PDS_HANDLE : undefined;
-  if (handle && handle.includes('://')) {
-    warnings.push(`PDS_HANDLE should not include protocol (got: ${handle})`);
+  const handle = typeof env.PDS_HANDLE === "string"
+    ? env.PDS_HANDLE
+    : undefined;
+  if (handle && handle.includes("://")) {
+    warnings.push("PDS_HANDLE should not include protocol");
   }
 
   // Numeric validation
-  const maxBlobSize = parseInt(optional.PDS_MAX_BLOB_SIZE);
-  if (isNaN(maxBlobSize) || maxBlobSize <= 0) {
-    warnings.push(`PDS_MAX_BLOB_SIZE must be a positive number (got: ${optional.PDS_MAX_BLOB_SIZE})`);
+  if (!positiveInteger(optional.PDS_MAX_BLOB_SIZE)) {
+    warnings.push("PDS_MAX_BLOB_SIZE must be a positive number");
   }
 
-  const maxJsonBytes = parseInt(optional.PDS_MAX_JSON_BYTES);
-  if (isNaN(maxJsonBytes) || maxJsonBytes <= 0) {
-    warnings.push(`PDS_MAX_JSON_BYTES must be a positive number (got: ${optional.PDS_MAX_JSON_BYTES})`);
+  if (!positiveInteger(optional.PDS_MAX_JSON_BYTES)) {
+    warnings.push("PDS_MAX_JSON_BYTES must be a positive number");
   }
 
-  const rateLimit = parseInt(optional.PDS_RATE_LIMIT_PER_MIN);
-  if (isNaN(rateLimit) || rateLimit <= 0) {
-    warnings.push(`PDS_RATE_LIMIT_PER_MIN must be a positive number (got: ${optional.PDS_RATE_LIMIT_PER_MIN})`);
+  if (!positiveInteger(optional.PDS_RATE_LIMIT_PER_MIN)) {
+    warnings.push("PDS_RATE_LIMIT_PER_MIN must be a positive number");
   }
 
   // Check for signing key
   if (!env.REPO_SIGNING_KEY) {
-    warnings.push('REPO_SIGNING_KEY is not set - repository commits will not be signed');
+    warnings.push(
+      "REPO_SIGNING_KEY is not set - repository commits will not be signed",
+    );
   }
 
   // Service-auth uses REPO_SIGNING_KEY (secp256k1). No separate service key required.
@@ -135,20 +144,19 @@ export function validateConfig(env: Env): ConfigValidationResult {
  */
 export function logConfigValidation(result: ConfigValidationResult): void {
   if (result.valid) {
-    logger.info('config_validation', {
-      message: 'Configuration validated successfully',
-      environment: result.config.optional.ENVIRONMENT,
+    logger.info("config_validation", {
+      message: "Configuration validated successfully",
       warnings: result.warnings.length,
     });
 
     if (result.warnings.length > 0) {
       for (const warning of result.warnings) {
-        logger.warn('config_validation', { message: warning });
+        logger.warn("config_validation", { message: warning });
       }
     }
   } else {
-    logger.error('config_validation', {
-      message: 'Configuration validation failed',
+    logger.error("config_validation", undefined, {
+      message: "Configuration validation failed",
       missing: result.missing,
       warnings: result.warnings,
     });
@@ -168,10 +176,12 @@ export function validateConfigOrThrow(env: Env): void {
 
   if (!result.valid) {
     const error = new Error(
-      `Configuration validation failed. Missing required secrets: ${result.missing.join(', ')}`
+      `Configuration validation failed. Missing required secrets: ${
+        result.missing.join(", ")
+      }`,
     );
-    logger.error('config_validation', {
-      message: 'Startup failed due to invalid configuration',
+    logger.error("config_validation", undefined, {
+      message: "Startup failed due to invalid configuration",
       error: error.message,
     });
     throw error;
@@ -189,9 +199,14 @@ export function getConfig(env: Env) {
 
   const did = env.PDS_DID;
   const handle = env.PDS_HANDLE;
-  if (typeof did !== 'string' || did === '' || typeof handle !== 'string' || handle === '') {
+  if (
+    typeof did !== "string" || did === "" || typeof handle !== "string" ||
+    handle === ""
+  ) {
     throw new Error(
-      `getConfig called with invalid configuration. Missing: ${result.missing.join(', ')}`,
+      `getConfig called with invalid configuration. Missing: ${
+        result.missing.join(", ")
+      }`,
     );
   }
 
@@ -201,7 +216,7 @@ export function getConfig(env: Env) {
     handle,
 
     // Optional with defaults
-    allowedMime: result.config.optional.PDS_ALLOWED_MIME.split(','),
+    allowedMime: result.config.optional.PDS_ALLOWED_MIME.split(","),
     maxBlobSize: parseInt(result.config.optional.PDS_MAX_BLOB_SIZE),
     maxJsonBytes: parseInt(result.config.optional.PDS_MAX_JSON_BYTES),
     rateLimitPerMin: parseInt(result.config.optional.PDS_RATE_LIMIT_PER_MIN),
@@ -212,14 +227,19 @@ export function getConfig(env: Env) {
       url: result.config.optional.PDS_BSKY_APP_VIEW_URL,
       did: result.config.optional.PDS_BSKY_APP_VIEW_DID,
       cdnUrlPattern:
-        result.config.optional.PDS_BSKY_APP_VIEW_CDN_URL_PATTERN?.trim() || undefined,
+        result.config.optional.PDS_BSKY_APP_VIEW_CDN_URL_PATTERN?.trim() ||
+        undefined,
     },
 
     // Optional
     repoSigningKey: env.REPO_SIGNING_KEY,
     hostname: env.PDS_HOSTNAME,
-    accessTtlSec: env.PDS_ACCESS_TTL_SEC ? parseInt(env.PDS_ACCESS_TTL_SEC) : 3600,
-    refreshTtlSec: env.PDS_REFRESH_TTL_SEC ? parseInt(env.PDS_REFRESH_TTL_SEC) : 2592000,
+    accessTtlSec: env.PDS_ACCESS_TTL_SEC
+      ? parseInt(env.PDS_ACCESS_TTL_SEC)
+      : 3600,
+    refreshTtlSec: env.PDS_REFRESH_TTL_SEC
+      ? parseInt(env.PDS_REFRESH_TTL_SEC)
+      : 2592000,
     serviceSigningKeyHex: undefined,
   };
 }

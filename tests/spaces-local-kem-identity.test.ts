@@ -68,7 +68,7 @@ describe('local Space KEM identity', () => {
     const matching = (async () => { calls++; return response(JSON.stringify(doc)); }) as typeof fetch;
     expect((await withFetch(matching, () => resolveLocalSpaceKemIdentity(env(), 'did:plc:wrong', new AbortController().signal))).tag).toBe('invalid');
     expect(calls).toBe(0);
-    expect((await withFetch(matching, () => resolveLocalSpaceKemIdentity(env({ PDS_SPACE_KEM_KEY: '' }), DID, new AbortController().signal))).tag).toBe('missing');
+    expect((await withFetch(matching, () => resolveLocalSpaceKemIdentity(env({ PDS_SPACE_KEM_KEY: '' }), DID, new AbortController().signal))).tag).toBe('unavailable');
     for (const input of [
       JSON.stringify({ ...doc, service: [{ ...doc.service[0], serviceEndpoint: 'https://other.example.com' }] }),
       JSON.stringify({ ...doc, service: [doc.service[0], doc.service[0]] }),

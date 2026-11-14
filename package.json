@@ -20,7 +20,9 @@
     "index.d.ts",
     "src",
     "types",
-    "migrations"
+    "migrations",
+    "docs/CONFIGURATION.md",
+    "docs/DEPLOYMENT.md"
   ],
   "publishConfig": {
     "access": "public"

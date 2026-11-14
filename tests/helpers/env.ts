@@ -3,8 +3,15 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { D1Database } from "@cloudflare/workers-types";
 import type { Env } from "../../src/env";
+import type { PdsLocals } from "../../types/public-env";
 
-const MIGRATIONS_DIR = join(import.meta.dirname, "..", "..", "migrations");
+declare global {
+  namespace App {
+    interface Locals extends PdsLocals {}
+  }
+}
+
+const MIGRATIONS_DIR = join(import.meta.dirname!, "..", "..", "migrations");
 
 // Drizzle separates statements with a literal "--> statement-breakpoint"
 // sentinel. D1's exec() accepts a multi-statement string, but the in-memory
@@ -48,8 +55,6 @@ export async function makeEnv(overrides: Partial<Env> = {}): Promise<Env> {
       PDS_DID: "did:example:test",
       PDS_HANDLE: "test.example",
       USER_PASSWORD: "pwd",
-      REFRESH_TOKEN: "access-secret",
-      REFRESH_TOKEN_SECRET: "refresh-secret",
       PDS_MAX_BLOB_SIZE: "5242880",
       PDS_ALLOWED_MIME: "image/png,image/jpeg",
       PDS_OAUTH_CLIENT_HOSTS: "client.example",
