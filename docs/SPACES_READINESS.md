@@ -114,7 +114,7 @@ The `spaces-reference-interop.test.ts`, `spaces-reference-lexicon.test.ts`,
 `spaces-reference-policy.test.ts`, `spaces-reference-ops.test.ts`,
 `spaces-reference-export.test.ts`, `spaces-reference-meta-archive.test.ts`,
 `spaces-reference-meta-members.test.ts`, `spaces-list-reference.test.ts`,
-`spaces-list-values-reference.test.ts` and
+`spaces-list-values-reference.test.ts`, `spaces-reference-integers.test.ts` and
 `spaces-get-space-reference.test.ts`
 tests can exercise a disposable local reference PDS. Set
 `ALTERAN_REFERENCE_INTEROP_CONFIG` to a JSON file containing
@@ -134,6 +134,10 @@ The list test compares metadata, CIDs, cursor paths and filtered pagination
 against the reference PDS for matching test records.
 The value-list test also compares default, explicit value and metadata modes,
 including Lex JSON links, bytes and escaped text.
+The integer test checks signed 64-bit values through a reference archive and
+rejects silently rounded JSON. Reference revision `16bfeba` preserves those
+values in its binary archive but returns an error for values outside JavaScript's
+safe integer range on the tested record and list routes.
 The policy test compares personal-Space reads before the first record and after
 deletion, using a disposable Space in the reference PDS.
 An interrupted request may leave test data behind. Keep the configuration file
