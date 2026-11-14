@@ -80,9 +80,7 @@ describe('private Space record authorization', () => {
     const { principal, request } = await f.principal(target, watched.env);
     watched.arm();
     const result = await readAuthorizedSpaceRecord(watched.env, principal, request, SPACE, DID, COLLECTION, 'one');
-    expect(result.tag).toBe('notFound');
-    if (result.tag !== 'notFound') throw new Error('Expected bounded absence');
-    expect(await result.complete(request, watched.env.ALTERAN_DB)).toBe(false);
+    expect(result.tag).toBe('unauthorized');
     const rows = watched.returned() as { sentinel: number; value_cbor: unknown }[];
     expect(rows).toHaveLength(1);
     expect(rows[0].sentinel).toBe(1);

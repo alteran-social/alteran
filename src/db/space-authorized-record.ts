@@ -17,6 +17,7 @@ type CompleteRead = (request: Request, database: D1Database) => Promise<boolean>
 export type AuthorizedSpaceRecordResult =
   | { readonly tag: 'found'; readonly record: StoredSpaceRecord; readonly complete: CompleteRead }
   | { readonly tag: 'notFound'; readonly complete: CompleteRead }
+  | { readonly tag: 'invalid'; readonly complete: CompleteRead }
   | { readonly tag: 'unauthorized' };
 
 type SelectedRow = SpaceRecordRow & {
@@ -35,7 +36,8 @@ export async function readAuthorizedSpaceRecord(
   collection: string,
   rkey: string,
 ): Promise<AuthorizedSpaceRecordResult> {
-  if (!consumeVerifiedSpacePrincipal(principal, request, env.ALTERAN_DB) ||
+  const db = env.ALTERAN_DB;
+  if (!consumeVerifiedSpacePrincipal(principal, request, db) ||
     !matchesRequest(request, space, repo, collection, rkey) || !windowIsLive(principal)) {
     return { tag: 'unauthorized' };
   }
@@ -54,11 +56,10 @@ export async function readAuthorizedSpaceRecord(
     spaceType: ref.spaceType, authority: ref.authorityDid, skey: ref.skey,
   }, { action: 'read_self' })) || !windowIsLive(principal)) return { tag: 'unauthorized' };
   await assertLocalSpaceRepo(env, repo);
-  if (!windowIsLive(principal)) return { tag: 'unauthorized' };
+  if (request.signal.aborted || env.ALTERAN_DB !== db || !windowIsLive(principal)) return { tag: 'unauthorized' };
   const now = Math.floor(Date.now() / 1000);
   if (!Number.isSafeInteger(now) || now < 0) return { tag: 'unauthorized' };
   const nonce = crypto.randomUUID().replaceAll('-', '');
-  const db = env.ALTERAN_DB;
   const authorization = authorizationSql('nonce');
   const authValues = authorizationValues(principal, nonce);
   const activeEpoch = `SELECT CASE WHEN typeof(e.id) = 'text' AND length(CAST(e.id AS BLOB)) BETWEEN 1 AND 128
@@ -103,41 +104,51 @@ export async function readAuthorizedSpaceRecord(
     !clockAssertionPassed(result[1]?.results) || !clockAssertionPassed(result[4]?.results)) {
     return { tag: 'unauthorized' };
   }
-  if (!windowIsLive(principal)) return { tag: 'unauthorized' };
+  if (env.ALTERAN_DB !== db || !windowIsLive(principal)) return { tag: 'unauthorized' };
   const finalRows = result[5]?.results;
   if (!Array.isArray(finalRows) || finalRows.length !== 1) return { tag: 'unauthorized' };
   const final = finalRows[0];
+  if (!final || typeof final !== 'object') return { tag: 'unauthorized' };
   const clock = final.seconds;
   if (typeof clock !== 'number' || !Number.isSafeInteger(clock) || clock < now ||
     principal.expiresAt <= clock || clock - principal.proofIssuedAt > DPOP_PROOF_MAX_AGE_SEC ||
     principal.proofIssuedAt - clock > DPOP_PROOF_FUTURE_SKEW_SEC) return { tag: 'unauthorized' };
-  const rows = (result[2]?.results ?? []) as SelectedRow[];
+  const selected = result[2]?.results;
+  if (!Array.isArray(selected) || selected.length > 2 ||
+    selected.some((row) => !row || typeof row !== 'object')) return { tag: 'unauthorized' };
+  const rows = selected as SelectedRow[];
   const sentinels = rows.filter((row) => row.sentinel === 1);
   const records = rows.filter((row) => row.sentinel === 0);
-  if (!sentinels.length && !rows.length) return { tag: 'unauthorized' };
   if (sentinels.length !== 1 || records.length > 1 || sentinels.length + records.length !== rows.length) {
-    throw new SpaceStorageError('InvalidRepoState', 'Invalid authorized Space record result');
+    return { tag: 'unauthorized' };
   }
   const sessionExpiresAt = final.session_expires_at;
   if (typeof sessionExpiresAt !== 'number' || !Number.isSafeInteger(sessionExpiresAt) || sessionExpiresAt <= clock ||
-    (final.space_active !== 0 && final.space_active !== 1)) {
+    final.space_active !== 1 || sentinels[0].session_expires_at !== sessionExpiresAt ||
+    sentinels[0].cid !== null || sentinels[0].value_cbor !== null || sentinels[0].repo_rev !== null ||
+    sentinels[0].head_rev !== null || sentinels[0].consistent !== 0 ||
+    records.some((row) => row.session_expires_at !== null)) {
     return { tag: 'unauthorized' };
   }
   const epoch = final.epoch_id;
-  if ((final.space_active === 0 && epoch !== null) ||
-    (final.space_active === 1 && (typeof epoch !== 'string' || epoch.length < 1 || epoch.length > 128 ||
-      new TextEncoder().encode(epoch).byteLength > 128))) return { tag: 'unauthorized' };
-  if (sentinels[0].epoch_id !== final.epoch_id ||
-    (records.length > 0 && (typeof final.epoch_id !== 'string' || records[0].epoch_id !== final.epoch_id))) {
+  if (typeof epoch !== 'string' || epoch.length < 1 || epoch.length > 128 ||
+    new TextEncoder().encode(epoch).byteLength > 128 || sentinels[0].epoch_id !== epoch ||
+    records.some((row) => row.epoch_id !== epoch)) {
     return { tag: 'unauthorized' };
   }
-  const record = records.length && final.space_active === 1 ? decodeSpaceRecord(records[0], collection) : null;
+  let record: StoredSpaceRecord | null = null;
+  let invalid = false;
+  try {
+    if (records.length) record = decodeSpaceRecord(records[0], collection);
+  } catch {
+    invalid = true;
+  }
   const after = Math.floor(Date.now() / 1000);
   if (request.signal.aborted || !windowIsLiveAt(principal, after) || sessionExpiresAt <= after) {
     return { tag: 'unauthorized' };
   }
-  const complete = completion(env, request, principal, ref, repo,
-    typeof epoch === 'string' && epoch.length > 0 && epoch.length <= 128 ? epoch : null);
+  const complete = completion(env, db, request, principal, ref, repo, epoch);
+  if (invalid) return Object.freeze({ tag: 'invalid', complete });
   return record ? Object.freeze({ tag: 'found', record, complete }) : Object.freeze({ tag: 'notFound', complete });
 }
 
@@ -177,15 +188,14 @@ function authorizationPredicate(clock: 'clock.seconds' | 'oauth_replay_clock.sec
 // Completion is a one-use capability for the request and database that read
 // the record. Its clock sample commits even when the later state check denies.
 function completion(
-  env: Env, request: Request, principal: VerifiedSpacePrincipal, ref: ReturnType<typeof parseSpaceRef>,
+  env: Env, database: D1Database, request: Request, principal: VerifiedSpacePrincipal, ref: ReturnType<typeof parseSpaceRef>,
   repo: string, epoch: string | null,
 ): CompleteRead {
-  const database = env.ALTERAN_DB;
   let consumed = false;
   return async (suppliedRequest, suppliedDatabase) => {
     if (consumed) return false;
     consumed = true;
-    if (!epoch || request !== suppliedRequest || database !== suppliedDatabase || request.signal.aborted ||
+    if (!epoch || request !== suppliedRequest || database !== suppliedDatabase || env.ALTERAN_DB !== database || request.signal.aborted ||
       !windowIsLive(principal)) return false;
     const now = Math.floor(Date.now() / 1000);
     if (!Number.isSafeInteger(now) || now < 0) return false;
@@ -204,7 +214,7 @@ function completion(
         principal.grant.accountIncarnation)
       .first<{ seconds: unknown; nonce: unknown; authorized: unknown }>();
     if (!sample || sample.authorized !== 1 || sample.nonce !== nonce || typeof sample.seconds !== 'number' ||
-      !Number.isSafeInteger(sample.seconds) || sample.seconds < now || request.signal.aborted ||
+      !Number.isSafeInteger(sample.seconds) || sample.seconds < now || env.ALTERAN_DB !== database || request.signal.aborted ||
       !windowIsLive(principal)) return false;
     const row = await database.prepare(`${authorizationSql('seconds')}
       SELECT clock.seconds, authorized.session_expires_at FROM clock JOIN authorized
@@ -220,7 +230,7 @@ function completion(
     return !!row && typeof row.seconds === 'number' && Number.isSafeInteger(row.seconds) && row.seconds >= sample.seconds &&
       typeof row.session_expires_at === 'number' && Number.isSafeInteger(row.session_expires_at) &&
       row.session_expires_at > row.seconds && row.session_expires_at > after &&
-      !request.signal.aborted && windowIsLiveAt(principal, after);
+      env.ALTERAN_DB === database && !request.signal.aborted && windowIsLiveAt(principal, after);
   };
 }
 

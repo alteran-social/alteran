@@ -237,7 +237,7 @@ describe('owner-only Space getRecord route', () => {
         missingState: change === 'missing',
       });
       const response = await GET(context(watched, await signedRequest(f, TARGET, { signal: controller.signal })));
-      expect(response.status).toBe(change === 'fault' ? 500 : 401);
+      expect(response.status).toBe(401);
       const body = await response.text();
       expect(body).not.toContain('private test failure');
       expect(body).not.toContain('"text":"private"');

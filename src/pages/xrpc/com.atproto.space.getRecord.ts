@@ -32,6 +32,7 @@ export async function GET({ locals, request }: APIContext): Promise<Response> {
     }
     if (!authorization || !/^DPoP\s+\S+$/i.test(authorization)) return secure(unauthorized());
     const env = locals.env;
+    const db = env.ALTERAN_DB;
     if (!proof || !validProofStructure(proof)) return secure(await dpopResourceUnauthorized(env));
     let auth;
     try {
@@ -45,22 +46,35 @@ export async function GET({ locals, request }: APIContext): Promise<Response> {
       }
       throw cause;
     }
-    if (request.signal.aborted || !auth || auth.authType !== 'oauth-dpop') return secure(unauthorized());
+    if (request.signal.aborted || env.ALTERAN_DB !== db || !auth || auth.authType !== 'oauth-dpop') return secure(unauthorized());
     if (!auth.spacePrincipal) return secure(scopeMissingResponse());
     if (target.repo !== auth.did) return secure(error('RepoNotFound', 'Repository not found', 400));
 
     const result = await readAuthorizedSpaceRecord(env, auth.spacePrincipal, request,
       target.space, target.repo, target.collection, target.rkey);
-    if (result.tag === 'unauthorized') return secure(unauthorized());
-    const response = secure(result.tag === 'found'
-      ? (() => {
+    if (result.tag === 'unauthorized' || env.ALTERAN_DB !== db) return secure(unauthorized());
+    let response: Response;
+    try {
+      if (result.tag === 'found') {
         const serialized = createSpaceRecordResponse(target, result.record,
           { acceptSignature: null, kemKey: null, requireMac: false });
-        return new Response(serialized.body, { status: 200, headers: serialized.headers });
-      })()
-      : error('RecordNotFound', `Could not locate record: ${captureRecordIdentity(target).uri}`, 400));
-    if (!await result.complete(request, env.ALTERAN_DB) || request.signal.aborted) return secure(unauthorized());
-    return response;
+        response = new Response(serialized.body, { status: 200, headers: serialized.headers });
+      } else if (result.tag === 'notFound') {
+        response = error('RecordNotFound', `Could not locate record: ${captureRecordIdentity(target).uri}`, 400);
+      } else {
+        response = error('InternalServerError', 'Internal server error', 500);
+      }
+    } catch {
+      response = error('InternalServerError', 'Internal server error', 500);
+    }
+    let completed = false;
+    try {
+      completed = await result.complete(request, db);
+    } catch {
+      return secure(unauthorized());
+    }
+    if (!completed || env.ALTERAN_DB !== db || request.signal.aborted) return secure(unauthorized());
+    return secure(response);
   } catch {
     return secure(error('InternalServerError', 'Internal server error', 500));
   }
