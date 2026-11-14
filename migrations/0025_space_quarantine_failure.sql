@@ -1,0 +1,1 @@
+ALTER TABLE `space_quarantine_job` ADD `failure_reason` text;

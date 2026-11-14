@@ -148,6 +148,83 @@
       "when": 1794618274640,
       "tag": "0020_space_write_fence",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1794619619996,
+      "tag": "0021_amused_menace",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1794619641399,
+      "tag": "0022_space_quarantine_freeze",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1794621285179,
+      "tag": "0023_space_quarantine_activation",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1794621533509,
+      "tag": "0024_legal_ogun",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1794622316008,
+      "tag": "0025_space_quarantine_failure",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1794622324798,
+      "tag": "0026_space_quarantine_terminal_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "6",
+      "when": 1794623581116,
+      "tag": "0027_stormy_ricochet",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1794623819038,
+      "tag": "0028_space_snapshot_lease_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1794624757504,
+      "tag": "0029_safe_paper_doll",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1794624765974,
+      "tag": "0030_space_snapshot_lease_quota",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1794626071161,
+      "tag": "0031_thick_hannibal_king",
+      "breakpoints": true
     }
   ]
 }

@@ -5,7 +5,27 @@ export const secret = sqliteTable('secret', {
   key: text('key').primaryKey().notNull(),
   value: text('value').notNull(),
   updatedAt: integer('updated_at', { mode: 'number' }).notNull(),
-});
+}, (table) => ({
+  replayExpiry: index('oauth_replay_expiry').on(sql`(CASE WHEN json_valid(${table.value}) THEN CASE
+    WHEN ${table.key} GLOB 'oauth:dpop:jti:*'
+      AND json_type(${table.value}, '$.exp') IN ('integer', 'real')
+      AND json_type(${table.value}, '$.iat') IN ('integer', 'real')
+      THEN MAX(CAST(json_extract(${table.value}, '$.exp') AS REAL), CAST(json_extract(${table.value}, '$.iat') AS REAL) + 300)
+    WHEN ${table.key} GLOB 'oauth:client-assertion:jti:*'
+      AND json_type(${table.value}, '$.exp') IN ('integer', 'real')
+      THEN CAST(json_extract(${table.value}, '$.exp') AS REAL)
+    ELSE NULL END ELSE NULL END)`, table.key).where(sql`${table.key} GLOB 'oauth:dpop:jti:*' OR ${table.key} GLOB 'oauth:client-assertion:jti:*'`),
+}));
+
+export const oauth_replay_clock = sqliteTable('oauth_replay_clock', {
+  id: integer('id').primaryKey().notNull(),
+  seconds: integer('seconds', { mode: 'number' }).notNull(),
+  nonce: text('nonce').notNull(),
+}, (table) => ({
+  singleton: check('oauth_replay_clock_singleton', sql`${table.id} = 1`),
+  validSeconds: check('oauth_replay_clock_seconds', sql`typeof(${table.seconds}) = 'integer' AND ${table.seconds} BETWEEN 0 AND 9007199254740991`),
+  validNonce: check('oauth_replay_clock_nonce', sql`length(${table.nonce}) = 32`),
+}));
 
 export const account = sqliteTable('account', {
   did: text('did').primaryKey().notNull(),
@@ -45,6 +65,7 @@ export const oauth_session = sqliteTable('oauth_session', {
   clientId: text('client_id').notNull(),
   clientAuthMethod: text('client_auth_method').notNull(),
   clientAuthKeyId: text('client_auth_key_id'),
+  clientAuthKeyBinding: text('client_auth_key_binding'),
   dpopJkt: text('dpop_jkt').notNull(),
   scope: text('scope').notNull(),
   currentRefreshTokenId: text('current_refresh_token_id').notNull(),
@@ -135,6 +156,8 @@ export const space_epoch = sqliteTable('space_epoch', {
   repoDid: text('repo_did').notNull(),
   state: text('state').notNull(),
   createdAt: integer('created_at').notNull(),
+  verifiedJobId: text('verified_job_id'),
+  activationNonce: text('activation_nonce'),
 }, (table) => ({
   activeOwner: uniqueIndex('space_epoch_active_owner').on(table.spaceRef, table.repoDid)
     .where(sql`${table.state} = 'active'`),
@@ -158,6 +181,8 @@ export const space_record_version = sqliteTable('space_record_version', {
   pk: primaryKey({ columns: [table.epochId, table.path, table.fromGeneration] }),
   currentPath: uniqueIndex('space_record_version_current_path').on(table.epochId, table.path)
     .where(sql`${table.untilGeneration} IS NULL`),
+  gcCandidates: index('space_record_version_gc_candidates').on(table.epochId, table.spaceRef, table.repoDid,
+    table.untilGeneration, table.path, table.fromGeneration).where(sql`${table.untilGeneration} IS NOT NULL`),
   validInterval: check('space_record_version_interval', sql`${table.fromGeneration} >= 1 AND (${table.untilGeneration} IS NULL OR ${table.untilGeneration} > ${table.fromGeneration})`),
   validPath: check('space_record_version_path', sql`${table.path} = ${table.collection} || '/' || ${table.rkey}`),
   validSize: check('space_record_version_size', sql`${table.valueSize} = length(${table.valueCbor}) AND ${table.valueSize} > 0 AND ${table.valueSize} <= 1048576`),
@@ -177,6 +202,11 @@ export const space_snapshot_lease = sqliteTable('space_snapshot_lease', {
   maximumExpiresAt: integer('maximum_expires_at').notNull(),
 }, (table) => ({
   epochExpiry: index('space_snapshot_lease_epoch_expiry').on(table.epochId, table.expiresAt, table.generation),
+  epochGeneration: index('space_snapshot_lease_epoch_generation').on(table.epochId, table.spaceRef, table.repoDid, table.generation),
+  ownerExpiry: index('space_snapshot_lease_owner_expiry').on(table.spaceRef, table.repoDid, table.expiresAt, table.id),
+  ownerMaximumExpiry: index('space_snapshot_lease_owner_maximum_expiry').on(table.spaceRef, table.repoDid, table.maximumExpiresAt, table.id),
+  expiry: index('space_snapshot_lease_expiry').on(table.expiresAt, table.id),
+  maximumExpiry: index('space_snapshot_lease_maximum_expiry').on(table.maximumExpiresAt, table.id),
   hashSize: check('space_snapshot_lease_hash_size', sql`length(${table.setHash}) = 2048`),
 }));
 
@@ -207,6 +237,36 @@ export const space_gc_attempt = sqliteTable('space_gc_attempt', {
   epochId: text('epoch_id').notNull(),
 });
 
+export const space_quarantine_job = sqliteTable('space_quarantine_job', {
+  id: text('id').primaryKey().notNull(),
+  token: text('token').notNull(),
+  renewalNonce: text('renewal_nonce').notNull(),
+  spaceRef: text('space_ref').notNull(),
+  repoDid: text('repo_did').notNull(),
+  epochId: text('epoch_id').notNull(),
+  authorityDid: text('authority_did').notNull(),
+  spaceType: text('space_type').notNull(),
+  skey: text('skey').notNull(),
+  generation: integer('generation').notNull(),
+  mutationId: text('mutation_id').notNull(),
+  rev: text('rev').notNull(),
+  expectedHash: blob('expected_hash', { mode: 'buffer' }).notNull(),
+  accumulatedHash: blob('accumulated_hash', { mode: 'buffer' }).notNull(),
+  cursor: text('cursor').notNull(),
+  sequence: integer('sequence').notNull(),
+  recordCount: integer('record_count').notNull(),
+  leaseUntil: integer('lease_until').notNull(),
+  status: text('status').notNull(),
+  activationNonce: text('activation_nonce'),
+  failureReason: text('failure_reason'),
+  createdAt: integer('created_at').notNull(),
+}, (table) => ({
+  ownerEpoch: uniqueIndex('space_quarantine_job_owner_epoch').on(table.spaceRef, table.repoDid, table.epochId),
+  validHashes: check('space_quarantine_job_hashes', sql`length(${table.expectedHash}) = 2048 AND length(${table.accumulatedHash}) = 2048`),
+  validCounts: check('space_quarantine_job_counts', sql`${table.generation} >= 1 AND ${table.sequence} >= 0 AND ${table.recordCount} >= 0`),
+  validStatus: check('space_quarantine_job_status', sql`${table.status} IN ('running', 'complete', 'activating', 'active', 'failed')`),
+}));
+
 export const space_record = sqliteTable('space_record', {
   spaceRef: text('space_ref').notNull(),
   repoDid: text('repo_did').notNull(),
@@ -218,6 +278,7 @@ export const space_record = sqliteTable('space_record', {
 }, (table) => ({
   pk: primaryKey({ columns: [table.spaceRef, table.repoDid, table.collection, table.rkey] }),
   cidIdx: index('space_record_cid_idx').on(table.spaceRef, table.repoDid, table.cid),
+  pathIdx: index('space_record_path_idx').on(table.spaceRef, table.repoDid, sql`(${table.collection} || '/' || ${table.rkey}) COLLATE BINARY`),
 }));
 
 export const space_op = sqliteTable('space_op', {
