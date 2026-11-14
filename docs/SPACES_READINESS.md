@@ -70,13 +70,24 @@ does not establish deployed or cross-implementation compatibility.
 
 ## Development and deployment
 
-The `spaces-reference-interop.test.ts` test can exercise a disposable local
-reference PDS. Set `ALTERAN_REFERENCE_INTEROP_CONFIG` to a JSON file containing
+The `spaces-reference-interop.test.ts` and `spaces-reference-lexicon.test.ts`
+tests can exercise a disposable local reference PDS. Set
+`ALTERAN_REFERENCE_INTEROP_CONFIG` to a JSON file containing
 `pds`, `plc`, `did`, and `accessJwt` for a test account. Both service URLs must
 be loopback HTTP origins. The test creates a uniquely named space, exchanges a
 STAR archive and verifies response MACs, then attempts to delete the test space.
 An interrupted request may leave test data behind. Keep the configuration file
-private because it contains an access token.
+private because it contains an access token. The Lexicon test injects DNS and
+maps test HTTPS origins to the local services; it does not establish live DNS or
+deployed Cloudflare networking behavior.
+
+The experimental Lexicon resolver depends on Cloudflare global `fetch` with
+`global_fetch_strictly_public` enabled and the platform's public-egress
+restrictions. The resolver is not exposed or used for OAuth grants. Before
+enabling it, verify the flag in the deployed environment, test same-zone routing
+and egress there, and establish a freshness policy for DID documents and repo
+heads. Matching head responses cannot rule out consistent stale responses from
+the publisher's PDS or a cache.
 
 Apply database migrations `0014` and `0015` in order before deploying code that
 uses them. Public blob cleanup queries consult the new private-usage table, so

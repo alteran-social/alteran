@@ -24,6 +24,8 @@ import {
   encodedKey,
   NSID,
   schema,
+  signedTree,
+  target,
   validFixture,
 } from "./fixtures/spaces/lexicon-proof";
 
@@ -37,6 +39,13 @@ describe("offline Lexicon proof verification", () => {
       expect(result.tag).toBe("proven");
       if (result.tag === "proven") {
         expect(result.uri).toBe(`at://${DID}/${COLLECTION}/${NSID}`);
+        expect(result.headCid).toBe(
+          CID.parse(input.currentCommitCid).toString(),
+        );
+        expect(result.revision).toMatch(
+          /^[234567abcdefghijklmnopqrstuvwxyz]{13}$/,
+        );
+        expect(result.definitions).toBe("main-only");
         expect(result.main).toMatchObject({
           spaceType: NSID,
           publisherDid: DID,
@@ -83,6 +92,7 @@ describe("offline Lexicon proof verification", () => {
     });
     expect(result.tag).toBe("proven");
     if (result.tag === "proven") {
+      expect(result.definitions).toBe("additional");
       expect(result.main.title).toBe("A forum");
     }
   });
@@ -120,6 +130,7 @@ describe("offline Lexicon proof verification", () => {
       proof,
     });
     expect(result.tag).toBe("proven");
+    if (result.tag === "proven") expect(result.definitions).toBe("additional");
   });
 
   it("accepts a valid node with more than 2048 entries", async () => {
@@ -185,6 +196,22 @@ describe("offline Lexicon proof verification", () => {
         currentCommitCid: CID.parse(input.currentCommitCid).toString(base58btc),
       })).tag,
     ).toBe("proven");
+  });
+
+  it("returns the revision from the verified signed commit", async () => {
+    const fixture = await signedTree(
+      await P256Keypair.create(),
+      async (blocks, recordCid) =>
+        await blocks.add({
+          l: null,
+          e: [{ p: 0, k: encodedKey(target), v: recordCid, t: null }],
+        }) as unknown as CID,
+    );
+    const result = await verifyLexiconProofAtTrustedHead(fixture.input);
+    expect(result.tag).toBe("proven");
+    if (result.tag === "proven") {
+      expect(result.revision).toBe(fixture.commit.rev);
+    }
   });
 
   it("snapshots inputs before verification and returns independent records", async () => {
@@ -255,7 +282,7 @@ describe("offline Lexicon proof verification", () => {
       .toBe("invalid");
   });
 
-  it("rejects mismatched block bytes and duplicated or missing CAR blocks", async () => {
+  it("rejects mismatched or missing blocks but accepts identical duplicates", async () => {
     const key = await P256Keypair.create();
     const input = await validFixture(key);
     const tampered = input.proof.slice();
@@ -273,6 +300,28 @@ describe("offline Lexicon proof verification", () => {
     expect(
       (await verifyLexiconProofAtTrustedHead({ ...input, proof: duplicate }))
         .tag,
+    ).toBe("proven");
+    const forgedBytes = Uint8Array.from(entries[0].bytes);
+    forgedBytes[forgedBytes.length - 1] ^= 1;
+    const forgedDuplicate = await collect(writeCarStream(root, [
+      ...entries,
+      { cid: entries[0].cid, bytes: forgedBytes },
+    ]));
+    expect(
+      (await verifyLexiconProofAtTrustedHead({
+        ...input,
+        proof: forgedDuplicate,
+      })).tag,
+    ).toBe("invalid");
+    const excessiveDuplicates = await collect(writeCarStream(root, [
+      ...entries,
+      ...Array.from({ length: 257 }, () => entries[0]),
+    ]));
+    expect(
+      (await verifyLexiconProofAtTrustedHead({
+        ...input,
+        proof: excessiveDuplicates,
+      })).tag,
     ).toBe("invalid");
     const missing = await collect(writeCarStream(root, entries.slice(0, -1)));
     expect(
@@ -280,7 +329,7 @@ describe("offline Lexicon proof verification", () => {
     ).toBe("invalid");
   });
 
-  it("rejects multiple roots, excessive blocks and a CID-spoofed cycle", async () => {
+  it("uses the first root and rejects excessive blocks or a CID-spoofed cycle", async () => {
     const input = await validFixture(await P256Keypair.create());
     const { readCarWithRoot } = await import("@atproto/repo");
     const { root, blocks } = await readCarWithRoot(input.proof);
@@ -289,6 +338,18 @@ describe("offline Lexicon proof verification", () => {
     expect(
       (await verifyLexiconProofAtTrustedHead({ ...input, proof: multiRoot }))
         .tag,
+    ).toBe("proven");
+    const otherRoot = CID.parse(
+      "bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua",
+    );
+    const wrongFirstRoot = await collect(
+      writeCarStream([otherRoot, root], entries),
+    );
+    expect(
+      (await verifyLexiconProofAtTrustedHead({
+        ...input,
+        proof: wrongFirstRoot,
+      })).tag,
     ).toBe("invalid");
 
     for (let i = 0; blocks.size <= 256; i++) await blocks.add({ extra: i });

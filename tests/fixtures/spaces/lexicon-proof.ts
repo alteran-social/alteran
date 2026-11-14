@@ -47,7 +47,11 @@ export async function collect(
   return out;
 }
 
-export async function validFixture(key: Keypair, count = 8) {
+export async function validFixture(
+  key: Keypair,
+  count = 8,
+  did: `did:${string}:${string}` = DID,
+) {
   const storage = new MemoryBlockstore();
   const writes: RecordCreateOp[] = [
     {
@@ -63,13 +67,13 @@ export async function validFixture(key: Keypair, count = 8) {
       record: { $type: "com.example.other", text: `record ${i}` },
     })),
   ];
-  const repo = await Repo.create(storage, DID, key, writes);
+  const repo = await Repo.create(storage, did, key, writes);
   const proof = await collect(
     getRecords(storage, repo.cid, [{ collection: COLLECTION, rkey: NSID }]),
   );
   return {
     nsid: NSID,
-    publisherDid: DID,
+    publisherDid: did,
     signingKey: key.did(),
     currentCommitCid: repo.cid.toString(),
     proof,

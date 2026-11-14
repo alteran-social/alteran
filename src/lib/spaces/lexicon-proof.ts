@@ -11,6 +11,7 @@ import {
 import { sha256 } from "@noble/hashes/sha2.js";
 import { base32 } from "multiformats/bases/base32";
 import { CID } from "multiformats/cid";
+import { isCanonicalRepoCid, parseCanonicalRepoCid } from "./repo-cid";
 
 const SCHEMA_COLLECTION = "com.atproto.lexicon.schema";
 const MAX_CAR_BYTES = 4 * 1024 * 1024;
@@ -44,6 +45,9 @@ export type LexiconProofResult =
   | {
     readonly tag: "proven";
     readonly uri: string;
+    readonly headCid: string;
+    readonly revision: string;
+    readonly definitions: "main-only" | "additional";
     readonly main: ProvenSpaceMain;
   };
 
@@ -69,25 +73,31 @@ export async function verifyLexiconProofAtTrustedHead(
     if (key.jwtAlg !== "ES256" && key.jwtAlg !== "ES256K") {
       return { tag: "invalid" };
     }
-    const expectedHead = CID.parse(currentCommitCid);
-    if (!isCborCid(expectedHead) || !validCarFrames(proof)) {
+    const expectedHead = parseCanonicalRepoCid(currentCommitCid);
+    if (!expectedHead || !validCarFrames(proof)) {
       return { tag: "invalid" };
     }
 
     const reader = await readCarStream(proof);
     const blocks = new Map<string, Uint8Array>();
     try {
-      if (reader.roots.length !== 1 || !reader.roots[0].equals(expectedHead)) {
+      if (reader.roots.length === 0 || !reader.roots[0].equals(expectedHead)) {
         return { tag: "invalid" };
       }
       for await (const block of reader) {
         const id = base32.encode(block.cid.bytes);
-        if (
-          blocks.has(id) || blocks.size >= MAX_BLOCKS ||
-          block.bytes.byteLength > MAX_BLOCK_BYTES
-        ) {
+        if (block.bytes.byteLength > MAX_BLOCK_BYTES) {
           return { tag: "invalid" };
         }
+        const previous = blocks.get(id);
+        if (previous) {
+          if (
+            previous.byteLength !== block.bytes.byteLength ||
+            previous.some((byte, index) => byte !== block.bytes[index])
+          ) return { tag: "invalid" };
+          continue;
+        }
+        if (blocks.size >= MAX_BLOCKS) return { tag: "invalid" };
         blocks.set(id, Uint8Array.from(block.bytes));
       }
     } finally {
@@ -106,8 +116,8 @@ export async function verifyLexiconProofAtTrustedHead(
     if (
       commit.did !== publisherDid || !isValidTid(commit.rev) ||
       commit.sig.byteLength !== 64 ||
-      !isCborCid(CID.asCID(commit.data)) ||
-      (commit.prev !== null && !isCborCid(CID.asCID(commit.prev))) ||
+      !isCanonicalRepoCid(CID.asCID(commit.data)) ||
+      (commit.prev !== null && !isCanonicalRepoCid(CID.asCID(commit.prev))) ||
       !await verifyCommitSig(commit, signingKey)
     ) return { tag: "invalid" };
 
@@ -151,6 +161,11 @@ export async function verifyLexiconProofAtTrustedHead(
     return Object.freeze({
       tag: "proven",
       uri: `at://${publisherDid}/${SCHEMA_COLLECTION}/${nsid}`,
+      headCid: base32.encode(expectedHead.bytes),
+      revision: commit.rev,
+      definitions: Object.keys(record.defs).length === 1
+        ? "main-only"
+        : "additional",
       main: mainDeclaration,
     });
   } catch {
@@ -318,7 +333,7 @@ function findRecordCid(
       if (layer !== keyLayer) return null;
       const value = CID.asCID(raw.v);
       const tree = nullableCborCid(raw.t);
-      if (!isCborCid(value) || tree === undefined) return null;
+      if (!isCanonicalRepoCid(value) || tree === undefined) return null;
       entries.push({ key, value, tree });
       previous = key;
     }
@@ -385,13 +400,7 @@ function pathLayer(path: string): number {
 function nullableCborCid(value: unknown): CID | null | undefined {
   if (value === null) return null;
   const cid = CID.asCID(value);
-  return isCborCid(cid) ? cid : undefined;
-}
-
-function isCborCid(cid: CID | null): cid is CID {
-  return cid !== null && cid.version === 1 && cid.code === 0x71 &&
-    cid.multihash.code === 0x12 &&
-    cid.multihash.digest.byteLength === 32;
+  return isCanonicalRepoCid(cid) ? cid : undefined;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
