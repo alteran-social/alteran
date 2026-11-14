@@ -3,6 +3,7 @@ import {
   isValidNsid,
   isValidRecordKey,
 } from "@atproto/syntax-spaces";
+import { copyPlainArray, copyPlainRecord } from "./plain-values";
 
 export type SpaceRecordAction = "create" | "update" | "delete";
 export type SpaceAction = "read" | "read_self" | SpaceRecordAction;
@@ -22,6 +23,7 @@ export type SpacePermission = {
 
 export type IssuedSpacePermission = Omit<SpacePermission, "collections"> & {
   readonly tag: "issued";
+  readonly collectionSource: "declaration" | "explicit";
   readonly collections: Extract<SpaceCollections, { readonly tag: "explicit" }>;
 };
 
@@ -45,23 +47,35 @@ export type SpaceTypeDeclaration = {
 
 /** Materialize a verified declaration and the granting DID at token issuance. */
 export function materializeSpacePermission(
-  permission: SpacePermission,
+  value: SpacePermission,
   grantingDid: string,
   declaration?: SpaceTypeDeclaration,
 ): IssuedSpacePermission | null {
+  const fields = copyPlainRecord(value, [
+    "spaceType",
+    "authority",
+    "skey",
+    "collections",
+    "actions",
+    "manage",
+  ]);
+  const permission = fields && copyPermissionFields(fields);
   if (
-    !isSpacePermission(permission) || typeof grantingDid !== "string" ||
-    !isValidDid(grantingDid)
+    !permission || typeof grantingDid !== "string" ||
+    !isValidDid(grantingDid) ||
+    (permission.collections.tag === "explicit" &&
+      permission.collections.values.length === 0)
   ) return null;
   let collections = permission.collections;
   if (collections.tag === "declaration") {
     if (permission.spaceType === "*") {
       collections = { tag: "explicit", values: [] };
     } else {
+      const source = copyPlainRecord(declaration, ["spaceType", "collections"]);
+      const values = source && copyPlainArray(source.collections, 128);
       if (
-        !declaration || declaration.spaceType !== permission.spaceType ||
-        !Array.isArray(declaration.collections) ||
-        !declaration.collections.every((collection) =>
+        !source || source.spaceType !== permission.spaceType || !values ||
+        !values.every((collection) =>
           typeof collection === "string" && isValidNsid(collection)
         )
       ) {
@@ -69,7 +83,7 @@ export function materializeSpacePermission(
       }
       collections = {
         tag: "explicit",
-        values: [...new Set(declaration.collections)],
+        values: [...new Set(values as string[])],
       };
     }
   } else {
@@ -78,6 +92,7 @@ export function materializeSpacePermission(
   return {
     ...permission,
     tag: "issued",
+    collectionSource: permission.collections.tag,
     authority: permission.authority === "self"
       ? grantingDid
       : permission.authority,
@@ -116,7 +131,8 @@ const PARAMETERS: ReadonlySet<string> = new Set([
 
 export function parseSpacePermission(scope: unknown): SpacePermission | null {
   if (
-    typeof scope !== "string" || !/^[\x21-\x7e]+$/.test(scope) ||
+    typeof scope !== "string" || scope.length > 8192 ||
+    !/^[\x21-\x7e]+$/.test(scope) ||
     /%(?![0-9a-fA-F]{2})/.test(scope)
   ) return null;
 
@@ -161,6 +177,7 @@ export function parseSpacePermission(scope: unknown): SpacePermission | null {
   const actions = params.getAll("action");
   const manage = params.getAll("manage");
   if (
+    collections.length > 128 || actions.length > 128 || manage.length > 128 ||
     !collections.every(isCollection) || !actions.every(isSpaceAction) ||
     !manage.every(isWriteAction)
   ) return null;
@@ -184,13 +201,18 @@ export function parseSpacePermission(scope: unknown): SpacePermission | null {
  * delegation; it does not authorize an OAuth read from another account's repo.
  */
 export function allowsSpacePermission(
-  permission: IssuedSpacePermission,
-  target: SpacePermissionTarget,
-  operation: SpacePermissionOperation,
+  value: IssuedSpacePermission,
+  targetValue: SpacePermissionTarget,
+  operationValue: SpacePermissionOperation,
 ): boolean {
+  const permission = copyIssuedSpacePermission(value);
+  const target = copyPlainRecord(targetValue, [
+    "spaceType",
+    "authority",
+    "skey",
+  ]);
   if (
-    !isIssuedSpacePermission(permission) ||
-    typeof target !== "object" || target === null ||
+    !permission || !target ||
     typeof target.spaceType !== "string" ||
     typeof target.authority !== "string" ||
     typeof target.skey !== "string" || !isSpaceType(target.spaceType) ||
@@ -204,9 +226,13 @@ export function allowsSpacePermission(
     !covers(permission.skey, target.skey)
   ) return false;
 
-  if (typeof operation !== "object" || operation === null) return false;
+  const operation = copyPlainRecord(operationValue, ["manage"]) ??
+    copyPlainRecord(operationValue, ["action"]) ??
+    copyPlainRecord(operationValue, ["action", "collection"]);
+  if (!operation) return false;
   if ("manage" in operation) {
-    return isWriteAction(operation.manage) &&
+    return typeof operation.manage === "string" &&
+      isWriteAction(operation.manage) &&
       permission.manage.includes(operation.manage);
   }
   if (!("action" in operation)) return false;
@@ -216,7 +242,7 @@ export function allowsSpacePermission(
       permission.actions.includes("read");
   }
   if (
-    !isWriteAction(operation.action) ||
+    typeof operation.action !== "string" || !isWriteAction(operation.action) ||
     !permission.actions.includes(operation.action) ||
     !("collection" in operation) || typeof operation.collection !== "string" ||
     !isValidNsid(operation.collection)
@@ -226,46 +252,93 @@ export function allowsSpacePermission(
     permission.collections.values.includes(operation.collection);
 }
 
-/** Validate the shape of a stored grant; its origin and integrity must be checked separately. */
-export function isIssuedSpacePermission(
+/** Copy and validate a grant; its origin and integrity must be checked separately. */
+export function copyIssuedSpacePermission(
   value: unknown,
-): value is IssuedSpacePermission {
-  return isSpacePermission(value) && "tag" in value && value.tag === "issued" &&
-    value.authority !== "self" && value.collections.tag === "explicit";
+): IssuedSpacePermission | null {
+  const fields = copyPlainRecord(value, [
+    "tag",
+    "collectionSource",
+    "spaceType",
+    "authority",
+    "skey",
+    "collections",
+    "actions",
+    "manage",
+  ]);
+  if (
+    !fields || fields.tag !== "issued" ||
+    (fields.collectionSource !== "declaration" &&
+      fields.collectionSource !== "explicit")
+  ) return null;
+  const permission = copyPermissionFields(fields);
+  if (
+    !permission || permission.authority === "self" ||
+    permission.collections.tag !== "explicit"
+  ) return null;
+  if (
+    fields.collectionSource === "explicit" &&
+    permission.collections.values.length === 0
+  ) return null;
+  if (
+    fields.collectionSource === "declaration" &&
+    (permission.collections.values.includes("*") ||
+      (permission.spaceType === "*" &&
+        permission.collections.values.length !== 0))
+  ) return null;
+  return {
+    ...permission,
+    tag: "issued",
+    collectionSource: fields.collectionSource,
+    collections: permission.collections,
+  };
 }
 
-function isSpacePermission(value: unknown): value is SpacePermission {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
-  }
-  const permission = value as Record<string, unknown>;
+function copyPermissionFields(
+  permission: Record<string, unknown>,
+): SpacePermission | null {
+  const actions = copyPlainArray(permission.actions, 5);
+  const manage = copyPlainArray(permission.manage, 3);
+  const collectionFields = copyPlainRecord(permission.collections, ["tag"]) ??
+    copyPlainRecord(permission.collections, ["tag", "values"]);
   if (
     typeof permission.spaceType !== "string" ||
     !isSpaceType(permission.spaceType) ||
     typeof permission.authority !== "string" ||
     !isAuthority(permission.authority) ||
     typeof permission.skey !== "string" || !isSpaceKey(permission.skey) ||
-    !isStringArray(permission.actions, isSpaceAction) ||
-    !isStringArray(permission.manage, isWriteAction) ||
-    typeof permission.collections !== "object" ||
-    permission.collections === null ||
-    Array.isArray(permission.collections)
-  ) return false;
-  const collections = permission.collections as Record<string, unknown>;
-  return collections.tag === "declaration" ||
-    (collections.tag === "explicit" &&
-      isStringArray(collections.values, isCollection));
-}
-
-function isStringArray(
-  value: unknown,
-  validate: (value: string) => boolean,
-): value is string[] {
-  if (!Array.isArray(value)) return false;
-  for (const item of value) {
-    if (typeof item !== "string" || !validate(item)) return false;
+    !actions ||
+    !actions.every((action) =>
+      typeof action === "string" && isSpaceAction(action)
+    ) ||
+    !manage ||
+    !manage.every((action) =>
+      typeof action === "string" && isWriteAction(action)
+    ) ||
+    !collectionFields
+  ) return null;
+  let collections: SpaceCollections;
+  if (
+    collectionFields.tag === "declaration" &&
+    !Object.hasOwn(collectionFields, "values")
+  ) {
+    collections = { tag: "declaration" };
+  } else {
+    const values = copyPlainArray(collectionFields.values, 128);
+    if (
+      collectionFields.tag !== "explicit" || !values ||
+      !values.every((value) => typeof value === "string" && isCollection(value))
+    ) return null;
+    collections = { tag: "explicit", values: values as string[] };
   }
-  return true;
+  return {
+    spaceType: permission.spaceType,
+    authority: permission.authority,
+    skey: permission.skey,
+    collections,
+    actions: actions as SpaceAction[],
+    manage: manage as SpaceRecordAction[],
+  };
 }
 
 function covers(grant: string, target: string): boolean {

@@ -1,14 +1,22 @@
 import { isValidDid } from "@atproto/syntax-spaces";
 import {
-  isIssuedSpacePermission,
+  copyIssuedSpacePermission,
   type IssuedSpacePermission,
+  materializeSpacePermission,
+  parseSpacePermission,
 } from "./oauth-scopes";
+import { copyPlainArray, copyPlainRecord } from "./plain-values";
+
+export type SpaceConsentGrant = {
+  readonly requestedScope: string;
+  readonly permission: IssuedSpacePermission;
+};
 
 export type SpaceConsentSnapshot = {
   readonly version: 1;
   readonly subject: string;
   readonly clientId: string;
-  readonly permissions: readonly IssuedSpacePermission[];
+  readonly grants: readonly SpaceConsentGrant[];
 };
 
 export type SpaceConsentSnapshotSeal = {
@@ -24,16 +32,20 @@ export type SpaceConsentSnapshotBinding = {
 
 const MAX_SERIALIZED_BYTES = 64 * 1024;
 const MAX_PERMISSIONS = 128;
-const MAX_COLLECTIONS = 128;
 const MAX_CLIENT_ID_LENGTH = 2048;
 
-/** Create a snapshot from permissions materialized by the authorization server. */
+/**
+ * The caller supplies scopes from the trusted authorization request and
+ * permissions materialized from authenticated, current declarations.
+ */
 export async function createSpaceConsentSnapshot(input: {
   readonly subject: string;
   readonly clientId: string;
-  readonly permissions: readonly IssuedSpacePermission[];
+  readonly grants: readonly SpaceConsentGrant[];
 }): Promise<SpaceConsentSnapshotSeal | null> {
-  const snapshot = copySnapshot({ version: 1, ...input });
+  const captured = copyPlainRecord(input, ["subject", "clientId", "grants"]);
+  if (!captured) return null;
+  const snapshot = copySnapshot({ version: 1, ...captured });
   if (!snapshot) return null;
   const serialized = JSON.stringify(snapshot);
   const bytes = encodedSnapshot(serialized);
@@ -49,8 +61,11 @@ export async function restoreSpaceConsentSnapshot(
   serialized: unknown,
   binding: SpaceConsentSnapshotBinding,
 ): Promise<SpaceConsentSnapshot | null> {
-  if (typeof serialized !== "string" || !isValidBinding(binding)) return null;
-  const { subject, clientId, digest } = binding;
+  const captured = copyPlainRecord(binding, ["subject", "clientId", "digest"]);
+  if (
+    typeof serialized !== "string" || !captured || !isValidBinding(captured)
+  ) return null;
+  const { subject, clientId, digest } = captured;
   const bytes = encodedSnapshot(serialized);
   if (!bytes) return null;
 
@@ -66,72 +81,79 @@ export async function restoreSpaceConsentSnapshot(
     snapshot.subject !== subject || snapshot.clientId !== clientId
   ) return null;
   if (await digestBytes(bytes) !== digest) return null;
-  return snapshot;
+  return freezeSnapshot(snapshot);
 }
 
 function copySnapshot(value: unknown): SpaceConsentSnapshot | null {
+  const fields = copyPlainRecord(value, [
+    "version",
+    "subject",
+    "clientId",
+    "grants",
+  ]);
+  const source = fields && copyPlainArray(fields.grants, MAX_PERMISSIONS);
   if (
-    !hasExactKeys(value, ["version", "subject", "clientId", "permissions"]) ||
-    value.version !== 1 || typeof value.subject !== "string" ||
-    !isValidDid(value.subject) ||
-    !isClientId(value.clientId) || !Array.isArray(value.permissions) ||
-    value.permissions.length > MAX_PERMISSIONS
+    !fields || fields.version !== 1 || typeof fields.subject !== "string" ||
+    !isValidDid(fields.subject) || !isClientId(fields.clientId) || !source
   ) return null;
 
-  const permissions: IssuedSpacePermission[] = [];
-  for (const permission of value.permissions) {
-    const copy = copyPermission(permission);
+  const grants: SpaceConsentGrant[] = [];
+  const scopes = new Set<string>();
+  const declarations = new Map<string, string>();
+  for (const grant of source) {
+    const copy = copyGrant(grant, fields.subject);
     if (!copy) return null;
-    permissions.push(copy);
+    if (scopes.has(copy.requestedScope)) return null;
+    scopes.add(copy.requestedScope);
+    if (copy.permission.collectionSource === "declaration") {
+      const { spaceType, collections } = copy.permission;
+      const serialized = JSON.stringify(collections.values);
+      const previous = declarations.get(spaceType);
+      if (previous !== undefined && previous !== serialized) return null;
+      declarations.set(spaceType, serialized);
+    }
+    grants.push(copy);
   }
   return {
     version: 1,
-    subject: value.subject,
-    clientId: value.clientId,
-    permissions,
+    subject: fields.subject,
+    clientId: fields.clientId,
+    grants,
   };
 }
 
-function copyPermission(value: unknown): IssuedSpacePermission | null {
+function copyGrant(value: unknown, subject: string): SpaceConsentGrant | null {
+  const fields = copyPlainRecord(value, ["requestedScope", "permission"]);
   if (
-    !hasExactKeys(value, [
-      "tag",
-      "spaceType",
-      "authority",
-      "skey",
-      "collections",
-      "actions",
-      "manage",
-    ]) ||
-    !hasExactKeys(value.collections, ["tag", "values"]) ||
-    !Array.isArray(value.collections.values) ||
-    value.collections.values.length > MAX_COLLECTIONS ||
-    !Array.isArray(value.actions) || value.actions.length > 5 ||
-    !Array.isArray(value.manage) || value.manage.length > 3 ||
-    !isIssuedSpacePermission(value)
+    !fields || typeof fields.requestedScope !== "string" ||
+    fields.requestedScope.length > 8192
   ) return null;
-
-  return {
-    tag: "issued",
-    spaceType: value.spaceType,
-    authority: value.authority,
-    skey: value.skey,
-    collections: { tag: "explicit", values: [...value.collections.values] },
-    actions: [...value.actions],
-    manage: [...value.manage],
-  };
+  const requested = parseSpacePermission(fields.requestedScope);
+  const permission = copyIssuedSpacePermission(fields.permission);
+  if (!requested || !permission) return null;
+  const expected = materializeSpacePermission(requested, subject, {
+    spaceType: requested.spaceType,
+    collections: permission.collections.values,
+  });
+  if (!expected) return null;
+  const canonical = copyIssuedSpacePermission(expected);
+  if (!canonical || JSON.stringify(canonical) !== JSON.stringify(permission)) {
+    return null;
+  }
+  return { requestedScope: fields.requestedScope, permission };
 }
 
-function hasExactKeys(
-  value: unknown,
-  keys: readonly string[],
-): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
+function freezeSnapshot(snapshot: SpaceConsentSnapshot): SpaceConsentSnapshot {
+  for (const grant of snapshot.grants) {
+    Object.freeze(grant.permission.collections.values);
+    Object.freeze(grant.permission.collections);
+    Object.freeze(grant.permission.actions);
+    Object.freeze(grant.permission.manage);
+    Object.freeze(grant.permission);
+    Object.freeze(grant);
   }
-  const actual = Object.keys(value);
-  return actual.length === keys.length &&
-    actual.every((key) => keys.includes(key));
+  Object.freeze(snapshot.grants);
+  return Object.freeze(snapshot);
 }
 
 function isClientId(value: unknown): value is string {
@@ -139,8 +161,8 @@ function isClientId(value: unknown): value is string {
     /^[\x21-\x7e]+$/.test(value);
 }
 
-function isValidBinding(value: SpaceConsentSnapshotBinding): boolean {
-  return !!value && typeof value.subject === "string" &&
+function isValidBinding(value: Record<string, unknown>): boolean {
+  return typeof value.subject === "string" &&
     isValidDid(value.subject) &&
     isClientId(value.clientId) && typeof value.digest === "string" &&
     /^[0-9a-f]{64}$/.test(value.digest);

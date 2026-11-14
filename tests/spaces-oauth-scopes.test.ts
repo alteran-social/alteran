@@ -214,6 +214,80 @@ describe("Spaces OAuth permissions", () => {
     }
   });
 
+  it("rejects overridden array methods and accessors in permissions", () => {
+    const grant = issued(`space:${TYPE}?action=read_self&collection=${THREAD}`);
+    const actions = [...grant.actions];
+    Object.defineProperty(actions, "includes", { value: () => true });
+    expect(allowsSpacePermission({ ...grant, actions }, TARGET, {
+      action: "delete",
+      collection: THREAD,
+    })).toBe(false);
+    const changing = { ...grant };
+    Object.defineProperty(changing, "actions", {
+      enumerable: true,
+      get: () => ["delete"],
+    });
+    expect(allowsSpacePermission(changing, TARGET, {
+      action: "delete",
+      collection: THREAD,
+    })).toBe(false);
+    const accessorValues = [...grant.collections.values];
+    Object.defineProperty(accessorValues, "0", {
+      enumerable: true,
+      get: () => "*",
+    });
+    expect(allowsSpacePermission(
+      {
+        ...grant,
+        collections: { tag: "explicit", values: accessorValues },
+      },
+      TARGET,
+      { action: "delete", collection: THREAD },
+    )).toBe(false);
+  });
+
+  it("rejects accessor-backed declarations, targets and operations", () => {
+    const raw = permission(`space:${TYPE}`);
+    const declaration = { spaceType: TYPE, collections: [THREAD] };
+    Object.defineProperty(declaration, "collections", {
+      enumerable: true,
+      get: () => [THREAD],
+    });
+    expect(materializeSpacePermission(raw, USER, declaration)).toBeNull();
+    const target = { ...TARGET };
+    Object.defineProperty(target, "authority", {
+      enumerable: true,
+      get: () => USER,
+    });
+    expect(
+      allowsSpacePermission(issued(`space:${TYPE}`), target, {
+        action: "read",
+      }),
+    )
+      .toBe(false);
+    const operation = { action: "read" as const };
+    Object.defineProperty(operation, "action", {
+      enumerable: true,
+      get: () => "read",
+    });
+    expect(allowsSpacePermission(issued(`space:${TYPE}`), TARGET, operation))
+      .toBe(false);
+  });
+
+  it("fails closed for revoked proxies", () => {
+    const proxy = Proxy.revocable({}, {});
+    proxy.revoke();
+    expect(allowsSpacePermission(
+      proxy.proxy as IssuedSpacePermission,
+      TARGET,
+      { action: "read" },
+    )).toBe(false);
+    expect(materializeSpacePermission(
+      proxy.proxy as SpacePermission,
+      USER,
+    )).toBeNull();
+  });
+
   it("treats read_self as narrower than whole-space read regardless of collections", () => {
     const own = issued(`space:${TYPE}?action=read_self&collection=${THREAD}`);
     const all = issued(`space:${TYPE}?action=read`);
@@ -290,6 +364,10 @@ describe("Spaces OAuth permissions", () => {
       spaceType: TYPE,
       collections: [THREAD, "*"],
     })).toBeNull();
+    expect(materializeSpacePermission({
+      ...grant,
+      collections: { tag: "explicit", values: [] },
+    }, USER)).toBeNull();
   });
 
   it("does not infer write targets from a declaration for a wildcard type", () => {
