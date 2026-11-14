@@ -117,6 +117,13 @@ freshness. It has the same public-egress prerequisites as the Lexicon resolver.
 Before using it for signed responses, establish authoritative identity freshness,
 rotation handling and binding to the authenticated account incarnation.
 
+Space XRPC query strings contain private identifiers. The supplied Wrangler
+configuration disables automatic invocation logs and traces while retaining
+application logs; verify those settings in every deployed environment. Audit
+Astro debug hooks, tail consumers, Logpush, other export destinations, proxies
+and edge logs separately before enabling private reads. Local middleware tests
+cannot establish what those systems record.
+
 The experimental request-wide scope resolver permits at most two distinct
 declaration-backed Space types per request, resolved serially under one
 deadline. This deliberately limits interoperability until aggregate Worker
