@@ -82,7 +82,9 @@ export async function getSpaceRecord(
        CASE WHEN typeof(record.repo_rev) = 'text' AND length(CAST(record.repo_rev AS BLOB)) = 13
          THEN record.repo_rev END AS repo_rev,
        CASE WHEN typeof(h.rev) = 'text' AND length(CAST(h.rev AS BLOB)) = 13 THEN h.rev END AS head_rev,
-       CASE WHEN v.epoch_id IS NOT NULL AND v.cid IS record.cid AND v.value_cbor IS record.value_cbor
+       CASE WHEN typeof(record.value_cbor) <> 'blob' THEN 0
+         WHEN length(record.value_cbor) NOT BETWEEN 1 AND ? THEN 0
+         WHEN v.epoch_id IS NOT NULL AND v.cid IS record.cid AND v.value_cbor IS record.value_cbor
          AND v.repo_rev IS record.repo_rev AND typeof(v.value_size) = 'integer'
          AND v.value_size = length(record.value_cbor) AND typeof(h.generation) = 'integer'
          AND h.generation BETWEEN 1 AND 9007199254740991
@@ -97,7 +99,7 @@ export async function getSpaceRecord(
        AND v.repo_did = record.repo_did AND v.path = record.collection || '/' || record.rkey
        AND v.until_generation IS NULL
      WHERE record.space_ref = ? AND record.repo_did = ? AND record.collection = ? AND record.rkey = ?`,
-  ).bind(MAX_RECORD_SIZE, spaceRef, repoDid, collection, rkey)
+  ).bind(MAX_RECORD_SIZE, MAX_RECORD_SIZE, spaceRef, repoDid, collection, rkey)
     .first<{ cid: string | null; value_cbor: number[] | null; repo_rev: string | null;
       head_rev: string | null; consistent: number }>();
   if (!row) return null;

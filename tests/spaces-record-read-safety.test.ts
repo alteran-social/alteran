@@ -70,6 +70,15 @@ describe('Space record read integrity', () => {
     expect(observed.bytes()).toBeLessThan(1_000);
   });
 
+  it('rejects an oversized BLOB before comparing or transferring it', async () => {
+    const env = await fixture();
+    await env.ALTERAN_DB.prepare('UPDATE space_record SET value_cbor = ? WHERE space_ref = ?')
+      .bind(new Uint8Array(1024 * 1024 + 1), SPACE).run();
+    const observed = captureRecord(env);
+    await expect(getSpaceRecord(observed.env, SPACE, DID, COLLECTION, 'a')).rejects.toThrow('Invalid Space record');
+    expect(observed.bytes()).toBeLessThan(1_000);
+  });
+
   it('rejects oversized CID and revision metadata without transferring it from D1', async () => {
     for (const column of ['cid', 'repo_rev']) {
       const env = await fixture();
