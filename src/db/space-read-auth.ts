@@ -71,13 +71,13 @@ export function authorizationValues(principal: VerifiedSpacePrincipal, clockFenc
   return [clockFence, ...sessionValues(principal)];
 }
 
-function sessionValues(principal: VerifiedSpacePrincipal) {
+export function sessionValues(principal: VerifiedSpacePrincipal) {
   return [principal.sessionId, principal.accessJti, principal.did, principal.clientId,
     principal.jkt, principal.scope, principal.expiresAt, principal.proofIssuedAt, DPOP_PROOF_MAX_AGE_SEC,
     principal.proofIssuedAt, DPOP_PROOF_FUTURE_SKEW_SEC, ...oauthSpaceGrantFenceValues(principal.grant)];
 }
 
-function authorizationPredicate(clock: 'clock.seconds' | 'oauth_replay_clock.seconds'): string {
+export function authorizationPredicate(clock: 'clock.seconds' | 'oauth_replay_clock.seconds'): string {
   return `session.id = ? AND session.access_jti = ? AND session.did = ? AND session.client_id = ?
     AND session.dpop_jkt = ? AND session.scope = ? AND session.revoked_at IS NULL
     AND typeof(session.expires_at) = 'integer' AND session.expires_at BETWEEN 0 AND 9007199254740991

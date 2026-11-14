@@ -84,6 +84,17 @@ Deno.test({
       expect(valueBody.records).toHaveLength(1);
       expect(valueBody.records[0].value).toEqual({ $type: config.collection, text: 'worker context' });
       checkPrivateCors(values);
+      const policyPath = 'https://pds.example/xrpc/com.atproto.space.getSpace';
+      const policyQuery = new URLSearchParams({ space: config.space });
+      const policyProof = await new SignJWT({ htm: 'GET', htu: policyPath, iat: Math.floor(Date.now() / 1000),
+        jti: crypto.randomUUID(), nonce: config.nonce, ath })
+        .setProtectedHeader({ typ: 'dpop+jwt', alg: 'ES256', jwk: config.publicJwk }).sign(privateKey);
+      const policy = await worker.dispatchFetch(`${policyPath}?${policyQuery}`, {
+        headers: { authorization: `DPoP ${config.access}`, dpop: policyProof, origin: 'https://client.example' },
+      });
+      expect(policy.status).toBe(200);
+      expect(await policy.json()).toEqual({ space: config.space, policy: { $type: 'com.atproto.personalspace.policy' } });
+      checkPrivateCors(policy);
       const bad = await worker.dispatchFetch(`${path}?${query}`, {
         headers: { authorization: `DPoP ${config.access}`, dpop: 'bad', origin: 'https://client.example' },
       });

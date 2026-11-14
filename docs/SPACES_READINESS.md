@@ -21,7 +21,7 @@ records or advertised as encrypted.
   of the user's own repository for an explicitly granted `read_self` Space
   scope. The scope covers every collection in matching Spaces whether or not
   the request names a collection. Requests for a record MAC are rejected.
-  Space creation, writes, policy operations, credentials and synchronization
+  Space creation, writes, other policy operations, credentials and synchronization
   are not exposed; other Space grants remain unavailable. An independently
   granted `transition:generic` scope continues to authorize its existing
   public-repository operations.
@@ -38,6 +38,15 @@ records or advertised as encrypted.
   without rehashing. Pages larger than 50 (the reference maximum is 1,000),
   cross-prefix cursors and credential access remain unsupported. A Space
   without an active local epoch is denied rather than listed as empty.
+- `com.atproto.space.getSpace` reads a current personal policy when its
+  authority is the authenticated account and a matching `read_self` grant
+  exists. It does not require a repository epoch. Missing, tombstoned and
+  old-incarnation policies return `SpaceNotFound` only after authorization;
+  that response does not mean the Space key is available for creation. Invalid
+  metadata on a selected current-incarnation policy is denied; an invalid
+  authority or incarnation may instead make it ineligible. Member and managed
+  policies, legacy bearer credentials and the reference's `NotAuthorized`
+  response for another authority remain unsupported.
 - `com.atproto.sync.getBlob` authorizes public downloads using public record
   usage and sends public, immutable cache headers. The public blob usage path
   must never treat a space-only reference as public authorization.
@@ -104,8 +113,9 @@ Space request identifiers.
 The `spaces-reference-interop.test.ts`, `spaces-reference-lexicon.test.ts`,
 `spaces-reference-policy.test.ts`, `spaces-reference-ops.test.ts`,
 `spaces-reference-export.test.ts`, `spaces-reference-meta-archive.test.ts`,
-`spaces-reference-meta-members.test.ts`, `spaces-list-reference.test.ts` and
-`spaces-list-values-reference.test.ts`
+`spaces-reference-meta-members.test.ts`, `spaces-list-reference.test.ts`,
+`spaces-list-values-reference.test.ts` and
+`spaces-get-space-reference.test.ts`
 tests can exercise a disposable local reference PDS. Set
 `ALTERAN_REFERENCE_INTEROP_CONFIG` to a JSON file containing
 `pds`, `plc`, `did`, and `accessJwt` for a test account. Both service URLs must
@@ -124,6 +134,8 @@ The list test compares metadata, CIDs, cursor paths and filtered pagination
 against the reference PDS for matching test records.
 The value-list test also compares default, explicit value and metadata modes,
 including Lex JSON links, bytes and escaped text.
+The policy test compares personal-Space reads before the first record and after
+deletion, using a disposable Space in the reference PDS.
 An interrupted request may leave test data behind. Keep the configuration file
 private because it contains an access token. The Lexicon test injects DNS and
 maps test HTTPS origins to the local services; it does not establish live DNS or

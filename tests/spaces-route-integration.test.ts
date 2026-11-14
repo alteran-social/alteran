@@ -12,7 +12,7 @@ Deno.test('external Astro integrations receive the supported Space routes', () =
   });
   const spaceRoutes = routes.filter((route) => route.pattern.startsWith('/xrpc/com.atproto.space.'));
   expect(spaceRoutes.map(({ pattern }) => pattern)).toEqual([
-    '/xrpc/com.atproto.space.getRecord', '/xrpc/com.atproto.space.listRecords',
+    '/xrpc/com.atproto.space.getRecord', '/xrpc/com.atproto.space.getSpace', '/xrpc/com.atproto.space.listRecords',
   ]);
   for (const route of spaceRoutes) {
     const name = route.pattern.slice('/xrpc/'.length);

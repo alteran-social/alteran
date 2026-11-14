@@ -3,6 +3,7 @@ import { onRequest } from '../../src/middleware';
 import { normalizePdsRequestForAstro } from '../../src/worker/normalize-request';
 import { ALL, GET, HEAD } from '../../src/pages/xrpc/com.atproto.space.getRecord';
 import { ALL as listAll, GET as listGet, HEAD as listHead } from '../../src/pages/xrpc/com.atproto.space.listRecords';
+import { ALL as policyAll, GET as policyGet, HEAD as policyHead } from '../../src/pages/xrpc/com.atproto.space.getSpace';
 import { GET as jwks } from '../../src/pages/oauth/jwks';
 import type { Env } from '../../src/env';
 
@@ -33,9 +34,10 @@ export default {
         'dpop-nonce': 'nonce', vary: mode === 'wildcard' ? '*' : 'Origin, accept-signature',
       } });
       const list = new URL(normalized.url).pathname === '/xrpc/com.atproto.space.listRecords';
-      if (normalized.method === 'HEAD') return list ? listHead() : HEAD();
-      if (normalized.method !== 'GET') return list ? listAll() : ALL();
-      return list ? listGet(context as never) : GET(context as never);
+      const policy = new URL(normalized.url).pathname === '/xrpc/com.atproto.space.getSpace';
+      if (normalized.method === 'HEAD') return list ? listHead() : policy ? policyHead() : HEAD();
+      if (normalized.method !== 'GET') return list ? listAll() : policy ? policyAll() : ALL();
+      return list ? listGet(context as never) : policy ? policyGet(context as never) : GET(context as never);
     });
     if (mode !== 'throw' && mode !== 'returned-500' && mode !== 'jwks-real') return run();
     const originalLog = console.log;
