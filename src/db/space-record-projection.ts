@@ -1,6 +1,7 @@
 import { MAX_RECORD_SIZE } from '@atproto/space';
 import { isValidTid } from '@atproto/syntax-spaces';
 import { parseCanonicalRepoCid } from '../lib/spaces/repo-cid';
+import { addIntegerRecord, integerBudgetExceeded } from '../lib/spaces/record-integer-budget';
 import { validSpaceRecordBlock } from './space-record-block';
 import { SpaceStorageError } from './space-types';
 
@@ -45,11 +46,36 @@ export type StoredSpaceRecord = {
   readonly rev: string;
 };
 
+type RecordWithHeader = SpaceRecordRow & { readonly cid: string; readonly value_cbor: number[];
+  readonly repo_rev: string; readonly head_rev: string };
+
+function validRecordHeader(row: SpaceRecordRow): row is RecordWithHeader {
+  return row.consistent === 1 && !!row.cid && parseCanonicalRepoCid(row.cid)?.toString() === row.cid &&
+    !!row.repo_rev && isValidTid(row.repo_rev) && !!row.head_rev && isValidTid(row.head_rev) &&
+    row.repo_rev <= row.head_rev && Array.isArray(row.value_cbor) &&
+    row.value_cbor.length >= 1 && row.value_cbor.length <= MAX_RECORD_SIZE;
+}
+
+/** Inspect a D1 record before allocating a decoded value for its response. */
+export function inspectRecordIntegerBudget(row: SpaceRecordRow): 'valid' | 'invalid' | 'tooLarge' {
+  if (!validRecordHeader(row)) return 'invalid';
+  const source = row.value_cbor;
+  const bytes = new Uint8Array(source.length);
+  for (let index = 0; index < source.length; index++) {
+    const byte: unknown = source[index];
+    if (!Object.hasOwn(source, index) || typeof byte !== 'number' || !Number.isInteger(byte) || byte < 0 || byte > 255) {
+      return 'invalid';
+    }
+    bytes[index] = byte;
+  }
+  const budget = { bytes: 0, items: 0, bigints: 0 };
+  const status = addIntegerRecord(budget, bytes);
+  if (status !== 'valid') return 'invalid';
+  return integerBudgetExceeded(budget) ? 'tooLarge' : 'valid';
+}
+
 export function decodeSpaceRecord(row: SpaceRecordRow, collection: string): StoredSpaceRecord {
-  if (row.consistent !== 1 || !row.cid || parseCanonicalRepoCid(row.cid)?.toString() !== row.cid ||
-    !row.repo_rev || !isValidTid(row.repo_rev) || !row.head_rev || !isValidTid(row.head_rev) ||
-    row.repo_rev > row.head_rev || !Array.isArray(row.value_cbor) ||
-    row.value_cbor.length < 1 || row.value_cbor.length > MAX_RECORD_SIZE ||
+  if (!validRecordHeader(row) ||
     !row.value_cbor.every((byte: unknown) => typeof byte === 'number' && Number.isInteger(byte) && byte >= 0 && byte <= 255)) {
     throw new SpaceStorageError('InvalidRepoState', 'Invalid Space record');
   }

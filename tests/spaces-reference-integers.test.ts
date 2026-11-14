@@ -107,17 +107,10 @@ Deno.test({
         } else {
           assertSanitizedFailure(response.status, body, [space, repo, fields.accessJwt, expected.integer]);
         }
-        let localBody: string | undefined;
-        try {
-          localBody = createSpaceRecordResponse({ space, repo, collection: COLLECTION, rkey: expected.rkey },
-            { cid: expected.cid, value: expected.bytes }, { acceptSignature: null, kemKey: null, requireMac: false }).body;
-        } catch {
-          if (expected.rkey === 'safe') throw new Error('Failed to serialize safe integer');
-        }
-        if (localBody !== undefined) {
-          parseJson(localBody);
-          ensure(sameStrings(integerLiterals(localBody).map(String), [expected.integer]), 'Local integer mismatch');
-        }
+        const localBody = createSpaceRecordResponse({ space, repo, collection: COLLECTION, rkey: expected.rkey },
+          { cid: expected.cid, value: expected.bytes }, { acceptSignature: null, kemKey: null, requireMac: false }).body;
+        parseJson(localBody);
+        ensure(sameStrings(integerLiterals(localBody).map(String), [expected.integer]), 'Local integer mismatch');
       }
 
       const metadata = await requireOk(await rpc(`com.atproto.space.listRecords?${new URLSearchParams({
@@ -141,19 +134,12 @@ Deno.test({
       } else {
         assertSanitizedFailure(list.status, listBody, [space, repo, fields.accessJwt, ...records.map((record) => record.integer)]);
       }
-      let localList: string | undefined;
-      try {
-        localList = createSpaceListResponse({ space, repo, collection: null, cursorPath: null, limit: 50, excludeValues: false },
-          records.map((record) => ({ collection: record.collection, rkey: record.rkey, cid: record.cid,
-            record: { cid: record.cid, value: record.bytes, rev: base.rev } })));
-      } catch {
-        // A rejected page is acceptable; an emitted page must retain every integer exactly.
-      }
-      if (localList !== undefined) {
-        parseJson(localList);
-        ensure(sameStrings(integerLiterals(localList).map(String), records.map((record) => record.integer)),
-          'Local list integer mismatch');
-      }
+      const localList = createSpaceListResponse({ space, repo, collection: null, cursorPath: null, limit: 50, excludeValues: false },
+        records.map((record) => ({ collection: record.collection, rkey: record.rkey, cid: record.cid,
+          record: { cid: record.cid, value: record.bytes, rev: base.rev } })));
+      parseJson(localList);
+      ensure(sameStrings(integerLiterals(localList).map(String), records.map((record) => record.integer)),
+        'Local list integer mismatch');
     } catch {
       throw new Error('Reference integer verification failed');
     } finally {

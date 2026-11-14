@@ -8,6 +8,10 @@ import { createPersonalSpace } from '../src/db/space-lifecycle-create';
 import { createOAuthSession } from './helpers/oauth-store';
 import { createExplicitSpaceConsent } from '../src/lib/spaces/explicit-read-consent';
 import { issueSessionTokens } from '../src/lib/session-tokens';
+import { encode } from '@atproto/lex-cbor';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { CID } from 'multiformats/cid';
+import { create as createDigest } from 'multiformats/hashes/digest';
 
 Deno.test({
   name: 'built Astro worker routes authorized private Space reads',
@@ -242,6 +246,48 @@ Deno.test({
       const head = await worker.dispatchFetch(`${path}?${query}`, { method: 'HEAD' });
       expect(head.status).toBe(405);
       expect(await head.text()).toBe('');
+
+      for (const name of ['space_record_fence_update', 'space_record_version_update_guard', 'space_version_fence_update']) {
+        await database.prepare(`DROP TRIGGER ${name}`).run();
+      }
+      const original = { $type: config.collection, n: 9007199254740993n, min: -9223372036854775808n,
+        bytes: new Uint8Array([0, 255]), ref: CID.parse('bafkreigh2akiscaildcw453tj2mzyv4eicv7yqmx26iubepzwcndhy6eyu') };
+      const input = encode(original as never);
+      const cid = CID.createV1(0x71, createDigest(0x12, sha256(input))).toString();
+      await database.prepare('UPDATE space_record SET cid = ?, value_cbor = ? WHERE space_ref = ? AND rkey = ?')
+        .bind(cid, input, config.space, 'one').run();
+      await database.prepare('UPDATE space_record_version SET cid = ?, value_cbor = ?, value_size = ? WHERE space_ref = ? AND rkey = ?')
+        .bind(cid, input, input.byteLength, config.space, 'one').run();
+      const newProof = await new SignJWT({ htm: 'GET', htu: path, iat: Math.floor(Date.now() / 1000),
+        jti: crypto.randomUUID(), nonce: config.nonce, ath: await sha256b64url(config.access) })
+        .setProtectedHeader({ typ: 'dpop+jwt', alg: 'ES256', jwk: config.publicJwk }).sign(privateKey);
+      const exact = await worker.dispatchFetch(`${path}?${query}`, {
+        headers: { authorization: `DPoP ${config.access}`, dpop: newProof, origin: 'https://client.example' },
+      });
+      expect(exact.status).toBe(200);
+      const raw = await exact.text();
+      expect(raw).toContain('"n":9007199254740993');
+      expect(raw).toContain('"min":-9223372036854775808');
+      const parsed = JSON.parse(raw) as { value: { bytes: { $bytes: string }; ref: { $link: string } }; cid: string };
+      expect(parsed.cid).toBe(cid);
+      expect(parsed.value.bytes).toEqual({ $bytes: 'AP8' });
+      expect(parsed.value.ref.$link).toBe(original.ref.toString());
+      const again = encode({ ...parsed.value, n: 9007199254740993n, min: -9223372036854775808n,
+        bytes: new Uint8Array([0, 255]), ref: CID.parse(parsed.value.ref.$link) } as never);
+      expect(again.length === input.length && again.every((byte, index) => byte === input[index])).toBe(true);
+      const exactList = await signedList({});
+      expect(exactList.status).toBe(200);
+      const listRaw = await exactList.text();
+      expect(listRaw).toContain('"n":9007199254740993');
+      expect(listRaw).toContain('"min":-9223372036854775808');
+      const listParsed = JSON.parse(listRaw) as {
+        records: { value: { bytes: { $bytes: string }; ref: { $link: string } }; cid: string }[] };
+      expect(listParsed.records).toHaveLength(1);
+      expect(listParsed.records[0].cid).toBe(cid);
+      expect(listParsed.records[0].value.bytes).toEqual({ $bytes: 'AP8' });
+      const fromList = encode({ ...listParsed.records[0].value, n: 9007199254740993n, min: -9223372036854775808n,
+        bytes: new Uint8Array([0, 255]), ref: CID.parse(listParsed.records[0].value.ref.$link) } as never);
+      expect(fromList.length === input.length && fromList.every((byte, index) => byte === input[index])).toBe(true);
     } finally {
       await worker.dispose();
     }

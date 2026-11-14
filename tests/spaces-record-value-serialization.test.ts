@@ -60,7 +60,8 @@ Deno.test('record value serializer validates identity, CID, type and Lex JSON ro
   expect(() => serializeSpaceRecordValue(identity, { ...input, cid: other.cid })).toThrow();
   expect(() => serializeSpaceRecordValue(identity, { ...input, rev: 'bad' })).toThrow();
   expect(() => serializeSpaceRecordValue(identity, record({ $type: 'com.example.other' }))).toThrow();
-  expect(() => serializeSpaceRecordValue(identity, record({ $type: identity.collection, n: 9007199254740992n }))).toThrow();
+  expect(serializeSpaceRecordValue(identity, record({ $type: identity.collection, n: 9007199254740992n })).valueJson)
+    .toContain('"n":9007199254740992');
   expect(() => serializeSpaceRecordValue(identity, record({ $type: identity.collection, nested: { $link: 'bad' } }))).toThrow();
 });
 

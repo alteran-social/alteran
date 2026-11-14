@@ -5,7 +5,9 @@ import { isValidTid } from '@atproto/syntax-spaces';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { CID } from 'multiformats/cid';
 import { create as createDigest } from 'multiformats/hashes/digest';
-import { checkRecordCborBounds } from './record-cbor-bounds';
+import { inspectRecordCborDetails } from './record-cbor-bounds';
+import { integerBudgetExceeded, MAX_INTEGER_JSON_BYTES } from './record-integer-budget';
+import { parseIntegerLex, stringifyIntegerLex } from './record-integer-json';
 import { copyPlainRecord } from './plain-values';
 import {
   captureRecordCid, captureRecordIdentity, copyResponseBytes, invalidRecord,
@@ -18,9 +20,14 @@ export { verifySpaceRecordResponseMac, type SpaceRecordMacOptions } from './reco
 
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 
+export class SpaceIntegerResponseTooLarge extends SpaceRecordResponseError {
+  constructor() { super('ResponseTooLarge', 'Space record response is too large'); }
+}
+
 type RecordToSerialize = { readonly cid: string; readonly value: Uint8Array; readonly rev?: string };
 export type SerializedSpaceRecordValue = {
   readonly uri: ReturnType<typeof captureRecordIdentity>['uri']; readonly cid: string; readonly valueJson: string;
+  readonly hasBigint?: true;
 };
 
 /**
@@ -36,7 +43,12 @@ export function serializeSpaceRecordValue(
   if (!fields || (fields.rev !== undefined && !isValidTid(fields.rev))) throw invalidRecord();
   const cid = captureRecordCid(fields.cid);
   const bytes = copyResponseBytes(fields.value, MAX_RECORD_SIZE);
-  if (checkRecordCborBounds(bytes) !== 'valid') throw invalidRecord();
+  const inspected = inspectRecordCborDetails(bytes);
+  if (inspected.tag !== 'valid') throw invalidRecord();
+  const hasBigint = inspected.bigints > 0;
+  if (integerBudgetExceeded({ bytes: bytes.byteLength, items: inspected.items, bigints: inspected.bigints })) {
+    throw new SpaceIntegerResponseTooLarge();
+  }
   const expected = CID.createV1(0x71, createDigest(0x12, sha256(bytes))).toString();
   if (expected !== cid.toString()) throw invalidRecord();
 
@@ -50,15 +62,17 @@ export function serializeSpaceRecordValue(
     // The preflight caps CBOR at 1 MiB and 131,072 items: JSON escaping expands
     // input by at most 6x, with at most 32 extra bytes per item and 16 KiB for
     // the response wrapper. This keeps allocation below the 16 MiB limit.
-    json = lexStringify(value as LexValue);
-    if (json.length > MAX_RESPONSE_BYTES) throw new SpaceRecordResponseError('ResponseTooLarge', 'Space record response is too large');
-    const restored = lexParse(json, { strict: true });
-    if (!equalBytes(encode(restored), bytes)) throw invalidRecord();
+    json = hasBigint ? stringifyIntegerLex(value) : lexStringify(value as LexValue);
+    if (hasBigint && (json.length > MAX_INTEGER_JSON_BYTES ||
+      new TextEncoder().encode(json).byteLength > MAX_INTEGER_JSON_BYTES)) throw new SpaceIntegerResponseTooLarge();
+    if (json.length > MAX_RESPONSE_BYTES) throw responseTooLarge();
+    const restored = hasBigint ? parseIntegerLex(json) : lexParse(json, { strict: true });
+    if (!equalBytes(encode(restored as LexValue), bytes)) throw invalidRecord();
   } catch (error) {
     if (error instanceof SpaceRecordResponseError) throw error;
     throw invalidRecord();
   }
-  return { uri: captured.uri, cid: cid.toString(), valueJson: json };
+  return { uri: captured.uri, cid: cid.toString(), valueJson: json, ...(hasBigint ? { hasBigint: true } : {}) };
 }
 
 /** Serialize a response from the verified, authorized record reader. */
@@ -69,11 +83,17 @@ export function createSpaceRecordResponse(
 ): { readonly body: string; readonly headers: Readonly<Record<string, string>> } {
   const serialized = serializeSpaceRecordValue(identity, record);
   const body = `{"uri":${JSON.stringify(serialized.uri)},"cid":${JSON.stringify(serialized.cid)},"value":${serialized.valueJson}}`;
+  if (serialized.hasBigint && (body.length > MAX_INTEGER_JSON_BYTES ||
+    new TextEncoder().encode(body).byteLength > MAX_INTEGER_JSON_BYTES)) throw new SpaceIntegerResponseTooLarge();
   if (body.length > MAX_RESPONSE_BYTES || new TextEncoder().encode(body).byteLength > MAX_RESPONSE_BYTES) {
-    throw new SpaceRecordResponseError('ResponseTooLarge', 'Space record response is too large');
+    throw responseTooLarge();
   }
   const headers = recordResponseMacHeaders(serialized.uri, captureRecordCid(serialized.cid), mac);
   return { body, headers: Object.freeze({ 'content-type': 'application/json', 'cache-control': 'private, no-store', ...headers }) };
+}
+
+function responseTooLarge(): SpaceRecordResponseError {
+  return new SpaceRecordResponseError('ResponseTooLarge', 'Space record response is too large');
 }
 
 function equalBytes(left: Uint8Array, right: Uint8Array): boolean {

@@ -5,7 +5,7 @@ import {
   dpopResourceUnauthorized, handleResourceAuthError, scopeMissingResponse, verifyResourceRequest,
 } from '../../lib/oauth/resource';
 import { captureRecordIdentity } from '../../lib/spaces/record-response-input';
-import { createSpaceRecordResponse } from '../../lib/spaces/record-response';
+import { createSpaceRecordResponse, SpaceIntegerResponseTooLarge } from '../../lib/spaces/record-response';
 import { mergeHeaderTokens } from '../../lib/http-headers';
 
 export const prerender = false;
@@ -61,11 +61,15 @@ export async function GET({ locals, request }: APIContext): Promise<Response> {
         response = new Response(serialized.body, { status: 200, headers: serialized.headers });
       } else if (result.tag === 'notFound') {
         response = error('RecordNotFound', `Could not locate record: ${captureRecordIdentity(target).uri}`, 400);
+      } else if (result.tag === 'tooLarge') {
+        response = error('InvalidRequest', 'Requested record exceeds supported size or complexity', 400);
       } else {
         response = error('InternalServerError', 'Internal server error', 500);
       }
-    } catch {
-      response = error('InternalServerError', 'Internal server error', 500);
+    } catch (cause) {
+      response = cause instanceof SpaceIntegerResponseTooLarge
+        ? error('InvalidRequest', 'Requested record exceeds supported size or complexity', 400)
+        : error('InternalServerError', 'Internal server error', 500);
     }
     let completed = false;
     try {

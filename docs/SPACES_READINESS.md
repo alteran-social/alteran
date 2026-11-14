@@ -30,9 +30,12 @@ records or advertised as encrypted.
   only. Pages contain at most 50 records and are ordered by full record URI,
   descending. Cursors must belong to the requested Space and repository, and
   every page is reauthorized; pages are not a single snapshot. A value-bearing
-  page is limited to 1 MiB of CBOR and 131,072 CBOR items in total. Metadata
-  pages compare at most 4 MiB of stored values in D1. An over-budget page is
-  rejected in full: a smaller limit can help for multi-record pages, but a
+  page is limited to 1 MiB of CBOR and 131,072 CBOR items in total. A record or
+  value page containing integers outside JavaScript's safe range has stricter
+  provisional limits: 64 KiB of CBOR, 4,096 CBOR items, 64 such integers and
+  1 MiB of JSON. Metadata pages compare at most 4 MiB of stored values in D1.
+  An over-budget page is rejected in full: a smaller limit can help for
+  multi-record pages, but a
   single record can exceed the supported complexity. Value reads validate
   record bytes and CIDs; metadata-only reads check current-version consistency
   without rehashing. Pages larger than 50 (the reference maximum is 1,000),
@@ -232,8 +235,12 @@ Record decoding is limited to 131,072 CBOR items and 100 levels per record.
 The internal mutation path validates the CIDs of touched records and limits
 their combined existing bytes to 4 MiB per batch, so some otherwise valid
 large update or delete batches must be split. It relies on fenced D1 writers
-and previously verified state for untouched records. The record JSON helper
-cannot losslessly serialize integers outside JavaScript's safe range. Before
+and previously verified state for untouched records. Signed 64-bit response
+integers are emitted as exact JSON number tokens when the runtime exposes
+`JSON.rawJSON` and source-aware `JSON.parse`; the helper otherwise fails closed.
+Clients that use ordinary `JSON.parse` can still round those numbers. The
+lossless path uses the pinned `@atproto/lex-json` internal special-object parser;
+run its strict-parser compatibility tests when updating that dependency. Before
 exposure, measure worst-case concurrent decoding, D1 response expansion and
 serialization against the target Worker's CPU and memory limits.
 

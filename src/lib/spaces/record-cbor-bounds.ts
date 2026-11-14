@@ -3,10 +3,14 @@ import { MAX_RECORD_SIZE } from '@atproto/space';
 export const MAX_RECORD_CBOR_ITEMS = 131_072;
 const MAX_DEPTH = 100;
 const MAX_INTEGER = (1n << 63n) - 1n;
+const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 
 export type RecordCborBounds = 'valid' | 'invalid' | 'unsupported';
 export type RecordCborInspection =
   | { readonly tag: 'valid'; readonly items: number }
+  | { readonly tag: 'invalid' | 'unsupported' };
+export type RecordCborDetails =
+  | { readonly tag: 'valid'; readonly items: number; readonly bigints: number }
   | { readonly tag: 'invalid' | 'unsupported' };
 
 const invalid = Object.freeze({ tag: 'invalid' } as const);
@@ -19,11 +23,18 @@ export function checkRecordCborBounds(bytes: Uint8Array): RecordCborBounds {
 
 /** Count items so callers can bound aggregate decoder work before allocation. */
 export function inspectRecordCborBounds(bytes: Uint8Array, itemLimit = MAX_RECORD_CBOR_ITEMS): RecordCborInspection {
+  const result = inspectRecordCborDetails(bytes, itemLimit);
+  return result.tag === 'valid' ? { tag: 'valid', items: result.items } : result;
+}
+
+/** Count integers requiring an exact JSON source token before decoding a record. */
+export function inspectRecordCborDetails(bytes: Uint8Array, itemLimit = MAX_RECORD_CBOR_ITEMS): RecordCborDetails {
   if (!(bytes instanceof Uint8Array) || bytes.byteLength < 1 || bytes.byteLength > MAX_RECORD_SIZE) return invalid;
   if (!Number.isSafeInteger(itemLimit) || itemLimit < 0 || itemLimit > MAX_RECORD_CBOR_ITEMS) return invalid;
   const pending = [1];
   let offset = 0;
   let items = 0;
+  let bigints = 0;
   while (pending.length) {
     if (pending[pending.length - 1] === 0) {
       pending.pop();
@@ -44,6 +55,7 @@ export function inspectRecordCborBounds(bytes: Uint8Array, itemLimit = MAX_RECOR
     }
     if (major === 0 || major === 1) {
       if (argument > MAX_INTEGER) return invalid;
+      if (major === 0 ? argument > MAX_SAFE : argument >= MAX_SAFE) bigints++;
     } else if (major === 2 || major === 3) {
       if (argument > BigInt(bytes.length - offset)) return invalid;
       offset += Number(argument);
@@ -56,5 +68,5 @@ export function inspectRecordCborBounds(bytes: Uint8Array, itemLimit = MAX_RECOR
       return invalid;
     }
   }
-  return offset === bytes.length ? { tag: 'valid', items } : invalid;
+  return offset === bytes.length ? { tag: 'valid', items, bigints } : invalid;
 }

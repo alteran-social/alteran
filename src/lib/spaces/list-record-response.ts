@@ -1,6 +1,7 @@
 import type { ListedSpaceRecord } from '../../db/space-authorized-list';
 import type { SpaceListRequest } from './list-records-request';
 import { serializeSpaceRecordValue, SpaceRecordResponseError } from './record-response';
+import { addIntegerRecord, integerBudgetExceeded, MAX_INTEGER_JSON_BYTES } from './record-integer-budget';
 
 const MAX_PAGE_RESPONSE_BYTES = 16 * 1024 * 1024;
 
@@ -14,13 +15,19 @@ export function createSpaceListResponse(
     return JSON.stringify({ records: records.map(({ collection, rkey, cid }) => ({ collection, rkey, cid })),
       ...(cursor ? { cursor } : {}) });
   }
+  const budget = { bytes: 0, items: 0, bigints: 0 };
+  for (const item of records) {
+    if (!item.record || addIntegerRecord(budget, item.record.value) !== 'valid') throw new Error('Invalid Space record value');
+  }
+  if (integerBudgetExceeded(budget)) throw new SpaceListResponseTooLarge();
+  const maximum = budget.bigints > 0 ? MAX_INTEGER_JSON_BYTES : MAX_PAGE_RESPONSE_BYTES;
   const chunks: string[] = [];
   const encoder = new TextEncoder();
   let bytes = 0;
   const append = (part: string) => {
-    if (part.length > MAX_PAGE_RESPONSE_BYTES - bytes) throw new SpaceListResponseTooLarge();
+    if (part.length > maximum - bytes) throw new SpaceListResponseTooLarge();
     bytes += encoder.encode(part).byteLength;
-    if (bytes > MAX_PAGE_RESPONSE_BYTES) throw new SpaceListResponseTooLarge();
+    if (bytes > maximum) throw new SpaceListResponseTooLarge();
     chunks.push(part);
   };
   append('{"records":[');

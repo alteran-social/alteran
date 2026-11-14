@@ -7,7 +7,7 @@ import { parseSpaceRef } from './space-ref';
 import { authorizationSql, authorizationValues, authorizeSpaceRead, completion, consumeSpaceRead,
   windowIsLive, windowIsLiveAt } from './space-read-auth';
 import { ASSERT_CLOCK, REFRESH_CLOCK } from './oauth-replay';
-import { decodeSpaceRecord, SPACE_RECORD_COLUMNS, SPACE_RECORD_TABLES,
+import { decodeSpaceRecord, inspectRecordIntegerBudget, SPACE_RECORD_COLUMNS, SPACE_RECORD_TABLES,
   type SpaceRecordRow, type StoredSpaceRecord } from './space-record-projection';
 import { SpaceStorageError } from './space-types';
 
@@ -17,6 +17,7 @@ export type AuthorizedSpaceRecordResult =
   | { readonly tag: 'found'; readonly record: StoredSpaceRecord; readonly complete: CompleteRead }
   | { readonly tag: 'notFound'; readonly complete: CompleteRead }
   | { readonly tag: 'invalid'; readonly complete: CompleteRead }
+  | { readonly tag: 'tooLarge'; readonly complete: CompleteRead }
   | { readonly tag: 'unauthorized' };
 
 type SelectedRow = SpaceRecordRow & {
@@ -131,8 +132,14 @@ export async function readAuthorizedSpaceRecord(
   }
   let record: StoredSpaceRecord | null = null;
   let invalid = false;
+  let tooLarge = false;
   try {
-    if (records.length) record = decodeSpaceRecord(records[0], collection);
+    if (records.length) {
+      const budget = inspectRecordIntegerBudget(records[0]);
+      if (budget === 'tooLarge') tooLarge = true;
+      else if (budget === 'invalid') invalid = true;
+      else record = decodeSpaceRecord(records[0], collection);
+    }
   } catch {
     invalid = true;
   }
@@ -141,6 +148,7 @@ export async function readAuthorizedSpaceRecord(
     return { tag: 'unauthorized' };
   }
   const complete = completion(readHandle, epoch);
+  if (tooLarge) return Object.freeze({ tag: 'tooLarge', complete });
   if (invalid) return Object.freeze({ tag: 'invalid', complete });
   return record ? Object.freeze({ tag: 'found', record, complete }) : Object.freeze({ tag: 'notFound', complete });
 }

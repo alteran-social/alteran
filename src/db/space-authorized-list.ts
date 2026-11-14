@@ -4,7 +4,8 @@ import type { Env } from '../env';
 import { DPOP_PROOF_FUTURE_SKEW_SEC, DPOP_PROOF_MAX_AGE_SEC } from '../lib/oauth/dpop-window';
 import type { VerifiedSpacePrincipal } from '../lib/oauth/space-principal';
 import { parseSpaceListRequest } from '../lib/spaces/list-records-request';
-import { inspectRecordCborBounds, MAX_RECORD_CBOR_ITEMS } from '../lib/spaces/record-cbor-bounds';
+import { inspectRecordCborDetails, MAX_RECORD_CBOR_ITEMS } from '../lib/spaces/record-cbor-bounds';
+import { integerBudgetExceeded } from '../lib/spaces/record-integer-budget';
 import { captureRecordIdentity } from '../lib/spaces/record-response-input';
 import { parseCanonicalRepoCid } from '../lib/spaces/repo-cid';
 import { ASSERT_CLOCK, REFRESH_CLOCK } from './oauth-replay';
@@ -243,6 +244,7 @@ export async function listAuthorizedSpaceRecords(
     try {
       let totalBytes = 0;
       let totalItems = 0;
+      let totalBigints = 0;
       for (const row of records) {
         const bytes = row.value_cbor;
         if (!Array.isArray(bytes) || bytes.length < 1 || bytes.length > MAX_RECORD_SIZE) return failure('invalid');
@@ -254,11 +256,13 @@ export async function listAuthorizedSpaceRecords(
             return failure('invalid');
           }
         }
-        const inspected = inspectRecordCborBounds(Uint8Array.from(bytes), MAX_RECORD_CBOR_ITEMS - totalItems);
+        const inspected = inspectRecordCborDetails(Uint8Array.from(bytes), MAX_RECORD_CBOR_ITEMS - totalItems);
         if (inspected.tag !== 'valid') return failure(inspected.tag === 'unsupported' ? 'tooLarge' : 'invalid');
         totalItems += inspected.items;
+        totalBigints += inspected.bigints;
         if (totalItems > MAX_RECORD_CBOR_ITEMS) return failure('tooLarge');
       }
+      if (integerBudgetExceeded({ bytes: totalBytes, items: totalItems, bigints: totalBigints })) return failure('tooLarge');
       entries = records.map((row, index) => ({
         ...entries[index],
         record: decodeSpaceRecord(row as SpaceRecordRow, entries[index].collection),
