@@ -134,7 +134,7 @@ Deno.test({
       } else {
         assertSanitizedFailure(list.status, listBody, [space, repo, fields.accessJwt, ...records.map((record) => record.integer)]);
       }
-      const localList = createSpaceListResponse({ space, repo, collection: null, cursorPath: null, limit: 50, excludeValues: false },
+      const localList = createSpaceListResponse({ space, repo, collection: null, cursor: { tag: 'unbounded' }, limit: 50, excludeValues: false },
         records.map((record) => ({ collection: record.collection, rkey: record.rkey, cid: record.cid,
           record: { cid: record.cid, value: record.bytes, rev: base.rev } })));
       parseJson(localList);

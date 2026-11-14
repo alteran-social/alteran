@@ -75,15 +75,17 @@ export async function listAuthorizedSpaceRecords(
   const path = `(record.collection || '/' || record.rkey) COLLATE BINARY`;
   const filter: string[] = [];
   const filters: (string | number)[] = [];
-  if (target.collection !== null) {
+  if (target.cursor.tag === 'empty') {
+    filter.push('0');
+  } else if (target.collection !== null) {
     const collectionUpper = `${target.collection}0`;
-    const upper = target.cursorPath !== null && target.cursorPath < collectionUpper
-      ? target.cursorPath : collectionUpper;
+    const upper = target.cursor.tag === 'before' && target.cursor.path < collectionUpper
+      ? target.cursor.path : collectionUpper;
     filter.push(`${path} >= ? COLLATE BINARY`, `${path} < ? COLLATE BINARY`);
     filters.push(`${target.collection}/`, upper);
-  } else if (target.cursorPath !== null) {
+  } else if (target.cursor.tag === 'before') {
     filter.push(`${path} < ? COLLATE BINARY`);
-    filters.push(target.cursorPath);
+    filters.push(target.cursor.path);
   }
   const result = await (async () => {
     const page = db.prepare(`${authorization}, ${genesis}, candidates AS MATERIALIZED (
@@ -190,6 +192,10 @@ export async function listAuthorizedSpaceRecords(
     sentinels[0].session_expires_at !== expiry || records.some((row) => row.session_expires_at !== null)) {
     return { tag: 'unauthorized' };
   }
+  if (target.cursor.tag === 'empty' &&
+    (records.length !== 0 || sentinels[0].too_large !== 0 || sentinels[0].budget_total !== 0)) {
+    return { tag: 'unauthorized' };
+  }
   if (epoch === null) {
     const sentinel = sentinels[0];
     const createdAt = final.genesis_created_at;
@@ -221,7 +227,7 @@ export async function listAuthorizedSpaceRecords(
   if (sentinels[0].too_large !== 0 && sentinels[0].too_large !== 1) return failure('invalid');
   if (sentinels[0].too_large === 1) return records.length === 0 ? failure('tooLarge') : failure('invalid');
   if (records.some((row) => row.too_large !== 0)) return failure('invalid');
-  let previous = target.cursorPath;
+  let previous = target.cursor.tag === 'before' ? target.cursor.path : null;
   let cursor: string | undefined;
   let entries: ListedSpaceRecord[];
   try {

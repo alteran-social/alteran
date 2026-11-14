@@ -54,6 +54,22 @@ function interceptCompletion(env: GenesisFixture['env'], phase: 'before-sample' 
 }
 
 describe('fresh personal Space list races', () => {
+  it('reauthorizes an empty cursor range across the first genesis write', async () => {
+    for (const phase of ['before-selection', 'after-selection'] as const) {
+      const f = await policyFixture();
+      const watched = interceptRead(f.env, {
+        before: phase === 'before-selection' ? async () => await firstWrite(f) : undefined,
+        after: phase === 'after-selection' ? async () => await firstWrite(f) : undefined,
+      });
+      const request = await signedGenesisRequest(f, { env: watched.env, query: { cursor: EMPTY } });
+      watched.arm();
+      const response = await GET(listContext(watched.env, request));
+      expect(response.status).toBe(phase === 'before-selection' ? 200 : 401);
+      if (phase === 'before-selection') expect(await response.json()).toEqual({ records: [] });
+      else expect(await response.text()).not.toContain('records');
+    }
+  });
+
   it('projects no genesis witness when revocation precedes selection', async () => {
     const f = await policyFixture();
     const watched = interceptRead(f.env, { before: async () => {

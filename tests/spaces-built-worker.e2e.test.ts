@@ -237,6 +237,21 @@ Deno.test({
           headers: { authorization: `DPoP ${config.access}`, dpop: proof, origin: 'https://client.example' },
         });
       }
+      for (const excludeValues of ['true', 'false']) {
+        for (const [cursor, count] of [
+          ['', 1], [config.space, 0], ['at://aaa.example/com.example.note/a', 0],
+          ['at://zzz.example/com.example.note/a', 1],
+          [`${config.space}/${config.repo}/${config.collection}/one`, 0],
+          [`${config.space}/${config.repo}/${config.collection}/one#/x%2Fz`, 1],
+        ] as const) {
+          const response = await signedList({ cursor, excludeValues, collection: config.collection, limit: '1000' });
+          expect(response.status).toBe(200);
+          const body = await response.json() as { records: { rkey: string }[]; cursor?: string };
+          expect(body.records).toHaveLength(count);
+          if (count) expect(body.records[0].rkey).toBe('one');
+          expect(body.cursor).toBeUndefined();
+        }
+      }
       const valueQuery = new URLSearchParams({ space: config.space, repo: config.repo });
       const deniedValues = await worker.dispatchFetch(`${listPath}?${valueQuery}`, { headers: { origin: 'https://client.example' } });
       expect(deniedValues.status).toBe(401);

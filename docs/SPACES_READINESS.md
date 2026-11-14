@@ -30,8 +30,9 @@ records or advertised as encrypted.
   only. Requests may specify a limit from 1 to 1,000; each page contains at
   most 50 records and is ordered by full record URI, descending. Clients must
   follow the returned cursor even when a page is shorter than the requested
-  limit. Cursors must belong to the requested Space and repository, and
-  every page is reauthorized; pages are not a single snapshot. A value-bearing
+  limit. Valid AT URI cursors use the reference PDS's literal ordering; the
+  request URL is limited to 16,384 characters. Every page is reauthorized;
+  pages are not a single snapshot. A value-bearing
   page is limited to 1 MiB of CBOR and 131,072 CBOR items in total. A record or
   value page containing integers outside JavaScript's safe range has stricter
   provisional limits: 64 KiB of CBOR, 4,096 CBOR items, 64 such integers and
@@ -40,8 +41,8 @@ records or advertised as encrypted.
   multi-record pages, but a
   single record can exceed the supported complexity. Value reads validate
   record bytes and CIDs; metadata-only reads check current-version consistency
-  without rehashing. Pages larger than 50 (the reference maximum is 1,000),
-  cross-prefix cursors and credential access remain unsupported. A fresh
+  without rehashing. Pages larger than 50 (the reference maximum is 1,000)
+  and credential access remain unsupported. A fresh
   personal Space returns an empty page only while its current policy and the
   absence of repository history are verified. Other Spaces without an active
   local epoch are denied rather than assumed empty.

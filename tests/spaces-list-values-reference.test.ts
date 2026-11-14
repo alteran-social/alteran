@@ -138,6 +138,67 @@ Deno.test({
         expect(actual.cursor === undefined).toBe(true);
         expect(reference.cursor === undefined).toBe(true);
       }
+      const longPrefix = 'at://zzz.example/com.example.note/a#/';
+      const longestCursor = longPrefix + 'a'.repeat(8192 - longPrefix.length);
+      const cursors: ((space: string, repo: string) => string | undefined)[] = [
+        () => undefined,
+        () => '',
+        (target, author) => `${target}/${author}/${COLLECTION}/one`,
+        (target, author) => `${target}/${author}/${COLLECTION}/one#/x%2Fz`,
+        (target, author) => `${target}/${author}/${COLLECTION}/one#/x%2fz`,
+        (target) => target,
+        () => 'at://aaa.example/com.example.note/a',
+        () => 'at://zzz.example/com.example.note/a',
+        () => 'at://did:example:%GG/com.example.note/a',
+        () => longestCursor,
+        (target) => `${target}/did:aaa:a/${COLLECTION}/one`,
+        (target) => `${target}/did:zzz:z/${COLLECTION}/one`,
+        (_target, author) => `at://${author}/space/com.example.notes/aaa`,
+        (_target, author) => `at://${author}/space/com.example.notes/zzz`,
+      ];
+      for (const makeCursor of cursors) {
+        for (const excludeValues of ['true', 'false']) {
+          for (const collection of [undefined, COLLECTION]) {
+            const common = { limit: '2', excludeValues, ...(collection ? { collection } : {}) };
+            const expected = records.filter((item) => (!collection || item.collection === collection) &&
+              (!makeCursor(SPACE, DID) || `${SPACE}/${DID}/${item.collection}/${item.rkey}` < (makeCursor(SPACE, DID) ?? '')))
+              .map(({ collection: nsid, rkey }) => `${nsid}/${rkey}`).sort().reverse();
+            let referenceCursor = makeCursor(space, repo);
+            let alteranCursor = makeCursor(SPACE, DID);
+            const paths: string[] = [];
+            let finished = false;
+            for (let page = 0; page < 5; page++) {
+              const reference = await referencePage({ ...common, ...(referenceCursor !== undefined ? { cursor: referenceCursor } : {}) });
+              const actual = await alteranPage({ ...common, ...(alteranCursor !== undefined ? { cursor: alteranCursor } : {}) });
+              expect(isDeepStrictEqual(actual.records, reference.records)).toBe(true);
+              expect(cursorPath(actual.cursor, SPACE, DID) === cursorPath(reference.cursor, space, repo)).toBe(true);
+              paths.push(...actual.records.map(({ collection: nsid, rkey }) => `${nsid}/${rkey}`));
+              referenceCursor = reference.cursor;
+              alteranCursor = actual.cursor;
+              if (!referenceCursor) { finished = true; break; }
+            }
+            expect(finished).toBe(true);
+            expect(paths).toEqual(expected);
+          }
+        }
+      }
+      for (const invalid of [`${longestCursor}a`, 'at://zzz.example/com.example.note/a/',
+        'at://zzz.example/com.example.note/a?x=1', 'at://zzz.example/com.example.note/a#/bad%GG']) {
+        const remoteQuery = new URLSearchParams({ space, repo, cursor: invalid });
+        const reference = await referenceRequest(`${origin}/xrpc/com.atproto.space.listRecords?${remoteQuery}`, authorization);
+        expect(reference.status).toBe(400);
+        const remoteBody = await readReferenceResponse(reference);
+        expect(isObject(remoteBody) && remoteBody.error === 'InvalidCursor').toBe(true);
+        const localQuery = new URLSearchParams({ space: SPACE, repo: DID, cursor: invalid });
+        const request = new Request(`${ENDPOINT}?${localQuery}`, { headers: {
+          authorization: `DPoP ${fixture.tokens.accessJwt}`,
+          dpop: await signResourceDpop(fixture.env, fixture.key, 'GET', ENDPOINT, fixture.tokens.accessJwt),
+        } });
+        const actual = await GET({ locals: { env: fixture.env }, request, url: new URL(request.url) } as never);
+        expect(actual.status).toBe(400);
+        const localBody = await readReferenceResponse(actual);
+        expect(isObject(localBody) && localBody.error === 'InvalidCursor').toBe(true);
+      }
     } finally {
       if (attempted) {
         const deleted = await referenceRequest(`${origin}/xrpc/com.atproto.space.deleteSpace`, authorization, {

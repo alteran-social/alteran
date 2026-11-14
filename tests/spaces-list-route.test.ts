@@ -4,6 +4,8 @@ import { authorizedReadFixture, interceptRead, COLLECTION, DID, OTHER_COLLECTION
 import { makeDpopKey, signResourceDpop } from './helpers/oauth';
 import { createOAuthSession } from './helpers/oauth-store';
 import { issueSessionTokens } from '../src/lib/session-tokens';
+import { loadActiveSpaceOwner } from '../src/db/space-owner';
+import { beginPersonalSpaceDeletion } from '../src/db/space-lifecycle-delete';
 import { GET, HEAD, ALL } from '../src/pages/xrpc/com.atproto.space.listRecords';
 
 const PATH = 'https://pds.example/xrpc/com.atproto.space.listRecords';
@@ -72,7 +74,7 @@ function failCompletion(env: TestEnv): TestEnv {
   return { ...env, ALTERAN_DB: wrapped };
 }
 
-function switchDatabaseAfterCompletion(env: TestEnv) {
+function switchDatabaseAfterCompletion(env: TestEnv, beforeFinalRead?: () => Promise<void>) {
   const database = env.ALTERAN_DB;
   const watched = { ...env };
   let changed = false;
@@ -85,8 +87,9 @@ function switchDatabaseAfterCompletion(env: TestEnv) {
           const bound = prepared.bind(...values);
           return new Proxy(bound, { get(boundTarget, boundKey) {
             if (boundKey === 'first') return async () => {
+              await beforeFinalRead?.();
               const row = await bound.first();
-              watched.ALTERAN_DB = new Proxy(database, {});
+              if (!beforeFinalRead) watched.ALTERAN_DB = new Proxy(database, {});
               changed = true;
               return row;
             };
@@ -284,5 +287,97 @@ describe('owner-only Space listRecords route', () => {
     expect(response.status).toBe(401);
     expect(await response.text()).not.toContain('private completion failure');
     assertPrivate(response);
+  });
+
+  it('authenticates and reauthorizes literal empty cursor ranges', async () => {
+    const f = await authorizedReadFixture();
+    for (const excludeValues of ['true', 'false']) {
+      for (const collection of [undefined, COLLECTION]) {
+        const params = { cursor: SPACE, excludeValues, ...(collection ? { collection } : {}) };
+        const response = await GET(context(f.env, await signedRequest(f, params)));
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ records: [] });
+      }
+    }
+    const missing = new Request(`${PATH}?${new URLSearchParams({ ...PARAMS, cursor: SPACE })}`);
+    expect((await GET(context(f.env, missing))).status).toBe(401);
+    const unbound = await GET(context(f.env, await signedRequest(f, { cursor: SPACE }, { key: await makeDpopKey() })));
+    expect(unbound.status).toBe(400);
+    expect((await unbound.json() as { error: string }).error).toBe('InvalidToken');
+    const outsideSpace = `at://${DID}/space/com.example.notes/not-granted`;
+    const outsideGrant = await GET(context(f.env, await signedRequest(f, { space: outsideSpace, cursor: outsideSpace })));
+    expect(outsideGrant.status).toBe(401);
+    const first = await signedRequest(f, { cursor: SPACE });
+    expect((await GET(context(f.env, first))).status).toBe(200);
+    const replay = await GET(context(f.env, await signedRequest(f, { cursor: SPACE }, { proof: first.headers.get('dpop') ?? '' })));
+    expect(replay.status).toBe(400);
+    expect((await replay.json() as { error: string }).error).toBe('InvalidToken');
+  });
+
+  it('rejects invalid selection witnesses for empty cursor ranges', async () => {
+    for (const fault of ['candidate', 'budget', 'too-large'] as const) {
+      const f = await authorizedReadFixture();
+      const watched = watchPage(f, (rows) => {
+        const sentinel = rows.find((row) => row.sentinel === 1);
+        if (!sentinel) throw new Error('Missing selection sentinel');
+        if (fault === 'candidate') rows.push({ ...sentinel, sentinel: 0, session_expires_at: null });
+        if (fault === 'budget') sentinel.budget_total = 1;
+        if (fault === 'too-large') sentinel.too_large = 1;
+      });
+      const request = await signedRequest(f, { cursor: SPACE }, { env: watched.env });
+      watched.arm();
+      const response = await GET(context(watched.env, request));
+      expect(watched.seen()).toBe(true);
+      expect(response.status).toBe(401);
+      expect(await response.text()).not.toContain('records');
+    }
+  });
+
+  it('withholds empty cursor ranges on revocation, epoch deletion and completion faults', async () => {
+    for (const mode of ['before-revoked', 'after-revoked', 'completion-revoked', 'expired', 'rotated', 'account',
+      'deleted', 'binding', 'completion-fault', 'selection-fault'] as const) {
+      const f = await authorizedReadFixture();
+      const owner = await loadActiveSpaceOwner(f.env, DID);
+      if (!owner) throw new Error('Missing owner');
+      const revoke = async () => {
+        await f.env.ALTERAN_DB.prepare('UPDATE oauth_session SET revoked_at = unixepoch() WHERE id = ?').bind(f.sessionId).run();
+      };
+      const watched = interceptRead(f.env, {
+        before: mode === 'before-revoked' ? revoke : undefined,
+        after: async () => {
+          if (mode === 'after-revoked') await revoke();
+          if (mode === 'expired') await f.env.ALTERAN_DB.prepare('UPDATE oauth_replay_clock SET seconds = ? WHERE id = 1')
+            .bind(f.tokens.accessPayload.exp).run();
+          if (mode === 'rotated') await f.env.ALTERAN_DB.prepare('UPDATE oauth_session SET access_jti = ? WHERE id = ?')
+            .bind('rotated-access', f.sessionId).run();
+          if (mode === 'account') await f.env.ALTERAN_DB.prepare('UPDATE account_state SET active = 0 WHERE did = ?').bind(DID).run();
+          if (mode === 'deleted') {
+            const outcome = await beginPersonalSpaceDeletion(f.env, SPACE, crypto.randomUUID(), owner.incarnation);
+            expect(outcome.tag).toBe('started');
+          }
+        },
+      });
+      let env = watched.env;
+      if (mode === 'binding') env = switchDatabaseAfterCompletion(f.env).env;
+      if (mode === 'completion-revoked') env = switchDatabaseAfterCompletion(f.env, revoke).env;
+      if (mode === 'completion-fault') env = failCompletion(f.env);
+      if (mode === 'selection-fault') {
+        const db = f.env.ALTERAN_DB;
+        env = { ...f.env, ALTERAN_DB: new Proxy(db, { get(target, key) {
+          if (key === 'batch') return (statements: Parameters<typeof db.batch>[0]) =>
+            statements.length === 6 ? Promise.reject(new Error('private selection fault')) : db.batch(statements);
+          const value = Reflect.get(target, key, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        } }) };
+      }
+      const request = await signedRequest(f, { cursor: SPACE }, { env });
+      watched.arm();
+      const response = await GET(context(env, request));
+      expect(response.status).toBe(401);
+      const body = await response.text();
+      expect(body).not.toContain('records');
+      expect(body).not.toContain('private');
+      assertPrivate(response);
+    }
   });
 });

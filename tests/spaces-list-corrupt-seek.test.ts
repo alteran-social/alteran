@@ -49,4 +49,23 @@ Deno.test('filtered Space listing bounds work when stored paths are corrupt', as
     const after = await read(excludeValues, withCursor, 'invalid');
     expect(after).toBeLessThan(before[index] + 100);
   }
+  for (const excludeValues of ['true', 'false']) {
+    for (const collection of [undefined, COLLECTION]) {
+      const query = new URLSearchParams({ space: SPACE, repo: DID, cursor: SPACE, excludeValues,
+        ...(collection ? { collection } : {}) });
+      const request = new Request(`${endpoint}?${query}`, { headers: {
+        authorization: `DPoP ${f.tokens.accessJwt}`,
+        dpop: await signResourceDpop(env, f.key, 'GET', endpoint, f.tokens.accessJwt),
+      } });
+      const auth = await verifyResourceRequest(env, request);
+      if (!auth?.spacePrincipal) throw new Error('Missing principal');
+      const result = await listAuthorizedSpaceRecords(env, auth.spacePrincipal, request);
+      expect(result.tag).toBe('found');
+      if (result.tag !== 'found') throw new Error('Empty range was not authorized');
+      expect(result.records).toEqual([]);
+      expect(result.cursor).toBeUndefined();
+      expect(await result.complete(request, wrapped)).toBe(true);
+      expect(reads).toBeLessThan(100);
+    }
+  }
 });
