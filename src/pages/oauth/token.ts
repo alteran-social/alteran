@@ -1,5 +1,4 @@
 import type { APIContext } from 'astro';
-import { errorMessage } from '../../lib/errors';
 import { readOAuthForm } from '../../lib/oauth/form';
 import { dpopErrorResponse, verifyDpop } from '../../lib/oauth/dpop';
 import { DpopNonceError } from '../../lib/oauth/dpop-errors';
@@ -55,7 +54,7 @@ export async function POST({ locals, request }: APIContext) {
       return dpopErrorResponse(env, error);
     }
     log('outer', { error });
-    return jsonError('invalid_request', errorMessage(error) ?? 'Unknown error');
+    return jsonError('invalid_request', 'OAuth request failed');
   }
 }
 

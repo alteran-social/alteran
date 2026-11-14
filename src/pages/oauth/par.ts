@@ -1,5 +1,4 @@
 import type { APIContext } from 'astro';
-import { errorMessage } from '../../lib/errors';
 import { consumeDpopVerificationJti, getAuthzNonce, setDpopNonceHeader, verifyDpop, dpopErrorResponse } from '../../lib/oauth/dpop';
 import { DpopNonceError } from '../../lib/oauth/dpop-errors';
 import { publicPdsOrigin } from '../../lib/oauth/consent';
@@ -89,13 +88,14 @@ export async function POST({ locals, request }: APIContext) {
       } catch (e) {
         const ctx = readFetchContext(e);
         log('metadata_fetch', { error: e, ...ctx });
-        return oauthError('invalid_client', errorMessage(e) ?? 'Client metadata fetch failed');
+        return oauthError('invalid_client', ctx.metadataRedirected
+          ? 'Client metadata fetch failed: redirect refused' : 'Client metadata fetch failed');
       }
       try {
         clientMeta = validateClientMetadataShape(rawMetadata, client_id);
       } catch (e) {
         log('metadata_shape', { error: e });
-        return oauthError('invalid_client', errorMessage(e) ?? 'Client metadata invalid');
+        return oauthError('invalid_client', 'Client metadata invalid');
       }
     }
 
@@ -109,7 +109,7 @@ export async function POST({ locals, request }: APIContext) {
       });
     } catch (e) {
       log('par_validate', { error: e });
-      return oauthError('invalid_request', errorMessage(e) ?? 'PAR request invalid');
+      return oauthError('invalid_request', 'PAR request invalid');
     }
 
     const grantedScope = resolveRequestedScope(scope, clientMeta.scope);
@@ -124,7 +124,7 @@ export async function POST({ locals, request }: APIContext) {
       clientAuth = await verifyClientAuthentication(env, client_id, issuerOrigin, clientMeta, form);
     } catch (e) {
       log('client_auth', { error: e });
-      return oauthError('invalid_client', errorMessage(e) ?? 'Client authentication failed', 401);
+      return oauthError('invalid_client', 'Client authentication failed', 401);
     }
 
     const id = crypto.randomUUID().replace(/-/g, '');
@@ -160,7 +160,7 @@ export async function POST({ locals, request }: APIContext) {
       return dpopErrorResponse(env, e);
     }
     log('outer', { error: e });
-    return oauthError('invalid_request', errorMessage(e) ?? 'Unknown error');
+    return oauthError('invalid_request', 'OAuth request failed');
   }
 }
 

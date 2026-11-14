@@ -1,5 +1,4 @@
 import type { APIContext } from 'astro';
-import { errorMessage } from '../../lib/errors';
 import { verifyDpop, dpopErrorResponse } from '../../lib/oauth/dpop';
 import { DpopNonceError } from '../../lib/oauth/dpop-errors';
 import { publicPdsOrigin } from '../../lib/oauth/consent';
@@ -62,7 +61,7 @@ export async function POST({ locals, request }: APIContext) {
     return emptyOk();
   } catch (error) {
     if (error instanceof DpopNonceError) return dpopErrorResponse(env, error);
-    return jsonError('invalid_request', errorMessage(error) ?? 'Unknown error', 400);
+    return jsonError('invalid_request', 'OAuth request failed', 400);
   }
 }
 
