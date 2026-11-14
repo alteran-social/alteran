@@ -1,8 +1,9 @@
+import { createOAuthSession } from './helpers/oauth-store';
 import { describe, it } from "./helpers/bdd";
 import { expect } from "@std/expect";
 import { makeEnv } from './helpers/env';
 import { makeDpopKey, signDpopProof, signResourceDpop } from './helpers/oauth';
-import { createOAuthSession, getSecret, storeRefreshToken } from '../src/db/account';
+import { getSecret, storeRefreshToken } from '../src/db/account';
 import { setAccountState } from '../src/db/dal';
 import { issueSessionTokens } from '../src/lib/session-tokens';
 import { verifyJwt } from '../src/lib/jwt';

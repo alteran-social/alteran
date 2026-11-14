@@ -1,5 +1,5 @@
 import type { Env } from "../../env";
-import type { CodeRecord, ConsentRecord, ParSnapshot } from "./store";
+import { MAX_CODE_BYTES, type CodeRecord, type ConsentRecord, type ParSnapshot } from "./store";
 
 /** Issue at most one code for the exact PAR displayed by a consumed consent. */
 export async function issueAuthorizationCode(
@@ -27,6 +27,7 @@ export async function issueAuthorizationCode(
     dpopJkt: par.dpopJkt,
     clientAuthMethod: par.clientAuthMethod,
     clientAuthKeyId: par.clientAuthKeyId ?? null,
+    clientAuthKeyBinding: par.clientAuthKeyBinding ?? null,
     did,
     createdAt: now,
     expiresAt: now + 300,
@@ -34,6 +35,7 @@ export async function issueAuthorizationCode(
   const parKey = `oauth:par:${id}`;
   const codeKey = `oauth:code:${code}`;
   const codeValue = JSON.stringify(record);
+  if (codeValue.length > MAX_CODE_BYTES || new TextEncoder().encode(codeValue).byteLength > MAX_CODE_BYTES) return null;
   try {
     const result = await env.ALTERAN_DB.batch([
       env.ALTERAN_DB.prepare(`

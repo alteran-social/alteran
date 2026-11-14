@@ -1,8 +1,9 @@
+import { createOAuthSession } from './helpers/oauth-store';
 import { describe, it } from "./helpers/bdd";
 import { expect } from "@std/expect";
 import { makeEnv } from "./helpers/env";
 import { makeDpopKey, signResourceDpop } from "./helpers/oauth";
-import { createOAuthSession, storeRefreshToken } from "../src/db/account";
+import { storeRefreshToken } from "../src/db/account";
 import { AuthScope } from "../src/lib/auth-scope";
 import { issueSessionTokens } from "../src/lib/session-tokens";
 import { GET as getServiceAuth } from "../src/pages/xrpc/com.atproto.server.getServiceAuth";

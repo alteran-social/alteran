@@ -32,15 +32,16 @@ export async function readJsonBounded(env: Env, request: Request): Promise<unkno
   return JSON.parse(text || '{}');
 }
 
-export async function readBodyBounded(request: Request, maxBytes: number): Promise<Uint8Array> {
+export async function readBodyBounded(request: Request, maxBytes: number, options: { maxChunks?: number } = {}): Promise<Uint8Array> {
   const contentLength = request.headers.get('content-length');
-  return readStreamBounded(request.body, maxBytes, contentLength);
+  return readStreamBounded(request.body, maxBytes, contentLength, options);
 }
 
 export async function readStreamBounded(
   stream: ReadableStream<Uint8Array> | null,
   maxBytes: number,
   contentLength?: string | null,
+  options: { maxChunks?: number } = {},
 ): Promise<Uint8Array> {
   if (contentLength != null) {
     const parsed = Number(contentLength);
@@ -50,8 +51,9 @@ export async function readStreamBounded(
   if (!stream) return new Uint8Array();
 
   const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
+  let buffer = new Uint8Array(Math.min(8192, Math.floor(maxBytes)));
   let total = 0;
+  let chunkCount = 0;
 
   try {
     while (true) {
@@ -59,23 +61,23 @@ export async function readStreamBounded(
       if (chunk.done) break;
       const bytes = chunk.value instanceof Uint8Array ? chunk.value : new Uint8Array(chunk.value);
       total += bytes.byteLength;
-      if (total > maxBytes) {
+      if (++chunkCount > (options.maxChunks ?? Infinity) || total > maxBytes) {
         await reader.cancel();
         throw new PayloadTooLarge();
       }
-      chunks.push(bytes);
+      if (!bytes.byteLength) continue;
+      if (total > buffer.byteLength) {
+        const grown = new Uint8Array(Math.min(Math.floor(maxBytes), Math.max(total, buffer.byteLength * 2)));
+        grown.set(buffer.subarray(0, total - bytes.byteLength));
+        buffer = grown;
+      }
+      buffer.set(bytes, total - bytes.byteLength);
     }
   } finally {
     reader.releaseLock();
   }
 
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out;
+  return buffer.byteLength === total ? buffer : buffer.slice(0, total);
 }
 
 export function requireJsonContentType(request: Request): void {

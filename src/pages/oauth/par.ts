@@ -3,7 +3,8 @@ import { errorMessage } from '../../lib/errors';
 import { consumeDpopVerificationJti, getAuthzNonce, setDpopNonceHeader, verifyDpop, dpopErrorResponse } from '../../lib/oauth/dpop';
 import { DpopNonceError } from '../../lib/oauth/dpop-errors';
 import { publicPdsOrigin } from '../../lib/oauth/consent';
-import { savePar } from '../../lib/oauth/store';
+import { readOAuthForm } from '../../lib/oauth/form';
+import { parRecordFits, savePar } from '../../lib/oauth/store';
 import {
   validateClientMetadataShape,
   validateParRequest,
@@ -48,8 +49,7 @@ export async function POST({ locals, request }: APIContext) {
   try {
     const ver = await verifyDpop(env, request, { consumeJti: false, requireNonce: false });
 
-    const bodyText = await request.text();
-    const form = new URLSearchParams(bodyText);
+    const form = await readOAuthForm(request);
     client_id = form.get('client_id') || '';
     const response_type = form.get('response_type') || '';
     const grant_type = form.get('grant_type') || undefined;
@@ -141,14 +141,16 @@ export async function POST({ locals, request }: APIContext) {
       dpopJkt: ver.jkt,
       clientAuthMethod: clientAuth.method,
       clientAuthKeyId: clientAuth.keyId,
+      clientAuthKeyBinding: clientAuth.keyBinding ?? null,
       createdAt: now,
       expiresAt: now + 300,
     };
+    if (!parRecordFits(rec)) return oauthError('invalid_request', 'PAR request exceeds storage limit');
     await consumeDpopVerificationJti(env, ver);
     await savePar(env, id, rec);
 
     const request_uri = `urn:ietf:params:oauth:request_uri:${id}`;
-    const headers = new Headers({ 'Content-Type': 'application/json' });
+    const headers = new Headers({ 'Content-Type': 'application/json', 'Cache-Control': 'no-store', Pragma: 'no-cache' });
     setDpopNonceHeader(headers, await getAuthzNonce(env));
     log('success', { outcome: 'ok' });
     return new Response(JSON.stringify({ request_uri, expires_in: 300 }), { status: 201, headers });

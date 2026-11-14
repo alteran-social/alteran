@@ -2,9 +2,11 @@ import type { Env } from '../../env';
 import { errorCode, errorMessage } from '../errors';
 import { verifyAccessToken } from '../session-tokens';
 import { decodeProtectedHeader, importJWK, compactVerify, type JWK as JoseJWK } from 'jose';
-import { cleanupExpiredOAuthReplaySecrets, createSecretOnce, getOAuthSession, getSecret, setSecret } from '../../db/account';
+import { getSecret, setSecret } from '../../db/account';
+import { consumeOAuthResourceReplay, type OAuthResourceBinding } from '../../db/oauth-replay';
 import { getAccountState } from '../../db/dal';
 import { jwkThumbprint } from './dpop';
+import { DPOP_PROOF_FUTURE_SKEW_SEC, DPOP_PROOF_MAX_AGE_SEC, isDpopProofFresh } from './dpop-window';
 import {
   bearerAccessContext,
   isBearerAccessScope,
@@ -58,17 +60,23 @@ async function getNonce(env: Env): Promise<string> {
   return v;
 }
 
-async function consumeResourceDpopJti(env: Env, jti: unknown, iat: number, nonce: string): Promise<void> {
+async function consumeResourceDpopJti(
+  env: Env, jti: unknown, iat: number, nonce: string, binding: OAuthResourceBinding,
+): Promise<void> {
   if (typeof jti !== 'string' || jti.length < 8) {
     throw new ResourceAuthError('use_dpop_nonce', { nonce, message: 'DPoP jti required' });
   }
-  const now = Math.floor(Date.now() / 1000);
-  const key = `oauth:dpop:jti:resource:${jti}`;
-  await cleanupExpiredOAuthReplaySecrets(env, now);
-  const inserted = await createSecretOnce(env, key, JSON.stringify({ iat, exp: now + 300 }));
-  if (!inserted) {
+  if (!isDpopProofFresh(iat)) {
+    throw new ResourceAuthError('use_dpop_nonce', { nonce, message: 'DPoP proof expired' });
+  }
+  const result = await consumeOAuthResourceReplay(env, jti, iat, binding);
+  if (result.tag === 'replayed') {
     throw new ResourceAuthError('invalid_token', { message: 'DPoP proof replayed' });
   }
+  if (result.tag === 'expired' || !isDpopProofFresh(iat)) {
+    throw new ResourceAuthError('use_dpop_nonce', { nonce, message: 'DPoP proof expired' });
+  }
+  if (result.tag !== 'accepted') throw new ResourceAuthError('invalid_token');
 }
 
 export type ResourceAuthContext = {
@@ -133,8 +141,8 @@ async function verifyDpopAccess(env: Env, request: Request, accessToken: string)
   const payload = JSON.parse(new TextDecoder().decode(verified.payload));
   if (payload.htm !== method || payload.htu !== url) throw new ResourceAuthError('use_dpop_nonce', { nonce });
   const now = Math.floor(Date.now()/1000);
-  if (typeof payload.iat !== 'number' || now - payload.iat > 300) throw new ResourceAuthError('use_dpop_nonce', { nonce });
-  if (payload.iat - now > 30) throw new ResourceAuthError('use_dpop_nonce', { nonce });
+  if (typeof payload.iat !== 'number' || !Number.isFinite(payload.iat) || now - payload.iat > DPOP_PROOF_MAX_AGE_SEC) throw new ResourceAuthError('use_dpop_nonce', { nonce });
+  if (payload.iat - now > DPOP_PROOF_FUTURE_SKEW_SEC) throw new ResourceAuthError('use_dpop_nonce', { nonce });
   if (!payload.nonce || payload.nonce !== nonce) throw new ResourceAuthError('use_dpop_nonce', { nonce });
   // Verify ath binding
   const enc = new TextEncoder();
@@ -152,7 +160,7 @@ async function verifyDpopAccess(env: Env, request: Request, accessToken: string)
   if (!isOAuthScope(tokenPayload.scope)) {
     throw new ResourceAuthError('invalid_token', { message: 'OAuth token scope is not valid' });
   }
-  const tokenJkt = (tokenPayload.cnf as any)?.jkt;
+  const tokenJkt = (tokenPayload.cnf as { jkt?: unknown } | undefined)?.jkt;
   if (typeof tokenJkt !== 'string') {
     throw new ResourceAuthError('invalid_token', { message: 'DPoP access token missing cnf.jkt' });
   }
@@ -160,7 +168,18 @@ async function verifyDpopAccess(env: Env, request: Request, accessToken: string)
   if (proofJkt !== tokenJkt) {
     throw new ResourceAuthError('invalid_token', { message: 'DPoP key mismatch' });
   }
-  await consumeResourceDpopJti(env, payload.jti, payload.iat, nonce);
+  const sessionId = tokenPayload.oauth_session;
+  const clientId = tokenPayload.client_id;
+  const accessJti = tokenPayload.jti;
+  if (typeof sessionId !== 'string' || typeof clientId !== 'string' || typeof accessJti !== 'string' ||
+    typeof tokenPayload.sub !== 'string' || typeof tokenPayload.scope !== 'string' ||
+    typeof tokenPayload.exp !== 'number' || !Number.isFinite(tokenPayload.exp)) {
+    throw new ResourceAuthError('invalid_token');
+  }
+  await consumeResourceDpopJti(env, payload.jti, payload.iat, nonce, {
+    sessionId, clientId, accessJti, did: tokenPayload.sub, jkt: tokenJkt,
+    scope: tokenPayload.scope, expiresAt: tokenPayload.exp,
+  });
   return {
     did: tokenPayload.sub as string,
     token: accessToken,
@@ -191,29 +210,9 @@ async function verifyAccessTokenOrThrow(env: Env, token: string, opts: { allowOA
   if (!payloadJwt || !payloadJwt.sub) {
     throw new ResourceAuthError('invalid_token');
   }
-  const isOAuthToken = !!(payloadJwt.cnf as any)?.jkt;
+  const isOAuthToken = !!(payloadJwt.cnf as { jkt?: unknown } | undefined)?.jkt;
   if (isOAuthToken && !opts.allowOAuth) {
     throw new ResourceAuthError('invalid_token');
-  }
-  if (isOAuthToken) {
-    const sessionId = payloadJwt.oauth_session;
-    const accessJti = payloadJwt.jti;
-    const clientId = payloadJwt.client_id;
-    if (typeof sessionId !== 'string' || typeof accessJti !== 'string' || typeof clientId !== 'string') {
-      throw new ResourceAuthError('invalid_token');
-    }
-    const session = await getOAuthSession(env, sessionId);
-    const now = Math.floor(Date.now() / 1000);
-  if (
-      !session ||
-      session.revokedAt ||
-      session.expiresAt <= now ||
-      session.accessJti !== accessJti ||
-      session.clientId !== clientId ||
-      session.did !== payloadJwt.sub
-    ) {
-      throw new ResourceAuthError('invalid_token');
-    }
   }
   return payloadJwt;
 }

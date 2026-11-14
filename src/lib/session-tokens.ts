@@ -141,6 +141,11 @@ export async function verifyAccessToken(env: Env, token: string) {
   return payload;
 }
 
+/** Legacy bearer endpoints must not accept a sender-constrained OAuth token. */
+export function isOAuthBoundRefresh(payload: Record<string, unknown>): boolean {
+  return Object.hasOwn(payload, 'cnf') || Object.hasOwn(payload, 'client_id') || Object.hasOwn(payload, 'oauth_session');
+}
+
 export function computeGraceExpiry(previousExpiry: number, nowSeconds: number): number {
   const candidate = nowSeconds + GRACE_PERIOD_SECONDS;
   return Math.min(previousExpiry, candidate);

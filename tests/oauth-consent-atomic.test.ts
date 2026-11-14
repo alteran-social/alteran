@@ -5,13 +5,13 @@ import { getSecret, setSecret } from "../src/db/account";
 import {
   consumeConsent,
   deleteParSnapshot,
-  loadCode,
+  loadCodeSnapshot,
   loadParSnapshot,
   type ParRecord,
-  saveCode,
   saveConsent,
   savePar,
 } from "../src/lib/oauth/store";
+import { saveCode } from "./helpers/oauth-store";
 import { issueAuthorizationCode } from "../src/lib/oauth/issue-code";
 import {
   GET as consentGet,
@@ -327,7 +327,7 @@ describe("OAuth consent and code atomicity", () => {
     );
     expect(code).toBeTruthy();
     if (!code) throw new Error("Missing issued code");
-    expect((await loadCode(env, code))?.did).toBe("did:example:test");
+    expect((await loadCodeSnapshot(env, code))?.record.did).toBe("did:example:test");
     expect(await loadParSnapshot(env, ID)).toBeNull();
   });
 
@@ -357,7 +357,7 @@ describe("OAuth consent and code atomicity", () => {
     );
     expect(code).toBeTruthy();
     if (!code) throw new Error("Missing recovered code");
-    expect((await loadCode(env, code))?.did).toBe("did:example:test");
+    expect((await loadCodeSnapshot(env, code))?.record.did).toBe("did:example:test");
     expect(await loadParSnapshot(env, ID)).toBeNull();
   });
 
@@ -390,7 +390,7 @@ describe("OAuth consent and code atomicity", () => {
     } finally {
       delete (crypto as { randomUUID?: unknown }).randomUUID;
     }
-    expect(await loadCode(env, id)).toEqual(existing);
+    expect((await loadCodeSnapshot(env, id))?.record).toEqual(existing);
     expect((await loadParSnapshot(env, ID))?.value).toBe(snapshot.value);
   });
 

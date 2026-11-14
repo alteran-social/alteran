@@ -22,6 +22,7 @@ import {
   verifyRefreshToken,
   issueSessionTokens,
   computeGraceExpiry,
+  isOAuthBoundRefresh,
 } from './session-tokens';
 import { AuthScope } from './auth-scope';
 
@@ -96,6 +97,10 @@ export async function attemptRefresh({ env, token, nowSec }: AttemptInput): Prom
     return failure('ExpiredToken', 'Refresh token expired');
   }
 
+  if (isOAuthBoundRefresh(verification.payload)) {
+    return failure('InvalidToken', 'OAuth refresh token must use /oauth/token');
+  }
+
   const stored = await getRefreshToken(env, decoded.jti);
   if (!stored) {
     return failure('InvalidToken', 'Refresh token has been revoked');
@@ -105,15 +110,7 @@ export async function attemptRefresh({ env, token, nowSec }: AttemptInput): Prom
     return failure('InvalidToken', 'Refresh token has been revoked');
   }
 
-  if (stored.tokenKind !== 'legacy') {
-    return failure('InvalidToken', 'OAuth refresh token must use /oauth/token');
-  }
-
-  if (
-    typeof verification.payload.client_id === 'string' ||
-    typeof verification.payload.oauth_session === 'string' ||
-    !!(verification.payload.cnf as { jkt?: unknown } | undefined)?.jkt
-  ) {
+  if (stored.tokenKind !== 'legacy' || stored.oauthSessionId !== null) {
     return failure('InvalidToken', 'OAuth refresh token must use /oauth/token');
   }
 

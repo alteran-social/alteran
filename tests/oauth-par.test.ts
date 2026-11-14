@@ -31,6 +31,8 @@ describe('OAuth PAR endpoint', () => {
         }).toString(),
       }) } as any);
       expect(res.status).toBe(201);
+      expect(res.headers.get('Cache-Control')).toBe('no-store');
+      expect(res.headers.get('Pragma')).toBe('no-cache');
       const body = await res.json() as any;
       expect(body.expires_in).toBe(300);
       const id = String(body.request_uri).replace('urn:ietf:params:oauth:request_uri:', '');

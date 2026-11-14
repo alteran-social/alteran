@@ -1,6 +1,7 @@
 import type { APIContext } from 'astro';
 import { deleteParSnapshot, loadParSnapshot, saveConsent, consumeConsent } from '../../lib/oauth/store';
 import { issueAuthorizationCode } from '../../lib/oauth/issue-code';
+import { readOAuthForm } from '../../lib/oauth/form';
 import {
   authenticateSingleUserPassword,
   checkConsentPasswordLockout,
@@ -112,6 +113,10 @@ export async function GET({ locals, request }: APIContext) {
     headers: {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-store',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'no-referrer',
+      'X-Content-Type-Options': 'nosniff',
     },
   });
 }
@@ -125,7 +130,14 @@ export async function POST({ locals, request }: APIContext) {
     });
   }
 
-  const form = new URLSearchParams(await request.text());
+  let form: URLSearchParams;
+  try {
+    form = await readOAuthForm(request);
+  } catch {
+    return new Response(JSON.stringify({ error: 'invalid_request', error_description: 'invalid form body' }), {
+      status: 400, headers: { 'Content-Type': 'application/json' },
+    });
+  }
   const request_uri = form.get('request_uri');
   const id = parseRequestUri(request_uri);
   const csrf = form.get('csrf') || '';
