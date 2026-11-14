@@ -3,12 +3,15 @@ import * as dagCbor from '@ipld/dag-cbor';
 import { describe, it } from './helpers/bdd';
 import { makeEnv } from './helpers/env';
 import { applySpaceWrites, createLocalSpace, getSpaceRecord } from '../src/db/space-store';
-import { acquireSpaceSnapshot, pruneSpaceRecordVersions, releaseSpaceSnapshot } from '../src/db/space-snapshot';
+import { acquireSpaceSnapshot, releaseSpaceSnapshot } from '../src/db/space-snapshot';
+import { pruneSpaceRecordVersionsPage } from '../src/db/space-version-gc';
 
 const did = 'did:example:test';
 const space = `at://${did}/space/com.example.notes/a`;
 const otherSpace = `at://${did}/space/com.example.notes/b`;
 const collection = 'com.example.note';
+const pruneSpaceRecordVersions = async (...args: Parameters<typeof pruneSpaceRecordVersionsPage>) =>
+  (await pruneSpaceRecordVersionsPage(...args)).pruned;
 
 function write(action: 'create' | 'update', text: string) {
   return { action, collection, rkey: 'a', record: { $type: collection, text } };

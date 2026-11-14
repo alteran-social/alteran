@@ -5,7 +5,9 @@ import { describe, it } from './helpers/bdd';
 import { makeEnv } from './helpers/env';
 import { seedLegacySpaceBlobUsage } from './helpers/space-legacy';
 import { applySpaceWrites, createLocalSpace, getSpaceRecord } from '../src/db/space-store';
-import { acquireSpaceSnapshot, pruneExpiredSpaceSnapshotLeases, pruneSpaceRecordVersions, readSpaceSnapshotPage, releaseSpaceSnapshot } from '../src/db/space-snapshot';
+import { acquireSpaceSnapshot, readSpaceSnapshotPage, releaseSpaceSnapshot } from '../src/db/space-snapshot';
+import { pruneExpiredSpaceSnapshotLeases } from '../src/db/space-lease-expiry';
+import { pruneSpaceRecordVersionsPage } from '../src/db/space-version-gc';
 import { applySpaceSetHashChanges, spaceRecordHashElement, spaceSetHashDigest } from '../src/lib/spaces/lthash';
 import { SpaceStorageError } from '../src/db/space-types';
 import { parseSpaceRef } from '../src/db/space-ref';
@@ -17,6 +19,8 @@ const firstSpace = `at://${did}/space/com.example.notes/a`;
 const secondSpace = `at://${did}/space/com.example.notes/b`;
 const collection = 'com.example.note';
 const nestedCollection = 'com.example.note.sub';
+const pruneSpaceRecordVersions = async (...args: Parameters<typeof pruneSpaceRecordVersionsPage>) =>
+  (await pruneSpaceRecordVersionsPage(...args)).pruned;
 
 function create(pathCollection: string, rkey: string, text: string) {
   return { action: 'create' as const, collection: pathCollection, rkey, record: { $type: pathCollection, text } };
@@ -158,7 +162,8 @@ describe('space snapshot leases', () => {
     expect(pruned).toBe(1);
     expect(await pruneSpaceRecordVersions(env, firstSpace, did)).toBe(0);
     await expectError(() => readSpaceSnapshotPage(env, lease, null), 'SpaceSnapshotUnavailable');
-    expect(await pruneExpiredSpaceSnapshotLeases(env, firstSpace, did)).toBe(1);
+    expect(await pruneExpiredSpaceSnapshotLeases(env, firstSpace, did)).toBe(0);
+    expect(await pruneSpaceRecordVersions(env, firstSpace, did)).toBe(0);
     expect(await pruneExpiredSpaceSnapshotLeases(env, firstSpace, did)).toBe(0);
     await releaseSpaceSnapshot(env, lease);
   });
@@ -247,7 +252,7 @@ describe('space snapshot leases', () => {
     const head = await env.ALTERAN_DB.prepare('SELECT rev, generation FROM space_repo WHERE space_ref = ? AND repo_did = ?')
       .bind(firstSpace, did).first();
     expect(head).toEqual({ rev: first!.rev, generation: first!.generation });
-    expect(await getSpaceRecord(env, firstSpace, did, collection, 'a')).toBeNull();
+    await expect(getSpaceRecord(env, firstSpace, did, collection, 'a')).rejects.toThrow('Invalid Space record');
   });
 
   it('rejects forged records for an absent repo before creating its head', async () => {

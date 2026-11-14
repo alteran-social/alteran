@@ -3,15 +3,12 @@ import {
   isValidRecordKey,
   isValidTid,
 } from "@atproto/syntax-spaces";
-import * as dagCbor from "@ipld/dag-cbor";
-import { sha256 } from "@noble/hashes/sha2.js";
-import { CID } from "multiformats/cid";
-import { create as createDigest } from "multiformats/hashes/digest";
 import type { Env } from "../env";
 import { spaceSetHashDigest } from "../lib/spaces/lthash";
 import { copyPlainRecordWithExtensions } from "../lib/spaces/plain-values";
 import { parseCanonicalRepoCid } from "../lib/spaces/repo-cid";
 import { assertLocalSpaceRepo, parseSpaceRef } from "./space-ref";
+import { validSpaceRecordBlock } from "./space-record-block";
 import { SpaceStorageError } from "./space-types";
 
 const MAX_PAGE_OPERATIONS = 1000;
@@ -257,36 +254,8 @@ function decodeOperation(
   if (!row.has_value) return operation;
   if (!row.cid || !validBytes(row.value_cbor, undefined)) throw invalidState();
   const value = Uint8Array.from(row.value_cbor);
-  if (!validRecordBlock(row.collection, row.cid, value)) throw invalidState();
+  if (!validSpaceRecordBlock(row.collection, row.cid, value)) throw invalidState();
   return { ...operation, value };
-}
-
-function validRecordBlock(
-  collection: string,
-  claimedCid: string,
-  bytes: Uint8Array,
-): boolean {
-  try {
-    const value: unknown = dagCbor.decode(bytes);
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return false;
-    }
-    const prototype = Object.getPrototypeOf(value);
-    if (
-      (prototype !== Object.prototype && prototype !== null) ||
-      !Object.hasOwn(value, "$type") ||
-      (value as Record<string, unknown>).$type !== collection
-    ) return false;
-    const canonical = dagCbor.encode(value);
-    if (
-      canonical.length !== bytes.length ||
-      canonical.some((byte, index) => byte !== bytes[index])
-    ) return false;
-    return CID.createV1(dagCbor.code, createDigest(0x12, sha256(bytes)))
-      .toString() === claimedCid;
-  } catch {
-    return false;
-  }
 }
 
 function parseCursor(
