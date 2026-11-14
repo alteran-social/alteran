@@ -27,8 +27,10 @@ records or advertised as encrypted.
   public-repository operations.
 - `com.atproto.space.listRecords` supports the same owner and grant checks.
   It includes record values by default; `excludeValues=true` returns metadata
-  only. Pages contain at most 50 records and are ordered by full record URI,
-  descending. Cursors must belong to the requested Space and repository, and
+  only. Requests may specify a limit from 1 to 1,000; each page contains at
+  most 50 records and is ordered by full record URI, descending. Clients must
+  follow the returned cursor even when a page is shorter than the requested
+  limit. Cursors must belong to the requested Space and repository, and
   every page is reauthorized; pages are not a single snapshot. A value-bearing
   page is limited to 1 MiB of CBOR and 131,072 CBOR items in total. A record or
   value page containing integers outside JavaScript's safe range has stricter

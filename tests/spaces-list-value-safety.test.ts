@@ -58,7 +58,7 @@ describe('Space list value resource bounds', () => {
 
     const oversized = interceptRead(f.env);
     oversized.arm();
-    await expectTooLarge(await request(f, { limit: '2' }, oversized.env));
+    await expectTooLarge(await request(f, { limit: '1000' }, oversized.env));
     assertOversizeProjection(oversized.returned());
 
     const smaller = await request(f, { limit: '1' });
@@ -73,7 +73,7 @@ describe('Space list value resource bounds', () => {
         .bind(f.sessionId).run();
     } });
     revoked.arm();
-    const denied = await request(f, { limit: '2' }, revoked.env);
+    const denied = await request(f, { limit: '1000' }, revoked.env);
     assertOversizeProjection(revoked.returned());
     expect(denied.status).toBe(401);
     const deniedBody = await denied.json() as { error?: unknown; records?: unknown };

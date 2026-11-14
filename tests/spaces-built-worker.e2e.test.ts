@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { Env } from '../src/env';
 import { jwkThumbprint, sha256b64url } from '../src/lib/oauth/dpop';
 import { createPersonalSpace } from '../src/db/space-lifecycle-create';
+import { applySpaceWrites } from '../src/db/space-store';
 import { createOAuthSession } from './helpers/oauth-store';
 import { createExplicitSpaceConsent } from '../src/lib/spaces/explicit-read-consent';
 import { issueSessionTokens } from '../src/lib/session-tokens';
@@ -247,6 +248,30 @@ Deno.test({
       expect(head.status).toBe(405);
       expect(await head.text()).toBe('');
 
+      const pageCollection = 'com.example.page';
+      await applySpaceWrites(env, config.space, config.repo, Array.from({ length: 51 }, (_, index) => ({
+        action: 'create' as const, collection: pageCollection, rkey: `page-${String(index).padStart(3, '0')}`,
+        record: { $type: pageCollection, text: `page value ${index}` },
+      })), account.space_incarnation);
+      for (const excludeValues of ['true', 'false']) {
+        for (const limit of ['51', '1000']) {
+          const options = { collection: pageCollection, excludeValues, limit };
+          const first = await signedList(options);
+          expect(first.status).toBe(200);
+          const page = await first.json() as { records: { rkey: string; value?: unknown }[]; cursor?: string };
+          expect(page.records).toHaveLength(50);
+          expect(page.cursor).toBe(`${config.space}/${config.repo}/${pageCollection}/page-001`);
+          expect(Object.hasOwn(page.records[0], 'value')).toBe(excludeValues === 'false');
+          if (!page.cursor) throw new Error('Missing page cursor');
+          const last = await signedList({ ...options, cursor: page.cursor });
+          expect(last.status).toBe(200);
+          const remainder = await last.json() as { records: { rkey: string }[]; cursor?: string };
+          expect(remainder.records).toHaveLength(1);
+          expect(remainder.records[0].rkey).toBe('page-000');
+          expect(remainder.cursor).toBeUndefined();
+        }
+      }
+
       for (const name of ['space_record_fence_update', 'space_record_version_update_guard', 'space_version_fence_update']) {
         await database.prepare(`DROP TRIGGER ${name}`).run();
       }
@@ -275,7 +300,7 @@ Deno.test({
       const again = encode({ ...parsed.value, n: 9007199254740993n, min: -9223372036854775808n,
         bytes: new Uint8Array([0, 255]), ref: CID.parse(parsed.value.ref.$link) } as never);
       expect(again.length === input.length && again.every((byte, index) => byte === input[index])).toBe(true);
-      const exactList = await signedList({});
+      const exactList = await signedList({ collection: config.collection });
       expect(exactList.status).toBe(200);
       const listRaw = await exactList.text();
       expect(listRaw).toContain('"n":9007199254740993');

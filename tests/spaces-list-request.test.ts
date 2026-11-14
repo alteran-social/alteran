@@ -27,12 +27,19 @@ Deno.test('Space list requests are bounded, cursor-bound and default to values',
   expect(next.tag).toBe('valid');
   if (next.tag !== 'valid') throw new Error('Missing valid cursor');
   expect(next.target.cursorPath).toBe('com.example.note/one');
+  for (const limit of ['1', '49', '50', '51', '99', '100', '999', '1000']) {
+    const value = parseSpaceListRequest(request([...base, ['limit', limit]]));
+    expect(value.tag).toBe('valid');
+    if (value.tag !== 'valid') throw new Error('Missing valid request');
+    expect(value.target.limit).toBe(Number(limit));
+  }
   for (const entries of [
     [...base, ['excludeValues', 'true']],
     [['space', space], ['repo', repo], ['excludeValues', '1']],
     [...base, ['unknown', 'x']],
-    [...base, ['limit', '51']],
-    [...base, ['limit', '01']],
+    ...['0', '1001', '10000', '-1', '+1', '1.0', '1e2', '', ' 1', '01']
+      .map((limit): [string, string][] => [...base, ['limit', limit]]),
+    [...base, ['limit', '1'], ['limit', '2']],
     [...base, ['collection', 'bad']],
   ] as [string, string][][]) expect(parseSpaceListRequest(request(entries)).tag).toBe('invalid');
   for (const cursorValue of [`${space}/did:example:other/com.example.note/one`, `${cursor}/extra`, 'not-a-cursor']) {

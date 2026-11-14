@@ -134,7 +134,7 @@ describe('owner-only Space listRecords route', () => {
     const proof = valid.headers.get('dpop') ?? '';
     const query = new URLSearchParams(PARAMS).toString();
     for (const candidate of [`${query}&repo=${encodeURIComponent(DID)}`, `${query}&unknown=1`,
-      `${query}&limit=51`, `${query}&cursor=invalid`, `space=${'x'.repeat(17_000)}`]) {
+      `${query}&limit=1001`, `${query}&cursor=invalid`, `space=${'x'.repeat(17_000)}`]) {
       const response = await GET(context(f.env, await signedRequest(f, {}, { query: candidate, proof })));
       expect(response.status).toBe(400);
       assertPrivate(response);

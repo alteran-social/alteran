@@ -3,7 +3,7 @@ import { isValidNsid, isValidRecordKey, isValidTid } from '@atproto/syntax-space
 import type { Env } from '../env';
 import { DPOP_PROOF_FUTURE_SKEW_SEC, DPOP_PROOF_MAX_AGE_SEC } from '../lib/oauth/dpop-window';
 import type { VerifiedSpacePrincipal } from '../lib/oauth/space-principal';
-import { parseSpaceListRequest } from '../lib/spaces/list-records-request';
+import { MAX_SPACE_LIST_PAGE_LIMIT, parseSpaceListRequest } from '../lib/spaces/list-records-request';
 import { inspectRecordCborDetails, MAX_RECORD_CBOR_ITEMS } from '../lib/spaces/record-cbor-bounds';
 import { integerBudgetExceeded } from '../lib/spaces/record-integer-budget';
 import { captureRecordIdentity } from '../lib/spaces/record-response-input';
@@ -44,6 +44,7 @@ export async function listAuthorizedSpaceRecords(
   const parsed = parseSpaceListRequest(request);
   if (!handle || parsed.tag !== 'valid' || !windowIsLive(principal)) return { tag: 'unauthorized' };
   const target = parsed.target;
+  const pageLimit = Math.min(target.limit, MAX_SPACE_LIST_PAGE_LIMIT);
   const ref = parseSpaceRef(target.space);
   if (!await authorizeSpaceRead(handle, 'listRecords', target.space, target.repo) || env.ALTERAN_DB !== db) {
     return { tag: 'unauthorized' };
@@ -144,7 +145,7 @@ export async function listAuthorizedSpaceRecords(
       (SELECT CASE WHEN total > ? THEN 1 ELSE 0 END FROM budget), (SELECT total FROM budget),
       (SELECT creation_nonce FROM genesis), (SELECT created_at FROM genesis)${valueSentinel} FROM authorized`)
       .bind(...authValues, ...genesisValues, MAX_RECORD_SIZE, MAX_PAGE_COMPARE_BYTES + 1, ref.ref, target.repo, ref.authorityDid,
-        ref.spaceType, ref.skey, principal.grant.accountIncarnation, ...filters, target.limit,
+        ref.spaceType, ref.skey, principal.grant.accountIncarnation, ...filters, pageLimit,
         MAX_RECORD_SIZE, maxPageBytes, ref.ref, target.repo,
         ref.authorityDid, ref.spaceType, ref.skey, principal.grant.accountIncarnation, ...epochValues, maxPageBytes);
     return db.batch([
@@ -178,14 +179,14 @@ export async function listAuthorizedSpaceRecords(
     return { tag: 'unauthorized' };
   }
   const selected = result[2]?.results;
-  if (!Array.isArray(selected) || selected.length > target.limit + 1 ||
+  if (!Array.isArray(selected) || selected.length > pageLimit + 1 ||
     selected.some((row) => !row || typeof row !== 'object' || Array.isArray(row))) {
     return { tag: 'unauthorized' };
   }
   const rows = selected as ListRow[];
   const sentinels = rows.filter((row) => row.sentinel === 1);
   const records = rows.filter((row) => row.sentinel === 0);
-  if (sentinels.length !== 1 || records.length > target.limit || sentinels.length + records.length !== rows.length ||
+  if (sentinels.length !== 1 || records.length > pageLimit || sentinels.length + records.length !== rows.length ||
     sentinels[0].session_expires_at !== expiry || records.some((row) => row.session_expires_at !== null)) {
     return { tag: 'unauthorized' };
   }
@@ -272,7 +273,7 @@ export async function listAuthorizedSpaceRecords(
   const after = Math.floor(Date.now() / 1000);
   if (request.signal.aborted || !windowIsLiveAt(principal, after) || expiry <= after) return { tag: 'unauthorized' };
   const complete = completion(handle, epoch);
-  return { tag: 'found', records: entries, ...(entries.length === target.limit ? { cursor } : {}), complete };
+  return { tag: 'found', records: entries, ...(entries.length === pageLimit ? { cursor } : {}), complete };
 }
 
 function clockAssertionPassed(rows: unknown): boolean {

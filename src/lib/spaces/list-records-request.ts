@@ -3,7 +3,8 @@ import { isSpaceDid } from './space-did';
 import { captureRecordIdentity } from './record-response-input';
 import { parseSpaceRef } from '../../db/space-ref';
 
-export const MAX_SPACE_LIST_LIMIT = 50;
+export const MAX_SPACE_LIST_LIMIT = 1000;
+export const MAX_SPACE_LIST_PAGE_LIMIT = 50;
 const PARAMETERS = ['space', 'repo', 'collection', 'limit', 'cursor', 'excludeValues'] as const;
 
 export type SpaceListRequest = {
@@ -33,7 +34,7 @@ export function parseSpaceListRequest(request: Request): SpaceListParseResult {
   const excludeValues = url.searchParams.get('excludeValues');
   if (!space || !isSpaceDid(repo) || (collection !== null && !isValidNsid(collection)) ||
     (excludeValues !== null && excludeValues !== 'true' && excludeValues !== 'false') ||
-    (limitText !== null && !/^[1-9][0-9]{0,2}$/.test(limitText))) return invalid();
+    (limitText !== null && !/^[1-9][0-9]{0,3}$/.test(limitText))) return invalid();
   const limit = limitText === null ? 50 : Number(limitText);
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_SPACE_LIST_LIMIT) return invalid();
   try { parseSpaceRef(space); } catch { return invalid(); }
