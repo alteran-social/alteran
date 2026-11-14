@@ -1,6 +1,5 @@
 import { parseDidKey } from "@atproto/crypto-spaces";
 import { decode, encode } from "@atproto/lex-cbor";
-import { lexiconDocumentSchema } from "@atproto/lex-document";
 import { def, readCarStream, verifyCommitSig } from "@atproto/repo";
 import {
   isValidDid,
@@ -12,6 +11,7 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { base32 } from "multiformats/bases/base32";
 import { CID } from "multiformats/cid";
 import { isCanonicalRepoCid, parseCanonicalRepoCid } from "./repo-cid";
+import { validateSpaceLexiconSemantics } from "./lexicon-semantics";
 
 const SCHEMA_COLLECTION = "com.atproto.lexicon.schema";
 const MAX_CAR_BYTES = 4 * 1024 * 1024;
@@ -43,6 +43,12 @@ export type ProvenSpaceMain = {
 export type LexiconProofResult =
   | { readonly tag: "invalid" }
   | {
+    readonly tag: "unsupported";
+    readonly headCid: string;
+    readonly revision: string;
+    readonly recordCid: string;
+  }
+  | {
     readonly tag: "proven";
     readonly uri: string;
     readonly headCid: string;
@@ -57,9 +63,8 @@ export type LexiconProofResult =
  * and freshness/authenticity of currentCommitCid. This function performs no
  * DNS, DID resolution, network access, or authorization. It validates the
  * traversed MST path; a record proof cannot attest omitted sibling subtrees.
- * The SDK checks Lexicon structure, but not every semantic constraint on
- * unrelated named definitions. Do not use this result to grant permissions
- * until complete semantic validation is provided.
+ * A proven result validates the supported semantic subset on the exact
+ * CID-bound record. Unsupported forms never return a usable declaration.
  */
 export async function verifyLexiconProofAtTrustedHead(
   input: LexiconProofInput,
@@ -113,10 +118,11 @@ export async function verifyLexiconProofAtTrustedHead(
     const parsedCommit = def.commit.schema.safeParse(rawCommit);
     if (!parsedCommit.success) return { tag: "invalid" };
     const commit = parsedCommit.data;
+    const rootCid = CID.asCID(commit.data);
     if (
       commit.did !== publisherDid || !isValidTid(commit.rev) ||
       commit.sig.byteLength !== 64 ||
-      !isCanonicalRepoCid(CID.asCID(commit.data)) ||
+      !isCanonicalRepoCid(rootCid) ||
       (commit.prev !== null && !isCanonicalRepoCid(CID.asCID(commit.prev))) ||
       !await verifyCommitSig(commit, signingKey)
     ) return { tag: "invalid" };
@@ -124,7 +130,7 @@ export async function verifyLexiconProofAtTrustedHead(
     const targetPath = `${SCHEMA_COLLECTION}/${nsid}`;
     const targetCid = findRecordCid(
       blocks,
-      CID.asCID(commit.data)!,
+      rootCid,
       targetPath,
     );
     if (!targetCid) return { tag: "invalid" };
@@ -135,12 +141,21 @@ export async function verifyLexiconProofAtTrustedHead(
       !isObject(record) || record.$type !== SCHEMA_COLLECTION ||
       record.id !== nsid
     ) return { tag: "invalid" };
-    const validation = lexiconDocumentSchema.safeParse(record);
     if (
-      !validation.success || !isObject(record.defs) ||
-      !isObject(record.defs.main) ||
+      !isObject(record.defs) || !isObject(record.defs.main) ||
       record.defs.main.type !== "space"
     ) return { tag: "invalid" };
+    const semantics = validateSpaceLexiconSemantics(record);
+    if (semantics.tag === "invalid") return { tag: "invalid" };
+    const recordCid = base32.encode(targetCid.bytes);
+    if (semantics.tag === "unsupported") {
+      return Object.freeze({
+        tag: "unsupported",
+        headCid: base32.encode(expectedHead.bytes),
+        revision: commit.rev,
+        recordCid,
+      });
+    }
     const main = record.defs.main;
     if (
       typeof main.key !== "string" || !Array.isArray(main.collections) ||
@@ -149,7 +164,6 @@ export async function verifyLexiconProofAtTrustedHead(
       ) ||
       (main.title !== undefined && typeof main.title !== "string")
     ) return { tag: "invalid" };
-    const recordCid = base32.encode(targetCid.bytes);
     const mainDeclaration: ProvenSpaceMain = Object.freeze({
       spaceType: nsid,
       publisherDid,

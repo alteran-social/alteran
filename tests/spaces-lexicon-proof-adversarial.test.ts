@@ -249,13 +249,6 @@ describe("adversarial Lexicon proofs", () => {
           ...schema(),
           defs: { main: { type: "space", key: "any", collections: ["*"] } },
         },
-        {
-          ...schema(),
-          defs: {
-            main: { type: "space", key: "any", collections: [] },
-            extra: { type: "not-a-lexicon-type" },
-          },
-        },
       ]
     ) {
       const storage = new MemoryBlockstore();

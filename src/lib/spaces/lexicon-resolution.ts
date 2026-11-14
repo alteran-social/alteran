@@ -24,6 +24,12 @@ export type SpaceLexiconResolution =
     readonly head: PublicRepoHead;
     readonly observedAt: number;
   }
+  | {
+    readonly tag: "unsupported";
+    readonly recordCid: string;
+    readonly head: PublicRepoHead;
+    readonly observedAt: number;
+  }
   | { readonly tag: "notFound" }
   | {
     readonly tag: "invalid";
@@ -60,7 +66,8 @@ type Step<T> = { readonly tag: "ok"; readonly value: T } | ResolutionFailure;
  * This requires Cloudflare's strict-public global-fetch configuration and trusts
  * DNS, the DID method, and the PDS/CDN to report current data. Two matching head
  * responses do not rule out a consistently replayed older head. The result is
- * not an OAuth grant and does not establish complete Lexicon semantic validity.
+ * not an OAuth grant. Proven results validate only the supported Lexicon subset;
+ * unsupported records do not return declarations.
  */
 export async function resolveSpaceLexiconProof(
   nsid: unknown,
@@ -194,7 +201,7 @@ export async function resolveSpaceLexiconProof(
         lastIdentity.value.pds !== firstIdentity.value.pds
       ) continue;
       if (
-        checked.tag !== "proven" || checked.headCid !== firstHead.value.cid ||
+        checked.tag === "invalid" || checked.headCid !== firstHead.value.cid ||
         checked.revision !== firstHead.value.revision
       ) {
         if (attempt === 0) continue;
@@ -202,6 +209,14 @@ export async function resolveSpaceLexiconProof(
       }
       const stoppedResult = failure();
       if (stoppedResult) return stoppedResult;
+      if (checked.tag === "unsupported") {
+        return Object.freeze({
+          tag: "unsupported",
+          recordCid: checked.recordCid,
+          head: Object.freeze({ ...firstHead.value }),
+          observedAt: headObservedAt,
+        });
+      }
       return Object.freeze({
         tag: "proven",
         main: checked.main,

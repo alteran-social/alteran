@@ -97,7 +97,7 @@ describe("offline Lexicon proof verification", () => {
     }
   });
 
-  it("proves the record without asserting all named definitions are semantically valid", async () => {
+  it("rejects a signed record with contradictory named definitions", async () => {
     const key = await P256Keypair.create();
     const storage = new MemoryBlockstore();
     const value = {
@@ -129,8 +129,7 @@ describe("offline Lexicon proof verification", () => {
       currentCommitCid: repo.cid.toString(),
       proof,
     });
-    expect(result.tag).toBe("proven");
-    if (result.tag === "proven") expect(result.definitions).toBe("additional");
+    expect(result.tag).toBe("invalid");
   });
 
   it("accepts a valid node with more than 2048 entries", async () => {
