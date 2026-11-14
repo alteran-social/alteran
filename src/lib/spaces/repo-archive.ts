@@ -6,12 +6,12 @@ import {
   writeRepoStar,
 } from "@atproto/space";
 import {
-  isValidDid,
   isValidNsid,
   isValidRecordKey,
   isValidTid,
   SpaceRef,
 } from "@atproto/syntax-spaces";
+import { isSpaceDid } from "./space-did";
 
 export const MAX_SPACE_ARCHIVE_BYTES = 16 * 1024 * 1024;
 export const MAX_SPACE_ARCHIVE_RECORDS = 10_000;
@@ -46,7 +46,7 @@ export async function readSpaceRepoArchive(
   if (
     !(archive instanceof Uint8Array) ||
     archive.byteLength > MAX_SPACE_ARCHIVE_BYTES ||
-    !validSpace(space) || !isValidDid(repo)
+    !validSpace(space) || !isSpaceDid(repo)
   ) throw new Error("Invalid space archive input");
   const input = Uint8Array.from(archive);
   const reader = await readRepoStar([input]);
@@ -95,7 +95,7 @@ export async function writeSpaceRepoArchive(
   snapshot: SpaceRepoArchive,
 ): Promise<Uint8Array> {
   if (
-    !validSpace(snapshot.space) || !isValidDid(snapshot.repo) ||
+    !validSpace(snapshot.space) || !isSpaceDid(snapshot.repo) ||
     !isValidTid(snapshot.rev) ||
     !(snapshot.data instanceof Uint8Array) || snapshot.data.byteLength !== 32 ||
     !Array.isArray(snapshot.records) ||
@@ -156,9 +156,10 @@ export async function writeSpaceRepoArchive(
 }
 
 function validSpace(value: unknown): value is string {
-  if (typeof value !== "string") return false;
+  if (typeof value !== "string" || value.length > 8192) return false;
   try {
-    return SpaceRef.parse(value).toString() === value;
+    const reference = SpaceRef.parse(value);
+    return reference.toString() === value && isSpaceDid(reference.spaceDid);
   } catch {
     return false;
   }

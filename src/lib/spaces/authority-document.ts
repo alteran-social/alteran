@@ -2,7 +2,7 @@ import {
   formatDidVerificationMethod,
   parseDidKey,
 } from "@atproto/crypto-spaces";
-import { isValidDid } from "@atproto/syntax-spaces";
+import { isSpaceDid } from "./space-did";
 
 /**
  * Extract the authority's signing key from an authenticated DID document.
@@ -69,7 +69,7 @@ function validDocument(
   did: string,
   value: unknown,
 ): value is Record<string, unknown> {
-  return typeof did === "string" && isValidDid(did) && isObject(value) &&
+  return isSpaceDid(did) && isObject(value) &&
     value.id === did;
 }
 

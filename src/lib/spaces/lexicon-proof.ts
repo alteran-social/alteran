@@ -2,7 +2,6 @@ import { parseDidKey } from "@atproto/crypto-spaces";
 import { decode, encode } from "@atproto/lex-cbor";
 import { def, readCarStream, verifyCommitSig } from "@atproto/repo";
 import {
-  isValidDid,
   isValidNsid,
   isValidRecordKey,
   isValidTid,
@@ -13,6 +12,7 @@ import { CID } from "multiformats/cid";
 import { isCanonicalRepoCid, parseCanonicalRepoCid } from "./repo-cid";
 import { validateSpaceLexiconSemantics } from "./lexicon-semantics";
 import { SPACE_LEXICON_LIMITS } from "./lexicon-limits";
+import { isSpaceDid } from "./space-did";
 
 const SCHEMA_COLLECTION = "com.atproto.lexicon.schema";
 const MAX_CAR_BYTES = SPACE_LEXICON_LIMITS.proofResponseBytes;
@@ -195,7 +195,7 @@ function validInput(value: LexiconProofInput): boolean {
   return isObject(value) && typeof value.nsid === "string" &&
     isValidNsid(value.nsid) &&
     isValidRecordKey(value.nsid) && typeof value.publisherDid === "string" &&
-    isValidDid(value.publisherDid) &&
+    isSpaceDid(value.publisherDid) &&
     typeof value.signingKey === "string" && value.signingKey.length <= 140 &&
     typeof value.currentCommitCid === "string" &&
     value.currentCommitCid.length <= 128 &&

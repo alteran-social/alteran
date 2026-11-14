@@ -7,7 +7,8 @@ import {
   verifyCredentialSig,
   verifySpaceToken,
 } from '@atproto/space';
-import { isValidDid, SpaceRef } from '@atproto/syntax-spaces';
+import { SpaceRef } from '@atproto/syntax-spaces';
+import { isSpaceDid } from './space-did';
 
 export type SpaceCredentialVerification =
   | {
@@ -51,13 +52,15 @@ export async function verifySpaceCredential(
   } = options;
   if (
     typeof space !== 'string' || space.length > MAX_SPACE_LENGTH ||
-    typeof expectedAudience !== 'string' || !isValidDid(expectedAudience) ||
+    !isSpaceDid(expectedAudience) ||
     !headers || typeof headers.get !== 'function'
   ) return { tag: 'invalid' };
 
   let authority: string;
   try {
-    authority = SpaceRef.parse(space).spaceDid;
+    const reference = SpaceRef.parse(space);
+    if (reference.toString() !== space || !isSpaceDid(reference.spaceDid)) return { tag: 'invalid' };
+    authority = reference.spaceDid;
   } catch {
     return { tag: 'invalid' };
   }

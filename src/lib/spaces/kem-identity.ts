@@ -1,6 +1,6 @@
 import { formatDidVerificationMethod } from "@atproto/crypto-spaces";
 import { isP256DidKey } from "@atproto/space";
-import { isValidDid } from "@atproto/syntax-spaces";
+import { isSpaceDid } from "./space-did";
 
 export type SpaceKemIdentityStatus =
   | "ready"
@@ -18,7 +18,7 @@ export function checkSpaceKemIdentity(
   document: unknown,
 ): SpaceKemIdentityStatus {
   if (
-    !isValidDid(did) || !isP256DidKey(publicDidKey) || !isObject(document) ||
+    !isSpaceDid(did) || !isP256DidKey(publicDidKey) || !isObject(document) ||
     document.id !== did
   ) {
     return "invalid";

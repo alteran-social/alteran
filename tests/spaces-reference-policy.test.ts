@@ -82,7 +82,9 @@ Deno.test({
 
       const initial = await authorize();
       expect(initial.status).toBe(400);
-      expect((await initial.json()).error).toBe("SpaceNotFound");
+      expect((await initial.json() as { error: string }).error).toBe(
+        "SpaceNotFound",
+      );
       expect(
         decideSpaceAccountAccess(initialPolicy, {
           space,
@@ -112,7 +114,9 @@ Deno.test({
       await update(restricted);
       const rejected = await authorize();
       expect(rejected.status).toBe(400);
-      expect((await rejected.json()).error).toBe("AppNotAuthorized");
+      expect((await rejected.json() as { error: string }).error).toBe(
+        "AppNotAuthorized",
+      );
       expect(decideSpaceClientAccess(restricted, { tag: "absent" }).tag).toBe(
         "denied",
       );

@@ -1,6 +1,7 @@
 import { resolveTxt } from "node:dns/promises";
-import { isValidDid, NSID } from "@atproto/syntax-spaces";
+import { NSID } from "@atproto/syntax-spaces";
 import { SPACE_LEXICON_LIMITS } from "./lexicon-limits";
+import { isSpaceDid } from "./space-did";
 
 const DEFAULT_TIMEOUT_MS = 3_000;
 const MAX_TIMEOUT_MS = 10_000;
@@ -148,7 +149,7 @@ function parseTxt(value: unknown): LexiconAuthorityResult {
     didLine = line.slice(4);
   }
   if (didLine === undefined) return { tag: "notFound" };
-  if (!isValidDid(didLine)) return { tag: "invalid", reason: "did" };
+  if (!isSpaceDid(didLine)) return { tag: "invalid", reason: "did" };
   return { tag: "resolved", did: didLine };
 }
 
