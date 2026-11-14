@@ -30,6 +30,7 @@ export function copyPlainRecord(
 export function copyPlainRecordWithExtensions(
   value: unknown,
   limit: number,
+  keyBudget?: { remaining: number },
 ): Record<string, unknown> | null {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -44,7 +45,20 @@ export function copyPlainRecordWithExtensions(
     for (const key of keys) {
       if (typeof key !== "string") return null;
       if (key.length > 8192) return null;
-      totalKeyBytes += new TextEncoder().encode(key).byteLength;
+      if (keyBudget) {
+        if (
+          !Number.isSafeInteger(keyBudget.remaining) ||
+          keyBudget.remaining < key.length
+        ) return null;
+        keyBudget.remaining -= key.length;
+      }
+      const keyBytes = new TextEncoder().encode(key).byteLength;
+      if (keyBudget) {
+        const additional = keyBytes - key.length;
+        if (additional > keyBudget.remaining) return null;
+        keyBudget.remaining -= additional;
+      }
+      totalKeyBytes += keyBytes;
       if (totalKeyBytes > 65_536) return null;
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor?.enumerable || !("value" in descriptor)) return null;

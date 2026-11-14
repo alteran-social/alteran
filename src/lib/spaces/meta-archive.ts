@@ -23,6 +23,11 @@ import {
 } from "./plain-values";
 import { parseSpacePolicy, type SpacePolicy } from "./policy";
 import { isSpaceDid } from "./space-did";
+import {
+  captureExpectedSpaceMembers,
+  type ExpectedSpaceMember,
+  referenceMemberKey,
+} from "./meta-archive-members";
 
 const META_TYPE = "atproto-space-meta";
 const MEMBER_TYPE = "com.atproto.memberspace.member";
@@ -51,6 +56,14 @@ export type SpaceMetaArchive = {
   readonly policyState: readonly SpaceMetaPolicyState[];
   readonly writers: readonly SpaceMetaWriter[];
 };
+export type SpaceMetaArchiveWithMembers =
+  & Omit<SpaceMetaArchive, "policyState">
+  & {
+    readonly policyState: readonly {
+      readonly did: string;
+      readonly value: SpaceMetaMember;
+    }[];
+  };
 
 export class SpaceMetaArchiveError extends Error {
   constructor(readonly code: "InvalidSpaceMeta" | "UnsupportedPolicy") {
@@ -73,7 +86,34 @@ export function readSpaceMetaArchive(
   input: Uint8Array,
   expectedSpace: string,
 ): SpaceMetaArchive {
+  return readArchive(input, expectedSpace, null).archive;
+}
+
+/**
+ * Match every member to a separately authenticated, complete snapshot.
+ * This verifies correspondence to the supplied snapshot, not its provenance.
+ */
+export function readSpaceMetaArchiveWithMembers(
+  input: Uint8Array,
+  expectedSpace: string,
+  expectedMembers: readonly ExpectedSpaceMember[],
+): SpaceMetaArchiveWithMembers {
+  const result = readArchive(input, expectedSpace, { expectedMembers });
+  return { ...result.archive, policyState: result.members };
+}
+
+function readArchive(
+  input: Uint8Array,
+  expectedSpace: string,
+  expected: { expectedMembers: unknown } | null,
+): {
+  archive: SpaceMetaArchive;
+  members: SpaceMetaArchiveWithMembers["policyState"];
+} {
   try {
+    const matcher = expected
+      ? captureExpectedSpaceMembers(expected.expectedMembers)
+      : null;
     if (!validSpace(expectedSpace)) throw invalid();
     const { metadata, pairs } = readMetaFrames(input);
     const budget: CborBudget = { remaining: MAX_ITEMS };
@@ -87,6 +127,7 @@ export function readSpaceMetaArchive(
     if (decoder.decode(pairs[0].key) !== "policy") throw invalid();
     const policy = normalizePolicy(decodeCanonicalMap(pairs[0].value, budget));
     const policyState: SpaceMetaPolicyState[] = [];
+    const members: { did: string; value: SpaceMetaMember }[] = [];
     const writers: SpaceMetaWriter[] = [];
     const membersSeen = new Set<string>();
     const writersSeen = new Set<string>();
@@ -112,13 +153,18 @@ export function readSpaceMetaArchive(
         writers.push(writer);
       } else {
         const entry = normalizeMember(policy, key, value);
-        const did = memberDid(key);
+        const did = matcher ? matcher.match(key, entry.value) : memberDid(key);
         if (membersSeen.has(did)) throw invalid();
         membersSeen.add(did);
-        policyState.push(entry);
+        if (matcher) members.push({ did, value: entry.value });
+        else policyState.push(entry);
       }
     }
-    return { space: expectedSpace, policy, policyState, writers };
+    matcher?.finish();
+    return {
+      archive: { space: expectedSpace, policy, policyState, writers },
+      members,
+    };
   } catch (error) {
     if (error instanceof SpaceMetaArchiveError) throw error;
     throw invalid();
@@ -127,7 +173,64 @@ export function readSpaceMetaArchive(
 
 /** Build a normalized profile; callers separately authorize imports or exports. */
 export function writeSpaceMetaArchive(input: SpaceMetaArchive): Uint8Array {
+  return writeArchive(input, null);
+}
+
+/** Serialize members only when their exact DIDs survive the reference mapping. */
+export function writeSpaceMetaArchiveWithMembers(
+  input: SpaceMetaArchiveWithMembers,
+): Uint8Array {
   try {
+    const fields = copyPlainRecord(input, [
+      "space",
+      "policy",
+      "policyState",
+      "writers",
+    ]);
+    const entries = fields &&
+      copyPlainArray(fields.policyState, MAX_META_ENTRIES);
+    if (!fields || !entries) throw invalid();
+    const expectedMembers: ExpectedSpaceMember[] = [];
+    const keyBudget = { remaining: MAX_META_ARCHIVE_BYTES };
+    const policyState = entries.map((entry) => {
+      const item = copyPlainRecord(entry, ["did", "value"]);
+      const value = item &&
+        copyPlainRecordWithExtensions(item.value, 64, keyBudget);
+      if (
+        !item || !value || typeof item.did !== "string" ||
+        value.$type !== MEMBER_TYPE ||
+        typeof value.read !== "boolean" || typeof value.write !== "boolean"
+      ) throw invalid();
+      expectedMembers.push({
+        did: item.did,
+        read: value.read,
+        write: value.write,
+      });
+      return {
+        key: referenceMemberKey(item.did),
+        value: { $type: MEMBER_TYPE, read: value.read, write: value.write },
+      };
+    });
+    return writeArchive({
+      space: fields.space,
+      policy: fields.policy,
+      policyState,
+      writers: fields.writers,
+    }, { expectedMembers });
+  } catch (error) {
+    if (error instanceof SpaceMetaArchiveError) throw error;
+    throw invalid();
+  }
+}
+
+function writeArchive(
+  input: unknown,
+  expected: { expectedMembers: unknown } | null,
+): Uint8Array {
+  try {
+    const matcher = expected
+      ? captureExpectedSpaceMembers(expected.expectedMembers)
+      : null;
     const fields = copyPlainRecord(input, [
       "space",
       "policy",
@@ -143,6 +246,7 @@ export function writeSpaceMetaArchive(input: SpaceMetaArchive): Uint8Array {
       1 + state.length + writerValues.length > MAX_META_ENTRIES
     ) throw invalid();
     const membersSeen = new Set<string>();
+    const keyBudget = { remaining: MAX_META_ARCHIVE_BYTES };
     const policyState = state.map((entry) => {
       const entryFields = copyPlainRecord(entry, ["key", "value"]);
       if (!entryFields || typeof entryFields.key !== "string") throw invalid();
@@ -150,15 +254,19 @@ export function writeSpaceMetaArchive(input: SpaceMetaArchive): Uint8Array {
         policy,
         entryFields.key,
         entryFields.value,
+        keyBudget,
       );
-      const did = memberDid(normalized.key);
+      const did = matcher
+        ? matcher.match(normalized.key, normalized.value)
+        : memberDid(normalized.key);
       if (membersSeen.has(did)) throw invalid();
       membersSeen.add(did);
       return normalized;
     });
+    matcher?.finish();
     const writersSeen = new Set<string>();
     const writers = writerValues.map((writer) => {
-      const writerFields = copyPlainRecordWithExtensions(writer, 64);
+      const writerFields = copyPlainRecordWithExtensions(writer, 64, keyBudget);
       if (!writerFields || typeof writerFields.did !== "string") {
         throw invalid();
       }
@@ -214,10 +322,10 @@ function normalizeMember(
   policy: SpacePolicy,
   key: string,
   value: unknown,
+  keyBudget?: { remaining: number },
 ): SpaceMetaPolicyState {
   if (policy.$type !== "com.atproto.memberspace.policy") throw invalid();
-  memberDid(key);
-  const fields = copyPlainRecordWithExtensions(value, 64);
+  const fields = copyPlainRecordWithExtensions(value, 64, keyBudget);
   if (
     !fields || fields.$type !== MEMBER_TYPE ||
     typeof fields.read !== "boolean" || typeof fields.write !== "boolean"

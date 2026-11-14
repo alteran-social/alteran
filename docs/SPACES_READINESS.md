@@ -84,7 +84,8 @@ retain missing-blob associations until their bytes are uploaded.
 
 The `spaces-reference-interop.test.ts`, `spaces-reference-lexicon.test.ts`,
 `spaces-reference-policy.test.ts`, `spaces-reference-ops.test.ts`,
-`spaces-reference-export.test.ts` and `spaces-reference-meta-archive.test.ts`
+`spaces-reference-export.test.ts`, `spaces-reference-meta-archive.test.ts` and
+`spaces-reference-meta-members.test.ts`
 tests can exercise a disposable local reference PDS. Set
 `ALTERAN_REFERENCE_INTEROP_CONFIG` to a JSON file containing
 `pds`, `plc`, `did`, and `accessJwt` for a test account. Both service URLs must
@@ -97,6 +98,8 @@ The export test uploads an archive produced by the internal snapshot exporter
 and verifies the imported record and digest; it buffers that small archive
 before uploading and does not test streaming HTTP transport.
 The metadata test imports and exports a memberspace policy, member, and writer.
+The member-mapping test checks a paginated reference member list against a
+separately exported metadata archive.
 An interrupted request may leave test data behind. Keep the configuration file
 private because it contains an access token. The Lexicon test injects DNS and
 maps test HTTPS origins to the local services; it does not establish live DNS or
@@ -187,10 +190,14 @@ serialization against the target Worker's CPU and memory limits.
 
 The internal metadata archive codec is limited to 16 MiB and normalizes the
 reference PDS's supported policy and member fields; it is not a lossless backup
-or an authorized import. To avoid an ambiguous reference member-key mapping,
-it rejects member DIDs with multiple method-specific segments, including some
-valid `did:web` identities. Migration cannot rely on this codec until that
-identity mapping and preservation of all required state are resolved.
+or an authorized import. The strict reader rejects ambiguous reference member
+keys. A separate reader can match such keys and access bits against a complete,
+independently authenticated membership snapshot, and returns semantic DIDs;
+its writer accepts only DIDs that round-trip through the reference mapping.
+These checks establish correspondence to the supplied snapshot, not its
+authenticity or freshness. Migration must bind the complete, paginated snapshot
+to the same quiesced or pinned Space and authority/account incarnation, and
+authenticate the policy, writer state and archive separately.
 
 An internal personal-Space lifecycle can tombstone a newly created personal
 Space and page through its local D1 records and history. It fences old leases
