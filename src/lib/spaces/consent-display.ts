@@ -24,7 +24,7 @@ export function describeSpaceConsent(
   const key = value.skey === "*" ? "any space key" : `space key ${value.skey}`;
   const permissions: string[] = [];
   if (value.actions.includes("read") || value.actions.includes("read_self")) {
-    permissions.push("Read your own repository in matching spaces");
+    permissions.push("Read your own repository, including all collections, in matching spaces");
     permissions.push(
       "Read settings, policies, member lists, writer identities and sync state for matching spaces you govern",
     );

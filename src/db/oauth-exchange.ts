@@ -4,6 +4,7 @@ import type { OAuthSessionRow, RefreshTokenRow } from './account';
 import type { ReplayTransaction } from './oauth-replay-transaction';
 import { DPOP_PROOF_FUTURE_SKEW_SEC, DPOP_PROOF_MAX_AGE_SEC } from '../lib/oauth/dpop-window';
 import { refreshSnapshotValues, refreshSnapshotWhere, sessionSnapshotValues, sessionSnapshotWhere } from './oauth-exchange-read';
+import { oauthSpaceGrantFence, oauthSpaceGrantFenceValues, type OAuthSpaceGrant } from './oauth-space-grant';
 
 type SqlValue = string | number | null;
 export class OAuthWorkerExpiry extends Error {
@@ -29,6 +30,7 @@ export type OAuthIssuedRows = {
   readonly refresh: RefreshTokenRow;
   readonly accessExpiresAt: number;
   readonly refreshExpiresAt: number;
+  readonly spaceGrant?: OAuthSpaceGrant;
 };
 
 const INSERT_SESSION = `INSERT INTO oauth_session
@@ -39,7 +41,10 @@ const INSERT_REFRESH = `INSERT INTO refresh_token
   (id, did, expires_at, app_password_name, next_id, token_kind, oauth_session_id, client_id,
    client_auth_method, client_auth_key_id, dpop_jkt, oauth_scope, access_jti, revoked_at)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-const SESSION_MATCHES = `EXISTS (SELECT 1 FROM oauth_session s WHERE ${sessionSnapshotWhere('s')})`;
+const SESSION_MATCHES = `EXISTS (SELECT 1 FROM oauth_session s WHERE ${sessionSnapshotWhere('s')}
+  AND ${oauthSpaceGrantFence('s')})`;
+const SESSION_MATCHES_FOR_REVOKE = `EXISTS (SELECT 1 FROM oauth_session s WHERE ${sessionSnapshotWhere('s')}
+  AND ${oauthSpaceGrantFence('s', false)})`;
 const REFRESH_MATCHES = `EXISTS (SELECT 1 FROM refresh_token r WHERE ${refreshSnapshotWhere('r')})`;
 
 function finalClock(nonce: string, expiries: readonly number[]): { sql: string; values: SqlValue[] } {
@@ -68,17 +73,22 @@ export async function commitOAuthCodeExchange(
   const receipt = JSON.stringify({ used: true, attempt: replay.nonce });
   const expiries = [code.record.expiresAt, issued.session.expiresAt, issued.accessExpiresAt, issued.refreshExpiresAt];
   const clock = finalClock(replay.nonce, expiries);
+  const grant = issued.spaceGrant;
+  const grantInsert = grant ? [database.prepare(`INSERT INTO oauth_space_grant (session_id, snapshot, digest, created_at)
+    VALUES (?, ?, ?, ?)`).bind(issued.session.id, grant.snapshot, grant.digest, issued.session.createdAt)] : [];
   const statements = [
     ...replay.begin,
     database.prepare(`UPDATE secret SET value = ?, updated_at = ? WHERE key = ? AND value = ? AND ${clock.sql}`)
       .bind(receipt, issued.session.createdAt * 1000, key, code.value, ...clock.values),
     database.prepare(INSERT_SESSION).bind(...sessionSnapshotValues(issued.session)),
+    ...grantInsert,
     database.prepare(INSERT_REFRESH).bind(...refreshSnapshotValues(issued.refresh)),
     ...replay.finish,
     database.prepare(`SELECT CASE WHEN ${clock.sql}
       AND EXISTS (SELECT 1 FROM secret WHERE key = ? AND value = ?)
       AND ${SESSION_MATCHES} AND ${REFRESH_MATCHES} THEN 1 ELSE json('{') END AS valid`)
-      .bind(...clock.values, key, receipt, ...sessionSnapshotValues(issued.session), ...refreshSnapshotValues(issued.refresh)),
+      .bind(...clock.values, key, receipt, ...sessionSnapshotValues(issued.session), ...oauthSpaceGrantFenceValues(grant),
+        ...refreshSnapshotValues(issued.refresh)),
   ];
   ensureWorkerWindow(replay, expiries);
   const results = await database.batch(statements);
@@ -93,6 +103,7 @@ export async function commitOAuthRefreshRotation(
   issued: OAuthIssuedRows,
   signedExpiry: number,
   now: number,
+  grant?: OAuthSpaceGrant,
 ): Promise<void> {
   if (previous.refresh.revokedAt !== null || previous.refresh.nextId !== null || previous.session.revokedAt !== null ||
     previous.session.currentRefreshTokenId !== previous.refresh.id || previous.session.accessJti !== previous.refresh.accessJti) {
@@ -107,18 +118,20 @@ export async function commitOAuthRefreshRotation(
   const clock = finalClock(replay.nonce, expiries);
   const statements = [
     ...replay.begin,
-    database.prepare(`UPDATE refresh_token AS r SET next_id = ?, revoked_at = ? WHERE ${refreshSnapshotWhere('r')} AND ${clock.sql}`)
-      .bind(issued.refresh.id, now, ...refreshSnapshotValues(previous.refresh), ...clock.values),
+    database.prepare(`UPDATE refresh_token AS r SET next_id = ?, revoked_at = ? WHERE ${refreshSnapshotWhere('r')} AND ${clock.sql}
+      AND ${SESSION_MATCHES}`)
+      .bind(issued.refresh.id, now, ...refreshSnapshotValues(previous.refresh), ...clock.values,
+        ...sessionSnapshotValues(previous.session), ...oauthSpaceGrantFenceValues(grant)),
     database.prepare(INSERT_REFRESH).bind(...refreshSnapshotValues(issued.refresh)),
     database.prepare(`UPDATE oauth_session AS s SET current_refresh_token_id = ?, access_jti = ?, expires_at = ?, updated_at = ?
-      WHERE ${sessionSnapshotWhere('s')} AND ${clock.sql}`)
+      WHERE ${sessionSnapshotWhere('s')} AND ${clock.sql} AND ${oauthSpaceGrantFence('s')}`)
       .bind(issued.refresh.id, issued.session.accessJti, issued.session.expiresAt, now,
-        ...sessionSnapshotValues(previous.session), ...clock.values),
+        ...sessionSnapshotValues(previous.session), ...clock.values, ...oauthSpaceGrantFenceValues(grant)),
     ...replay.finish,
     database.prepare(`SELECT CASE WHEN ${clock.sql} AND ${REFRESH_MATCHES} AND ${REFRESH_MATCHES}
       AND ${SESSION_MATCHES} THEN 1 ELSE json('{') END AS valid`)
       .bind(...clock.values, ...refreshSnapshotValues(oldRefresh), ...refreshSnapshotValues(issued.refresh),
-        ...sessionSnapshotValues(updatedSession)),
+        ...sessionSnapshotValues(updatedSession), ...oauthSpaceGrantFenceValues(grant)),
   ];
   ensureWorkerWindow(replay, expiries);
   const results = await database.batch(statements);
@@ -132,6 +145,7 @@ export async function commitOAuthRefreshReplay(
   replay: ReplayTransaction,
   signedExpiry: number,
   now: number,
+  grant?: OAuthSpaceGrant,
 ): Promise<void> {
   if (previous.refresh.revokedAt === null || !previous.refresh.nextId || previous.session.revokedAt !== null ||
     previous.session.currentRefreshTokenId === previous.refresh.id) {
@@ -144,12 +158,14 @@ export async function commitOAuthRefreshReplay(
   const statements = [
     ...replay.begin,
     database.prepare(`UPDATE oauth_session AS s SET revoked_at = ?, updated_at = ?
-      WHERE ${sessionSnapshotWhere('s')} AND ${REFRESH_MATCHES} AND ${clock.sql}`)
-      .bind(now, now, ...sessionSnapshotValues(previous.session), ...refreshSnapshotValues(previous.refresh), ...clock.values),
+      WHERE ${sessionSnapshotWhere('s')} AND ${REFRESH_MATCHES} AND ${clock.sql} AND ${oauthSpaceGrantFence('s', false)}`)
+      .bind(now, now, ...sessionSnapshotValues(previous.session), ...refreshSnapshotValues(previous.refresh), ...clock.values,
+        ...oauthSpaceGrantFenceValues(grant)),
     ...replay.finish,
-    database.prepare(`SELECT CASE WHEN ${clock.sql} AND ${REFRESH_MATCHES} AND ${SESSION_MATCHES}
+    database.prepare(`SELECT CASE WHEN ${clock.sql} AND ${REFRESH_MATCHES} AND ${SESSION_MATCHES_FOR_REVOKE}
       THEN 1 ELSE json('{') END AS valid`)
-      .bind(...clock.values, ...refreshSnapshotValues(previous.refresh), ...sessionSnapshotValues(revokedSession)),
+      .bind(...clock.values, ...refreshSnapshotValues(previous.refresh), ...sessionSnapshotValues(revokedSession),
+        ...oauthSpaceGrantFenceValues(grant)),
   ];
   ensureWorkerWindow(replay, expiries);
   const results = await database.batch(statements);

@@ -10,6 +10,8 @@ import { DpopNonceError } from './dpop-errors';
 import { getAuthzNonce, sha256b64url, type DpopVerification } from './dpop';
 import { oauthSessionExpiresAt } from './session-lifetime';
 import { loadCodeSnapshot } from './store';
+import { codeSpaceGrant, sessionSpaceGrant } from './space-grants';
+import { loadActiveSpaceIncarnation, type OAuthSpaceGrant } from '../../db/oauth-space-grant';
 
 type GrantContext = { readonly env: Env; readonly form: URLSearchParams; readonly proof: DpopVerification; readonly issuer: string };
 export type OAuthGrantResult =
@@ -25,7 +27,7 @@ type Issued = { readonly rows: OAuthIssuedRows; readonly accessJwt: string; read
 
 async function issueRows(
   env: Env,
-  identity: { did: string; clientId: string; method: string; keyId: string | null; keyBinding: string | null; jkt: string; scope: string },
+  identity: { did: string; clientId: string; method: string; keyId: string | null; keyBinding: string | null; jkt: string; scope: string; spaceGrant?: OAuthSpaceGrant },
   previous?: OAuthSessionRow,
 ): Promise<Issued> {
   const now = Math.floor(Date.now() / 1000);
@@ -33,6 +35,7 @@ async function issueRows(
   const accessJti = crypto.randomUUID().replace(/-/g, '');
   const tokens = await issueSessionTokens(env, identity.did, {
     accessScope: identity.scope, clientId: identity.clientId, dpopJkt: identity.jkt, oauthSessionId: sessionId, accessJti,
+    ...(identity.spaceGrant && { spaceGrantDigest: identity.spaceGrant.digest }),
   });
   const expiresAt = oauthSessionExpiresAt(identity.method, tokens.refreshExpiry, previous
     ? { tag: 'refreshed', currentExpiresAt: previous.expiresAt }
@@ -52,8 +55,10 @@ async function issueRows(
   if (!oauthRefreshSnapshotFits(refresh, session) || !validResourceBinding({
     sessionId, accessJti, did: identity.did, clientId: identity.clientId, jkt: identity.jkt,
     scope: identity.scope, expiresAt: tokens.accessPayload.exp,
+    ...(identity.spaceGrant && { spaceGrant: identity.spaceGrant }),
   })) throw new Error('OAuth grant exceeds storage limits');
-  return { rows: { session, refresh, accessExpiresAt: tokens.accessPayload.exp, refreshExpiresAt: tokens.refreshPayload.exp },
+  return { rows: { session, refresh, accessExpiresAt: tokens.accessPayload.exp, refreshExpiresAt: tokens.refreshPayload.exp,
+    ...(identity.spaceGrant && { spaceGrant: identity.spaceGrant }) },
     accessJwt: tokens.accessJwt, refreshJwt: tokens.refreshJwt };
 }
 
@@ -89,6 +94,8 @@ export async function exchangeAuthorizationCode({ env, form, proof, issuer }: Gr
   if (record.client_id !== clientId || record.redirect_uri !== redirectUri ||
     await sha256b64url(verifier) !== record.code_challenge) return invalid('auth_code', 'invalid_grant', 'Invalid authorization code binding');
   if (proof.jkt !== record.dpopJkt) return invalid('auth_code', 'invalid_dpop', 'DPoP key mismatch');
+  const space = await codeSpaceGrant(record);
+  if (space.tag === 'invalid') return invalid('auth_code', 'invalid_grant', 'Invalid Space consent');
   let auth;
   try {
     auth = await requireStoredClientAuthentication(env, clientId, issuer, form, {
@@ -100,6 +107,7 @@ export async function exchangeAuthorizationCode({ env, form, proof, issuer }: Gr
   const issued = await issueRows(env, {
     did: record.did, clientId, method: record.clientAuthMethod, keyId: record.clientAuthKeyId ?? null,
     keyBinding: record.clientAuthKeyBinding ?? null, jkt: record.dpopJkt, scope: record.scope,
+    ...(space.tag === 'valid' && { spaceGrant: space.grant }),
   });
   const nonce = await getAuthzNonce(env);
   const replay = prepareReplayTransaction(env, proof, auth.replay);
@@ -154,6 +162,14 @@ export async function exchangeRefreshToken({ env, form, proof, issuer }: GrantCo
   }
   const state = refreshState(refresh, session);
   if (state.tag === 'invalid') return invalid('refresh_token', 'invalid_grant', 'Refresh token state is invalid');
+  const space = await sessionSpaceGrant(env, session, payload.space_grant);
+  if (space.tag === 'invalid') return invalid('refresh_token', 'invalid_grant', 'Invalid Space consent');
+  if (space.tag === 'valid') {
+    const requestedScopes = form.getAll('scope');
+    if (requestedScopes.length > 1 || (requestedScopes.length === 1 && requestedScopes[0] !== '' && requestedScopes[0] !== session.scope)) {
+      return invalid('refresh_token', 'invalid_scope', 'Space consent cannot be changed during refresh');
+    }
+  }
   let auth;
   try {
     auth = await requireStoredClientAuthentication(env, clientId, issuer, form, {
@@ -165,13 +181,16 @@ export async function exchangeRefreshToken({ env, form, proof, issuer }: GrantCo
   const issued = state.tag === 'current' ? await issueRows(env, {
     did: session.did, clientId, method: session.clientAuthMethod, keyId: session.clientAuthKeyId,
     keyBinding: session.clientAuthKeyBinding, jkt: session.dpopJkt, scope: session.scope,
+    ...(space.tag === 'valid' && { spaceGrant: space.grant }),
   }, session) : null;
   const nonce = await getAuthzNonce(env);
   const replay = prepareReplayTransaction(env, proof, auth.replay);
   if (!replay) throw new DpopNonceError('Invalid DPoP proof', nonce);
   try {
-    if (issued) await commitOAuthRefreshRotation(env, snapshot, replay, issued.rows, payload.exp, now);
-    else await commitOAuthRefreshReplay(env, snapshot, replay, payload.exp, now);
+    if (issued) await commitOAuthRefreshRotation(env, snapshot, replay, issued.rows, payload.exp, now,
+      space.tag === 'valid' ? space.grant : undefined);
+    else await commitOAuthRefreshReplay(env, snapshot, replay, payload.exp, now,
+      space.tag === 'valid' ? space.grant : undefined);
   } catch (error) {
     if (error instanceof OAuthWorkerExpiry) return expiredGrant(error, 'refresh_token', nonce);
     await failedCommit(env, replay, nonce);
@@ -179,6 +198,14 @@ export async function exchangeRefreshToken({ env, form, proof, issuer }: GrantCo
     if (!currentSnapshot || !equalValues(refreshSnapshotValues(currentSnapshot.refresh), refreshSnapshotValues(refresh)) ||
       !equalValues(sessionSnapshotValues(currentSnapshot.session), sessionSnapshotValues(session))) {
       return invalid('refresh_token', 'invalid_grant', 'Refresh token state changed');
+    }
+    if (space.tag === 'valid') {
+      const currentGrant = await sessionSpaceGrant(env, currentSnapshot.session, payload.space_grant);
+      if (currentGrant.tag !== 'valid' || currentGrant.grant.snapshot !== space.grant.snapshot ||
+        currentGrant.grant.digest !== space.grant.digest ||
+        await loadActiveSpaceIncarnation(env, session.did) !== space.grant.accountIncarnation) {
+        return invalid('refresh_token', 'invalid_grant', 'Space grant state changed');
+      }
     }
     throw error;
   }

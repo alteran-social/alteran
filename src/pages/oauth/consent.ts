@@ -4,19 +4,21 @@ import { issueAuthorizationCode } from '../../lib/oauth/issue-code';
 import { readOAuthForm } from '../../lib/oauth/form';
 import {
   authenticateSingleUserPassword,
-  checkConsentPasswordLockout,
-  clearConsentPasswordFailures,
   htmlEscape,
   isSameOriginPost,
   loginHintMatchesSingleUser,
   publicPdsOrigin,
-  reserveConsentPasswordAttempt,
   redirectWithCode,
   redirectWithOAuthError,
 } from '../../lib/oauth/consent';
 import { resolveClientMetadata } from '../../lib/oauth/clients';
 import { consentPermissions, describeConsentPermission } from '../../lib/oauth/consent-scopes';
 import { isLoopbackClientId } from '../../lib/oauth/loopback-client';
+import { createParSpaceConsent, hasSpaceScope, restoreParSpaceConsent } from '../../lib/oauth/space-consent';
+import { describeSpaceConsent } from '../../lib/spaces/consent-display';
+import { getRuntimeString } from '../../lib/secrets';
+import { loadActiveSpaceIncarnation } from '../../db/oauth-space-grant';
+import { clearLoginAttempt, loginLockoutResponse, reserveLoginAttempt } from '../../lib/login-attempts';
 
 export const prerender = false;
 
@@ -64,15 +66,33 @@ export async function GET({ locals, request }: APIContext) {
     }
   }
 
-  const permissionItems = consentPermissions(par.scope)
+  const subject = hasSpaceScope(par.scope) ? await getRuntimeString(env, 'PDS_DID', '') : '';
+  const accountIncarnation = subject ? await loadActiveSpaceIncarnation(env, subject) : null;
+  const spaceConsent = hasSpaceScope(par.scope) && subject && accountIncarnation
+    ? await createParSpaceConsent(par, subject, accountIncarnation) : null;
+  if (hasSpaceScope(par.scope) && !spaceConsent) {
+    return new Response('Space permissions cannot be displayed', { status: 400 });
+  }
+  const ordinaryItems = consentPermissions(par.scope)
     .map((permission) => `<li>${htmlEscape(describeConsentPermission(permission))}</li>`)
     .join('\n    ');
+  const spaceItems = spaceConsent?.grants.map((grant) => {
+    const description = describeSpaceConsent(grant.permission);
+    if (!description) throw new Error('Invalid Space consent description');
+    const permissions = description.permissions.map((value) => `<li>${htmlEscape(value)}</li>`).join('');
+    const warning = description.broad ? ' class="warning"' : '';
+    return `<li${warning}>Space permission for ${htmlEscape(description.target)}<ul>${permissions}</ul></li>`;
+  }).join('\n    ') ?? '';
+  const permissionItems = `${ordinaryItems}\n    ${spaceItems}`;
   const unverifiedClientNotice = isLoopbackClient
     ? '<p class="warning">This is a local development client running on your own computer. Its identity cannot be verified, so only continue if you started this sign-in yourself.</p>'
     : '';
 
   const csrf = crypto.randomUUID().replace(/-/g, '');
-  await saveConsent(env, id, csrf, Math.floor(Date.now() / 1000) + 300, snapshot.value);
+  await saveConsent(env, id, csrf, Math.floor(Date.now() / 1000) + 300, snapshot.value, spaceConsent && accountIncarnation
+    ? { serialized: spaceConsent.serialized, digest: spaceConsent.digest, tokenScope: spaceConsent.tokenScope,
+      accountIncarnation }
+    : undefined);
 
   const body = `<!doctype html>
 <html lang="en">
@@ -180,12 +200,11 @@ export async function POST({ locals, request }: APIContext) {
     return redirectWithOAuthError(par.redirect_uri, 'access_denied', par.state, issuer);
   }
 
-  const lockout = await checkConsentPasswordLockout(env, request);
-  if (lockout) return lockout;
-  const reservedAttempt = await reserveConsentPasswordAttempt(env, request);
-  if (reservedAttempt) {
+  const attempt = await reserveLoginAttempt(env, request);
+  if (attempt.tag === 'locked') return loginLockoutResponse(attempt.retryAfter);
+  if (attempt.reservation.lockedUntil !== null) {
     await deleteParSnapshot(env, id, snapshot.value);
-    return reservedAttempt;
+    return loginLockoutResponse();
   }
 
   const account = await authenticateSingleUserPassword(env, form.get('password') || '');
@@ -193,7 +212,14 @@ export async function POST({ locals, request }: APIContext) {
     await deleteParSnapshot(env, id, snapshot.value);
     return redirectWithOAuthError(par.redirect_uri, 'access_denied', par.state, issuer, 'invalid credentials');
   }
-  await clearConsentPasswordFailures(env, request);
+  await clearLoginAttempt(env, attempt.reservation);
+
+  if (hasSpaceScope(par.scope) !== !!consent.spaceConsent ||
+    (consent.spaceConsent && !(await restoreParSpaceConsent(par, account.did, consent.spaceConsent)))) {
+    return new Response(JSON.stringify({ error: 'invalid_request_uri' }), {
+      status: 400, headers: { 'Content-Type': 'application/json' },
+    });
+  }
 
   const code = await issueAuthorizationCode(env, id, snapshot, consent, account.did);
   if (!code) {

@@ -7,6 +7,7 @@ import { revokeOAuthSessionSnapshot } from '../../db/oauth-revoke';
 import { requireStoredClientAuthentication } from './clients';
 import { getAuthzNonce, type DpopVerification } from './dpop';
 import { DpopNonceError } from './dpop-errors';
+import type { OAuthSpaceGrant } from '../../db/oauth-space-grant';
 
 export async function revokeAuthenticatedSession(
   env: Env,
@@ -16,6 +17,7 @@ export async function revokeAuthenticatedSession(
   form: URLSearchParams,
   accessExpiry?: number,
   presentedRefresh?: RefreshTokenRow,
+  spaceGrant?: OAuthSpaceGrant,
 ): Promise<void> {
   if (session.revokedAt !== null) return;
   const currentSnapshot = await loadOAuthRefreshSnapshot(env, session.currentRefreshTokenId);
@@ -37,7 +39,7 @@ export async function revokeAuthenticatedSession(
   const replay = prepareReplayTransaction(env, proof, auth.replay);
   if (!replay) throw new DpopNonceError('Invalid DPoP proof', nonce);
   try {
-    await revokeOAuthSessionSnapshot(env, session, currentRefresh, presentedRefresh, replay, accessExpiry);
+    await revokeOAuthSessionSnapshot(env, session, currentRefresh, presentedRefresh, replay, accessExpiry, spaceGrant);
   } catch (error) {
     if (error instanceof OAuthWorkerExpiry) {
       if (error.reason === 'proof') throw new DpopNonceError('DPoP proof expired', nonce);

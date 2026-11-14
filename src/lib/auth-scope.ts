@@ -1,6 +1,7 @@
 import { isValidNsid } from '@atproto/syntax';
 import { mimeMatches } from './mime';
 import { isChatMethod, isPrivilegedMethod, lexiconMethodIn } from './privileged-method';
+import { parseExplicitSpaceReadGrant } from './spaces/explicit-read-grant';
 
 export const AuthScope = {
   Access: 'com.atproto.access',
@@ -249,7 +250,7 @@ function oauthScopeParts(scope: unknown): string[] | null {
 
 export function isSupportedOAuthScopeValue(scope: string): boolean {
   if (scope === OAUTH_PROFILE_SCOPE || OAUTH_TRANSITION_SCOPES.has(scope)) return true;
-  return parsePermissionScope(scope) !== null;
+  return parsePermissionScope(scope) !== null || parseExplicitSpaceReadGrant(scope) !== null;
 }
 
 function oauthScopeAllowsTransitionGeneric(scope: string): boolean {

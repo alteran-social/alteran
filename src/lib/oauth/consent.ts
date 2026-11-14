@@ -1,13 +1,7 @@
 import type { Env } from '../../env';
-import { drizzle } from 'drizzle-orm/d1';
-import { eq } from 'drizzle-orm';
 import { createAccount, getAccountByIdentifier } from '../../db/account';
-import { login_attempts } from '../../db/schema';
 import { getRuntimeString } from '../secrets';
 import { hashPassword, verifyPassword } from '../password';
-
-const MAX_LOGIN_ATTEMPTS = 5;
-const LOCKOUT_DURATION_SEC = 15 * 60;
 
 export function redirectWithOAuthError(
   redirectUri: string,
@@ -93,74 +87,6 @@ export async function authenticateSingleUserPassword(env: Env, password: string)
   if (!account || account.did !== did) return null;
   if (!(await verifyPassword(password, account.passwordScrypt))) return null;
   return { did: account.did, handle: account.handle };
-}
-
-function consentClientIp(request: Request): string {
-  return request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || 'unknown';
-}
-
-export async function checkConsentPasswordLockout(env: Env, request: Request): Promise<Response | null> {
-  const db = drizzle(env.ALTERAN_DB);
-  const now = Math.floor(Date.now() / 1000);
-  const ip = consentClientIp(request);
-  const attempt = await db.select().from(login_attempts).where(eq(login_attempts.ip, ip)).get();
-  if (attempt?.locked_until && attempt.locked_until > now) {
-    const remainingSeconds = attempt.locked_until - now;
-    return new Response(
-      JSON.stringify({
-        error: 'RateLimitExceeded',
-        message: `Account locked due to too many failed attempts. Try again in ${Math.ceil(remainingSeconds / 60)} minutes.`,
-      }),
-      { status: 429, headers: { 'Content-Type': 'application/json' } },
-    );
-  }
-  return null;
-}
-
-function lockoutResponse(remainingSeconds: number): Response {
-  return new Response(
-    JSON.stringify({
-      error: 'RateLimitExceeded',
-      message: `Account locked due to too many failed attempts. Try again in ${Math.ceil(remainingSeconds / 60)} minutes.`,
-    }),
-    { status: 429, headers: { 'Content-Type': 'application/json' } },
-  );
-}
-
-export async function reserveConsentPasswordAttempt(env: Env, request: Request): Promise<Response | null> {
-  const now = Math.floor(Date.now() / 1000);
-  const ip = consentClientIp(request);
-  const row = await env.ALTERAN_DB.prepare(`
-    INSERT INTO login_attempts (ip, attempts, locked_until, last_attempt)
-    VALUES (?, 1, NULL, ?)
-    ON CONFLICT(ip) DO UPDATE SET
-      attempts = CASE
-        WHEN locked_until IS NOT NULL AND locked_until > ? THEN attempts
-        ELSE attempts + 1
-      END,
-      locked_until = CASE
-        WHEN locked_until IS NOT NULL AND locked_until > ? THEN locked_until
-        WHEN attempts + 1 >= ? THEN ?
-        ELSE NULL
-      END,
-      last_attempt = ?
-    RETURNING attempts, locked_until
-  `).bind(ip, now, now, now, MAX_LOGIN_ATTEMPTS, now + LOCKOUT_DURATION_SEC, now)
-    .first<{ attempts: number; locked_until: number | null }>();
-
-  if (row?.locked_until && row.locked_until > now) {
-    return lockoutResponse(row.locked_until - now);
-  }
-  return null;
-}
-
-export async function recordConsentPasswordFailure(env: Env, request: Request): Promise<void> {
-  await reserveConsentPasswordAttempt(env, request);
-}
-
-export async function clearConsentPasswordFailures(env: Env, request: Request): Promise<void> {
-  const db = drizzle(env.ALTERAN_DB);
-  await db.delete(login_attempts).where(eq(login_attempts.ip, consentClientIp(request))).run();
 }
 
 export async function loginHintMatchesSingleUser(env: Env, loginHint: string | undefined): Promise<boolean> {

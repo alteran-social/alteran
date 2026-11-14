@@ -2,6 +2,8 @@ import * as dagCbor from "@ipld/dag-cbor";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { CID } from "multiformats/cid";
 import { create as createDigest } from "multiformats/hashes/digest";
+import { checkRecordCborBounds } from "../lib/spaces/record-cbor-bounds";
+import { verifySpaceRecordDataModel } from "./space-verify-record";
 
 /** Check the canonical record representation and CID used by Space writes. */
 export function validSpaceRecordBlock(
@@ -9,6 +11,7 @@ export function validSpaceRecordBlock(
   claimedCid: string,
   bytes: Uint8Array,
 ): boolean {
+  if (checkRecordCborBounds(bytes) !== "valid") return false;
   try {
     const value: unknown = dagCbor.decode(bytes);
     if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -20,6 +23,7 @@ export function validSpaceRecordBlock(
       !Object.hasOwn(value, "$type") ||
       (value as Record<string, unknown>).$type !== collection
     ) return false;
+    if (verifySpaceRecordDataModel(value) !== "valid") return false;
     const canonical = dagCbor.encode(value);
     if (
       canonical.length !== bytes.length ||

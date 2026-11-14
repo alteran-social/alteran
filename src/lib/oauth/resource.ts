@@ -7,6 +7,10 @@ import { consumeOAuthResourceReplay, type OAuthResourceBinding } from '../../db/
 import { getAccountState } from '../../db/dal';
 import { jwkThumbprint } from './dpop';
 import { DPOP_PROOF_FUTURE_SKEW_SEC, DPOP_PROOF_MAX_AGE_SEC, isDpopProofFresh } from './dpop-window';
+import { dpopTarget } from './dpop-target';
+import type { VerifiedSpacePrincipal } from './space-principal';
+import { loadOAuthSpaceGrant } from '../../db/oauth-space-grant';
+import { hasSpaceScope } from './space-consent';
 import {
   bearerAccessContext,
   isBearerAccessScope,
@@ -18,6 +22,27 @@ import {
 } from '../auth-scope';
 
 const NONCE_PDS_KEY = 'oauth_dpop_nonce_pds';
+const verifiedSpacePrincipals = new WeakMap<object, { request: Request; database: D1Database }>();
+
+export function isVerifiedSpacePrincipal(value: unknown): value is VerifiedSpacePrincipal {
+  return typeof value === 'object' && value !== null && verifiedSpacePrincipals.has(value);
+}
+
+export function consumeVerifiedSpacePrincipal(value: unknown, request: Request, database: D1Database): value is VerifiedSpacePrincipal {
+  if (typeof value !== 'object' || value === null) return false;
+  const binding = verifiedSpacePrincipals.get(value);
+  verifiedSpacePrincipals.delete(value);
+  return !!binding && binding.request === request && binding.database === database;
+}
+
+type SpacePrincipalFields = Pick<VerifiedSpacePrincipal,
+  'sessionId' | 'accessJti' | 'did' | 'clientId' | 'jkt' | 'scope' | 'expiresAt' | 'proofIssuedAt' | 'grant'>;
+
+function createVerifiedSpacePrincipal(value: SpacePrincipalFields, request: Request, database: D1Database): VerifiedSpacePrincipal {
+  const principal = Object.freeze({ ...value }) as VerifiedSpacePrincipal;
+  verifiedSpacePrincipals.set(principal, { request, database });
+  return principal;
+}
 
 type ResourceAuthErrorCode = 'use_dpop_nonce' | 'expired_token' | 'invalid_token';
 
@@ -39,9 +64,6 @@ function b64url(bytes: Uint8Array | ArrayBuffer): string {
   return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-function urlWithoutHash(u: string): string {
-  try { const url = new URL(u); url.hash = ''; return url.toString(); } catch { return u; }
-}
 // removed local b64urlToBytes and DER helpers; jose handles verification
 
 async function getNonce(env: Env): Promise<string> {
@@ -85,6 +107,7 @@ export type ResourceAuthContext = {
   scope?: string;
   authType: 'bearer' | 'oauth-dpop';
   access: AuthAccessContext;
+  spacePrincipal?: VerifiedSpacePrincipal;
 };
 
 export async function verifyResourceRequest(env: Env, request: Request): Promise<ResourceAuthContext | null> {
@@ -136,7 +159,7 @@ async function verifyDpopAccess(env: Env, request: Request, accessToken: string)
   const header = decodeProtectedHeader(dpop) as any;
   if (header.typ !== 'dpop+jwt' || header.alg !== 'ES256' || !header.jwk) throw new ResourceAuthError('use_dpop_nonce', { nonce });
   const method = request.method.toUpperCase();
-  const url = urlWithoutHash(request.url);
+  const url = dpopTarget(request.url);
   const verified = await compactVerify(dpop, await importJWK(header.jwk as JoseJWK, 'ES256'));
   const payload = JSON.parse(new TextDecoder().decode(verified.payload));
   if (payload.htm !== method || payload.htu !== url) throw new ResourceAuthError('use_dpop_nonce', { nonce });
@@ -176,15 +199,31 @@ async function verifyDpopAccess(env: Env, request: Request, accessToken: string)
     typeof tokenPayload.exp !== 'number' || !Number.isFinite(tokenPayload.exp)) {
     throw new ResourceAuthError('invalid_token');
   }
+  let spaceGrant;
+  if (hasSpaceScope(tokenPayload.scope)) {
+    if (typeof tokenPayload.space_grant !== 'string') throw new ResourceAuthError('invalid_token');
+    spaceGrant = await loadOAuthSpaceGrant(env, {
+      sessionId, accessJti, did: tokenPayload.sub, clientId, jkt: tokenJkt, scope: tokenPayload.scope,
+    }, tokenPayload.space_grant);
+    if (!spaceGrant) throw new ResourceAuthError('invalid_token');
+  } else if (tokenPayload.space_grant !== undefined) {
+    throw new ResourceAuthError('invalid_token');
+  }
   await consumeResourceDpopJti(env, payload.jti, payload.iat, nonce, {
     sessionId, clientId, accessJti, did: tokenPayload.sub, jkt: tokenJkt,
     scope: tokenPayload.scope, expiresAt: tokenPayload.exp,
+    ...(spaceGrant && { spaceGrant }),
   });
+  const spacePrincipal = spaceGrant ? createVerifiedSpacePrincipal({
+    sessionId, accessJti, did: tokenPayload.sub, clientId, jkt: tokenJkt,
+    scope: tokenPayload.scope, expiresAt: tokenPayload.exp, proofIssuedAt: payload.iat, grant: spaceGrant,
+  }, request, env.ALTERAN_DB) : undefined;
   return {
     did: tokenPayload.sub as string,
     token: accessToken,
     scope: typeof tokenPayload.scope === 'string' ? tokenPayload.scope : undefined,
     authType: 'oauth-dpop' as const,
+    ...(spacePrincipal && { spacePrincipal }),
     access: await withResolvedResourceAccountStatus(
       env,
       tokenPayload.sub as string,

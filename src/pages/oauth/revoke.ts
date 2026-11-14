@@ -7,6 +7,7 @@ import { readOAuthForm } from '../../lib/oauth/form';
 import { verifyAccessToken, verifyRefreshToken } from '../../lib/session-tokens';
 import { loadOAuthRefreshSnapshot, loadOAuthSessionSnapshot } from '../../db/oauth-exchange-read';
 import { revokeAuthenticatedSession } from '../../lib/oauth/revoke-session';
+import { sessionSpaceGrant } from '../../lib/oauth/space-grants';
 
 export const prerender = false;
 
@@ -35,7 +36,9 @@ export async function POST({ locals, request }: APIContext) {
           stored.dpopJkt === session.dpopJkt && confirmation?.jkt === session.dpopJkt &&
           stored.clientAuthMethod === session.clientAuthMethod && stored.clientAuthKeyId === session.clientAuthKeyId &&
           stored.oauthScope === session.scope && session.clientId === client_id && session.dpopJkt === dpop.jkt) {
-          await revokeAuthenticatedSession(env, session, dpop, issuer, form, undefined, stored);
+          const space = await sessionSpaceGrant(env, session, refresh.payload.space_grant);
+          if (space.tag !== 'invalid') await revokeAuthenticatedSession(env, session, dpop, issuer, form, undefined, stored,
+            space.tag === 'valid' ? space.grant : undefined);
         }
       }
       return emptyOk();
@@ -50,7 +53,9 @@ export async function POST({ locals, request }: APIContext) {
         access.jti === session.accessJti && access.scope === session.scope &&
         confirmation?.jkt === session.dpopJkt && session.clientId === client_id && session.dpopJkt === dpop.jkt) {
         if (typeof access.exp !== 'number' || !Number.isFinite(access.exp)) return emptyOk();
-        await revokeAuthenticatedSession(env, session, dpop, issuer, form, access.exp);
+        const space = await sessionSpaceGrant(env, session, access.space_grant);
+        if (space.tag !== 'invalid') await revokeAuthenticatedSession(env, session, dpop, issuer, form, access.exp, undefined,
+          space.tag === 'valid' ? space.grant : undefined);
       }
     }
 

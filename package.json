@@ -31,6 +31,7 @@
     "@atproto/oauth-scopes": "0.0.0-spaces-alpha-20261113224550",
     "@cloudflare/vite-plugin": "^1.37.0",
     "drizzle-kit": "^0.31.10",
+    "esbuild": "0.25.12",
     "miniflare": "^3.20250718.3",
     "vite": "^6.4.2",
     "wrangler": "^4.91.0"
@@ -45,6 +46,7 @@
     "@atproto/did": "0.0.0-spaces-alpha-20261113224550",
     "@atproto/lex-cbor": "0.0.0-spaces-alpha-20261113224550",
     "@atproto/lex-document": "0.0.0-spaces-alpha-20261113224550",
+    "@atproto/lex-json": "0.0.0-spaces-alpha-20261113224550",
     "@atproto/repo": "0.0.0-spaces-alpha-20261113224550",
     "@atproto/space": "0.0.0-spaces-alpha-20261113224550",
     "@atproto/syntax": "^0.4.3",

@@ -225,6 +225,62 @@
       "when": 1794626071161,
       "tag": "0031_thick_hannibal_king",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1794630843367,
+      "tag": "0032_handy_riptide",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1794630844162,
+      "tag": "0033_space_personal_lifecycle_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1794631410345,
+      "tag": "0034_oauth_space_grant",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1794631417452,
+      "tag": "0035_oauth_space_grant_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1794631775459,
+      "tag": "0036_blue_hellcat",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1794633809007,
+      "tag": "0037_conscious_gabe_jones",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1794633818090,
+      "tag": "0038_account_space_incarnation_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "6",
+      "when": 1794635912114,
+      "tag": "0039_login_attempt_reservation_nonce",
+      "breakpoints": true
     }
   ]
 }

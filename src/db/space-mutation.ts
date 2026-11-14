@@ -3,7 +3,8 @@ import * as dagCbor from '@ipld/dag-cbor';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { CID } from 'multiformats/cid';
 import { create as createDigest } from 'multiformats/hashes/digest';
-import { isValidNsid, isValidRecordKey } from '@atproto/syntax-spaces';
+import { isValidNsid, isValidRecordKey, isValidTid } from '@atproto/syntax-spaces';
+import { MAX_RECORD_SIZE } from '@atproto/space';
 import type { Env } from '../env';
 import {
   applySpaceSetHashChanges,
@@ -14,6 +15,11 @@ import {
 import { nextSpaceRevision } from './space-tid';
 import { assertLocalSpaceRepo, parseSpaceRef } from './space-ref';
 import { ownSpaceWriteValue, spaceWriteArrayLength } from './space-write-input';
+import { checkRecordCborBounds } from '../lib/spaces/record-cbor-bounds';
+import { parseCanonicalRepoCid } from '../lib/spaces/repo-cid';
+import { verifySpaceRecordDataModel } from './space-verify-record';
+import { validSpaceRecordBlock } from './space-record-block';
+import { MAX_SPACE_MUTATION_SNAPSHOT_BYTES, SPACE_MUTATION_SNAPSHOT_SQL } from './space-mutation-snapshot-sql';
 import { EFFECT_GUARD, GUARD, RECORDS_MATCH, SPACE_AVAILABLE, WON_GUARD } from './space-mutation-sql';
 import {
   MAX_SPACE_WRITE_BYTES,
@@ -28,7 +34,7 @@ import {
 
 type Snapshot = {
   readonly repo: (SpaceRepoState & { readonly mutationId: string; readonly epochId: string }) | null;
-  readonly records: ReadonlyMap<string, { readonly cid: string; readonly fromGeneration: number }>;
+  readonly records: ReadonlyMap<string, { readonly cid: string; readonly fromGeneration: number; readonly repoRev: string }>;
 };
 
 type CommitResult =
@@ -58,47 +64,57 @@ export async function loadSpaceSnapshot(
   const paths = JSON.stringify(requested);
   await assertLocalSpaceRepo(env, repoDid);
   const [spaceResult, repoResult, recordResult] = await env.ALTERAN_DB.batch([
-    env.ALTERAN_DB.prepare('SELECT deleted_at FROM space WHERE space_ref = ?').bind(ref.ref),
+    env.ALTERAN_DB.prepare('SELECT deleted_at IS NULL AS active FROM space WHERE space_ref = ?').bind(ref.ref),
     env.ALTERAN_DB.prepare(
-      `SELECT h.rev, h.set_hash, h.generation, h.mutation_id, h.active_epoch_id, e.state AS epoch_state
+      `SELECT CASE WHEN typeof(h.rev) = 'text' AND length(CAST(h.rev AS BLOB)) = 13 THEN h.rev END AS rev,
+         CASE WHEN typeof(h.set_hash) = 'blob' AND length(h.set_hash) = 2048 THEN h.set_hash END AS set_hash,
+         CASE WHEN typeof(h.generation) = 'integer' AND h.generation BETWEEN 1 AND 9007199254740991
+           THEN h.generation END AS generation,
+         CASE WHEN typeof(h.mutation_id) = 'text' AND length(CAST(h.mutation_id AS BLOB)) BETWEEN 1 AND 128
+           THEN h.mutation_id END AS mutation_id,
+         CASE WHEN typeof(h.active_epoch_id) = 'text' AND length(CAST(h.active_epoch_id AS BLOB)) BETWEEN 1 AND 128
+           THEN h.active_epoch_id END AS active_epoch_id,
+         CASE WHEN e.state = 'active' THEN 'active' END AS epoch_state
        FROM space_repo h LEFT JOIN space_epoch e ON e.id = h.active_epoch_id
          AND e.space_ref = h.space_ref AND e.repo_did = h.repo_did
        WHERE h.space_ref = ? AND h.repo_did = ?`,
     ).bind(ref.ref, repoDid),
-    env.ALTERAN_DB.prepare(
-      `SELECT json_extract(path.value, '$[0]') AS collection, json_extract(path.value, '$[1]') AS rkey,
-         r.cid, v.cid AS version_cid, v.from_generation,
-         (r.value_cbor IS v.value_cbor AND r.repo_rev IS v.repo_rev) AS consistent
-       FROM json_each(?) path
-       LEFT JOIN space_record r ON r.space_ref = ? AND r.repo_did = ?
-         AND r.collection = json_extract(path.value, '$[0]') AND r.rkey = json_extract(path.value, '$[1]')
-       LEFT JOIN space_repo h ON h.space_ref = ? AND h.repo_did = ?
-       LEFT JOIN space_record_version v ON v.epoch_id = h.active_epoch_id AND v.space_ref = h.space_ref
-         AND v.repo_did = h.repo_did AND v.path = json_extract(path.value, '$[0]') || '/' || json_extract(path.value, '$[1]')
-         AND v.until_generation IS NULL`,
-    ).bind(paths, ref.ref, repoDid, ref.ref, repoDid),
+    env.ALTERAN_DB.prepare(SPACE_MUTATION_SNAPSHOT_SQL).bind(paths, ref.ref, repoDid),
   ]);
-  const space = spaceResult.results?.[0] as { deleted_at: number | null } | undefined;
-  if ((space && space.deleted_at !== null) || (!space && ref.authorityDid === repoDid)) {
+  const space = spaceResult.results?.[0] as { active: number } | undefined;
+  if ((space && space.active !== 1) || (!space && ref.authorityDid === repoDid)) {
     throw new SpaceStorageError('SpaceNotFound', 'Space does not exist or is deleted');
   }
   const row = repoResult.results?.[0] as {
     rev: string | null;
-    set_hash: number[];
-    generation: number;
-    mutation_id: string;
+    set_hash: number[] | null;
+    generation: number | null;
+    mutation_id: string | null;
     active_epoch_id: string | null;
     epoch_state: string | null;
   } | undefined;
   const repo = row ? decodeRepoState(row) : null;
-  const records = new Map<string, { cid: string; fromGeneration: number }>();
+  const records = new Map<string, { cid: string; fromGeneration: number; repoRev: string }>();
+  let snapshotBytes = 0;
+  if (!recordResult.results || recordResult.results.length !== requested.length) {
+    throw new SpaceStorageError('InvalidRepoState', 'Invalid Space snapshot result');
+  }
   for (const record of recordResult.results ?? []) {
-    const typed = record as { collection: string; rkey: string; cid: string | null; version_cid: string | null; from_generation: number | null; consistent: number };
-    if (typed.cid !== typed.version_cid || (typed.cid !== null && (!typed.consistent || !Number.isSafeInteger(typed.from_generation)))) {
+    const typed = record as { collection: string; rkey: string; cid: string | null; version_cid: string | null; from_generation: number | null; record_rev: string | null; value_cbor: number[] | null; consistent: number; over_budget: number };
+    if (typed.over_budget === 1) throw new SpaceStorageError('InvalidRequest', 'Space write batch touches too much existing data');
+    if (typed.over_budget !== 0 || typed.consistent !== 1 || typed.cid !== typed.version_cid || (typed.cid !== null &&
+      (parseCanonicalRepoCid(typed.cid)?.toString() !== typed.cid || !Number.isSafeInteger(typed.from_generation) ||
+        !typed.record_rev || !isValidTid(typed.record_rev)))) {
       throw new SpaceStorageError('InvalidRepoState', 'Current space record differs from its version');
     }
-    if (typed.cid !== null && typed.from_generation !== null) {
-      records.set(recordPath(typed.collection, typed.rkey), { cid: typed.cid, fromGeneration: typed.from_generation });
+    if (typed.cid !== null && typed.from_generation !== null && typed.record_rev !== null) {
+      if (!Array.isArray(typed.value_cbor) || !typed.value_cbor.length || typed.value_cbor.length > MAX_RECORD_SIZE ||
+        (snapshotBytes += typed.value_cbor.length) > MAX_SPACE_MUTATION_SNAPSHOT_BYTES ||
+        !typed.value_cbor.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255) ||
+        !validSpaceRecordBlock(typed.collection, typed.cid, Uint8Array.from(typed.value_cbor))) {
+        throw new SpaceStorageError('InvalidRepoState', 'Invalid Space record in write snapshot');
+      }
+      records.set(recordPath(typed.collection, typed.rkey), { cid: typed.cid, fromGeneration: typed.from_generation, repoRev: typed.record_rev });
     }
   }
   return { repo, records };
@@ -162,6 +178,9 @@ export async function commitSpaceWrites(
     }
     const bytes = new Uint8Array(encoded);
     if (bytes.byteLength !== byteLength) throw new SpaceStorageError('InvalidRequest', 'Invalid encoded space record');
+    if (checkRecordCborBounds(bytes) !== 'valid') {
+      throw new SpaceStorageError('InvalidRequest', 'Invalid or overly complex space record');
+    }
     let value: unknown;
     let canonical: Uint8Array;
     try {
@@ -175,6 +194,9 @@ export async function commitSpaceWrites(
     }
     if (containsBlob(value)) {
       throw new SpaceStorageError('BlobIntegrityUnavailable', 'Space blob storage is unavailable');
+    }
+    if (verifySpaceRecordDataModel(value) !== 'valid') {
+      throw new SpaceStorageError('InvalidRequest', 'Invalid Space record data model');
     }
     if (canonical.length !== bytes.length || canonical.some((byte, index) => byte !== bytes[index])) {
       throw new SpaceStorageError('InvalidRequest', 'Space record is not canonical DAG-CBOR');
@@ -226,6 +248,7 @@ export async function commitSpaceWrites(
     path, collection: write.collection, rkey: write.rkey,
     cid: snapshot.records.get(path)?.cid ?? null,
     fromGeneration: snapshot.records.get(path)?.fromGeneration ?? null,
+    repoRev: snapshot.records.get(path)?.repoRev ?? null,
   })));
   const expectedArguments = [expectedRecords, ref.ref, repoDid, epochId, ref.ref, repoDid] as const;
   const root = snapshot.repo
@@ -331,6 +354,7 @@ export async function commitSpaceWrites(
     path, collection: write.collection, rkey: write.rkey,
     cid: write.action === 'delete' ? null : write.cid,
     fromGeneration: write.action === 'delete' ? null : generation,
+    repoRev: write.action === 'delete' ? null : rev,
   })));
   const finalArguments = [finalRecords, ref.ref, repoDid, epochId, ref.ref, repoDid] as const;
   // A failed assertion must abort the batch even if a trigger skips a write.
@@ -383,17 +407,20 @@ export async function commitSpaceWrites(
 
 function decodeRepoState(row: {
   rev: string | null;
-  set_hash: number[];
-  generation: number;
-  mutation_id: string;
+  set_hash: number[] | null;
+  generation: number | null;
+  mutation_id: string | null;
   active_epoch_id: string | null;
   epoch_state: string | null;
 }): SpaceRepoState & { readonly mutationId: string; readonly epochId: string } {
-  const setHash = Uint8Array.from(row.set_hash);
-  if (setHash.length !== 2048 || !Number.isSafeInteger(row.generation) || row.generation < 1 ||
+  if (!Array.isArray(row.set_hash) || row.set_hash.length !== 2048 ||
+    !row.set_hash.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255) ||
+    typeof row.generation !== 'number' || !Number.isSafeInteger(row.generation) || row.generation < 1 ||
+    typeof row.rev !== 'string' || !isValidTid(row.rev) ||
     typeof row.mutation_id !== 'string' || !row.mutation_id) {
     throw new SpaceStorageError('InvalidRepoState', 'Invalid stored space repo state');
   }
+  const setHash = Uint8Array.from(row.set_hash);
   if (!row.active_epoch_id || row.epoch_state !== 'active') {
     throw new SpaceStorageError('SpaceEpochUnavailable', 'Space epoch is unavailable');
   }

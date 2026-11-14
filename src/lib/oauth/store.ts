@@ -1,5 +1,6 @@
 import type { Env } from '../../env';
 import { setSecret } from '../../db/account';
+import { copyPlainRecord } from '../spaces/plain-values';
 
 const PAR_PREFIX = 'oauth:par:';
 const CODE_PREFIX = 'oauth:code:';
@@ -39,6 +40,7 @@ export interface CodeRecord {
   createdAt: number;
   expiresAt: number;
   used?: boolean;
+  spaceConsent?: StoredSpaceConsent;
 }
 
 export interface ConsentRecord {
@@ -47,13 +49,30 @@ export interface ConsentRecord {
   createdAt: number;
   expiresAt: number;
   parValue: string;
+  spaceConsent?: StoredSpaceConsent;
 }
+
+export type StoredSpaceConsent = {
+  readonly serialized: string;
+  readonly digest: string;
+  readonly tokenScope: string;
+  readonly accountIncarnation: string;
+};
 
 export type ParSnapshot = { readonly record: ParRecord; readonly value: string };
 export type CodeSnapshot = { readonly record: CodeRecord; readonly value: string };
 
 function boundedText(value: string, maximum: number): boolean {
   return value.length <= maximum && new TextEncoder().encode(value).byteLength <= maximum;
+}
+
+function isStoredSpaceConsent(value: unknown): value is StoredSpaceConsent {
+  const fields = copyPlainRecord(value, ['serialized', 'digest', 'tokenScope', 'accountIncarnation']);
+  return !!fields && typeof fields.serialized === 'string' &&
+    boundedText(fields.serialized, 65_536) && typeof fields.digest === 'string' &&
+    /^[0-9a-f]{64}$/.test(fields.digest) && typeof fields.tokenScope === 'string' &&
+    boundedText(fields.tokenScope, 4096) && typeof fields.accountIncarnation === 'string' &&
+    /^[0-9a-f]{32}$/.test(fields.accountIncarnation);
 }
 
 async function getBoundedSecret(env: Env, key: string, maximum: number): Promise<string | null> {
@@ -117,12 +136,16 @@ export async function deleteParSnapshot(env: Env, id: string, value: string): Pr
   ).bind(JSON.stringify({}), Date.now(), PAR_PREFIX + id, value).run();
 }
 
-export async function saveConsent(env: Env, id: string, csrf: string, expiresAt: number, parValue: string): Promise<void> {
+export async function saveConsent(
+  env: Env, id: string, csrf: string, expiresAt: number, parValue: string,
+  spaceConsent?: StoredSpaceConsent,
+): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   if (!boundedText(id, 8192) || !boundedText(csrf, 8192) || !boundedText(parValue, MAX_PAR_BYTES)) {
     throw new Error('Consent record exceeds storage limit');
   }
-  const value = JSON.stringify({ id, csrf, createdAt: now, expiresAt, parValue });
+  if (spaceConsent !== undefined && !isStoredSpaceConsent(spaceConsent)) throw new Error('Invalid Space consent');
+  const value = JSON.stringify({ id, csrf, createdAt: now, expiresAt, parValue, ...(spaceConsent && { spaceConsent }) });
   if (!boundedText(value, MAX_CONSENT_BYTES)) throw new Error('Consent record exceeds storage limit');
   await setSecret(env, CONSENT_PREFIX + id, value);
 }
@@ -136,6 +159,7 @@ export async function consumeConsent(env: Env, id: string, csrf: string): Promis
     const rec = JSON.parse(raw) as ConsentRecord;
     if (!rec || typeof rec !== 'object' || rec.id !== id || rec.csrf !== csrf ||
       typeof rec.parValue !== 'string' || !rec.parValue || !boundedText(rec.parValue, MAX_PAR_BYTES) ||
+      (rec.spaceConsent !== undefined && !isStoredSpaceConsent(rec.spaceConsent)) ||
       !Number.isSafeInteger(rec.createdAt) || !Number.isSafeInteger(rec.expiresAt) ||
       rec.createdAt < 0 || rec.expiresAt <= rec.createdAt ||
       rec.expiresAt < Math.floor(Date.now() / 1000)) return null;
@@ -166,6 +190,7 @@ export async function loadCodeSnapshot(env: Env, code: string): Promise<CodeSnap
       (rec.clientAuthKeyId !== undefined && rec.clientAuthKeyId !== null && typeof rec.clientAuthKeyId !== 'string') ||
       (rec.clientAuthKeyBinding !== undefined && rec.clientAuthKeyBinding !== null && rec.clientAuthKeyBinding !== 'jwk-thumbprint-v1') ||
       (rec.used !== undefined && rec.used !== false) ||
+      (rec.spaceConsent !== undefined && (!isStoredSpaceConsent(rec.spaceConsent) || rec.spaceConsent.tokenScope !== rec.scope)) ||
       !Number.isSafeInteger(rec.createdAt) || !Number.isSafeInteger(rec.expiresAt) ||
       rec.createdAt < 0 || rec.expiresAt <= rec.createdAt) return null;
     return { record: rec, value: raw };

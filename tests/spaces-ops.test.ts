@@ -326,6 +326,23 @@ describe("incremental Space repo reads", () => {
     expect(decoded.items).toHaveLength(100_001);
   });
 
+  it("rejects invalid and over-budget records without adding operations", async () => {
+    const env = await makeEnv();
+    const first = await setup(env);
+    for (const [rkey, record] of [
+      ["bad-type", { $type: TYPE, nested: { $type: "" } }],
+      ["too-many", { $type: TYPE, items: Array(131_072).fill(null) }],
+    ] as const) {
+      await rejectsCode(
+        () => applySpaceWrites(env, SPACE, DID, [{ action: "create", collection: TYPE, rkey, record }]),
+        "InvalidRequest",
+      );
+    }
+    const result = await page(env, first.rev);
+    expect(result.operations).toHaveLength(0);
+    expect(result.commit.rev).toBe(first.rev);
+  });
+
   it("requires full sync for an unknown or absent starting revision", async () => {
     const env = await makeEnv();
     const first = await setup(env);

@@ -5,6 +5,7 @@ import { consumeOAuthReplay } from '../../db/oauth-replay';
 import { decodeProtectedHeader, importJWK, compactVerify, type JWK as JoseJWK } from 'jose';
 import { DpopNonceError } from './dpop-errors';
 import { DPOP_PROOF_FUTURE_SKEW_SEC, DPOP_PROOF_MAX_AGE_SEC, isDpopProofFresh } from './dpop-window';
+import { dpopTarget } from './dpop-target';
 
 // DPoP nonce management and proof verification utilities
 
@@ -89,16 +90,6 @@ export async function consumeDpopVerificationJti(
   await consumeDpopJti(env, kind, verification.payload.jti, typeof iat === 'number' ? iat : 0);
 }
 
-function urlWithoutHash(u: string): string {
-  try {
-    const url = new URL(u);
-    url.hash = '';
-    return url.toString();
-  } catch {
-    return u;
-  }
-}
-
 // removed local DER conversion; jose handles verification
 
 export async function verifyDpop(
@@ -127,7 +118,7 @@ export async function verifyDpop(
   const payload = JSON.parse(new TextDecoder().decode(verified.payload)) as Record<string, unknown>;
 
   const method = request.method.toUpperCase();
-  const url = urlWithoutHash(request.url);
+  const url = dpopTarget(request.url);
   if (payload.htm !== method || payload.htu !== url) {
     throw new DpopNonceError('DPoP htm/htu mismatch', nonce);
   }

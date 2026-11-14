@@ -68,6 +68,7 @@ export function prepareReplayTransaction(
       database.prepare(OAUTH_REPLAY_AMORTIZED_SWEEP_SQL).bind(
         claim.key, claim.value, issuedAt, DPOP_PROOF_MAX_AGE_SEC, issuedAt, DPOP_PROOF_FUTURE_SKEW_SEC,
         expiresAt, expiresAt, expiresAt, DPOP_PROOF_MAX_AGE_SEC, 0, '', '', '', '', '', '', 0, 0, 0, 0,
+        0, '', '', null, null, null, '',
         issuedAt - DPOP_PROOF_FUTURE_SKEW_SEC, nonce,
       ),
     );

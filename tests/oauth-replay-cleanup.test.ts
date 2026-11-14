@@ -54,6 +54,13 @@ describe("OAuth replay cleanup", () => {
         0,
         0,
         0,
+        0,
+        "",
+        "",
+        null,
+        null,
+        null,
+        "",
         now - 30,
         nonce,
       ).all<{ detail: string }>();

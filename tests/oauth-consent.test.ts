@@ -3,7 +3,7 @@ import { expect } from "@std/expect";
 import { makeEnv } from './helpers/env';
 import { mockClientMetadata } from './helpers/oauth';
 import { loadPar, savePar, loadCodeSnapshot } from '../src/lib/oauth/store';
-import { checkConsentPasswordLockout, reserveConsentPasswordAttempt } from '../src/lib/oauth/consent';
+import { reserveLoginAttempt } from '../src/lib/login-attempts';
 import { GET as authorize } from '../src/pages/oauth/authorize';
 import { GET as consentGet, POST as consentPost } from '../src/pages/oauth/consent';
 
@@ -212,15 +212,15 @@ describe('OAuth single-user consent', () => {
     const request = new Request('https://pds.example/oauth/consent', {
       headers: { 'cf-connecting-ip': '198.51.100.25' },
     });
-    const results = await Promise.all(Array.from({ length: 5 }, () => reserveConsentPasswordAttempt(env, request)));
+    const results = await Promise.all(Array.from({ length: 5 }, () => reserveLoginAttempt(env, request)));
 
     const row = await env.ALTERAN_DB.prepare(
       'SELECT attempts, locked_until FROM login_attempts WHERE ip = ?'
     ).bind('198.51.100.25').first<{ attempts: number; locked_until: number | null }>();
     expect(row?.attempts).toBe(5);
     expect(row?.locked_until ?? 0).toBeGreaterThan(Math.floor(Date.now() / 1000));
-    expect(results.filter((result) => result?.status === 429)).toHaveLength(1);
-    expect((await checkConsentPasswordLockout(env, request))?.status).toBe(429);
+    expect(results.filter((result) => result.tag === 'reserved' && result.reservation.lockedUntil !== null)).toHaveLength(1);
+    expect((await reserveLoginAttempt(env, request)).tag).toBe('locked');
   });
 
 });

@@ -14,6 +14,21 @@ import { issueSessionTokens } from '../src/lib/session-tokens';
 const URL = 'https://pds.example/oauth/token';
 
 describe('DPoP proof retention', () => {
+  it('uses a query-free target on authorization requests and still rejects replay', async () => {
+    const env = await makeEnv();
+    const key = await makeDpopKey();
+    const now = Math.floor(Date.now() / 1000);
+    const proof = await new SignJWT({ htm: 'POST', htu: URL, iat: now, jti: crypto.randomUUID() })
+      .setProtectedHeader({ typ: 'dpop+jwt', alg: 'ES256', jwk: key.jwk as JWK })
+      .sign(key.privateKey);
+    const request = (query: string) => new Request(`${URL}?${query}`, {
+      method: 'POST', headers: { dpop: proof },
+    });
+    await verifyDpop(env, request('first=1'), { requireNonce: false });
+    await expect(verifyDpop(env, request('second=2'), { requireNonce: false }))
+      .rejects.toThrow('DPoP proof replayed');
+  });
+
   it('retains signed authorization proofs until the last accepted second', async () => {
     const env = await makeEnv();
     const key = await makeDpopKey();

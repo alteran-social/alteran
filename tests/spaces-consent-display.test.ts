@@ -29,7 +29,7 @@ describe("Space consent descriptions", () => {
     expect(result).toEqual({
       target: `space type ${TYPE}, authority ${DID}, space key private`,
       permissions: [
-        "Read your own repository in matching spaces",
+        "Read your own repository, including all collections, in matching spaces",
         "Read settings, policies, member lists, writer identities and sync state for matching spaces you govern",
         "Request credentials to read other repositories in matching spaces",
         `Create and delete records in ${COLLECTION} in your own repository`,
@@ -53,7 +53,7 @@ describe("Space consent descriptions", () => {
   it("does not claim write access when the issued collection set is empty", () => {
     const result = describeSpaceConsent(grant(`space:${TYPE}`, []));
     expect(result?.permissions).toEqual([
-      "Read your own repository in matching spaces",
+      "Read your own repository, including all collections, in matching spaces",
       "Read settings, policies, member lists, writer identities and sync state for matching spaces you govern",
       "Request credentials to read other repositories in matching spaces",
       "Future authorization may include additional collections declared for this space type",
@@ -83,7 +83,7 @@ describe("Space consent descriptions", () => {
       grant(`space:${TYPE}?skey=one&collection=*&action=read_self`),
     );
     expect(result?.permissions).toEqual([
-      "Read your own repository in matching spaces",
+      "Read your own repository, including all collections, in matching spaces",
       "Read settings, policies, member lists, writer identities and sync state for matching spaces you govern",
     ]);
     expect(result?.broad).toBe(false);
@@ -94,7 +94,7 @@ describe("Space consent descriptions", () => {
       `space:${TYPE}?skey=one&action=read_self&manage=create&manage=update&manage=delete`,
     ));
     expect(result?.permissions).toEqual([
-      "Read your own repository in matching spaces",
+      "Read your own repository, including all collections, in matching spaces",
       "Read settings, policies, member lists, writer identities and sync state for matching spaces you govern",
       "Create matching spaces that you govern and perform policy-specific creation operations",
       "Change settings and policies, manage members, remove writers and perform policy-specific updates in matching spaces you govern",

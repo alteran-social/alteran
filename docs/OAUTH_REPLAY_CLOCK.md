@@ -66,6 +66,33 @@ that jumps forward after its last sample cannot retroactively undo a D1
 commit, including an authenticated replay-triggered revocation. Monitor clock
 health and account for this boundary when deciding the acceptable clock skew.
 
+The internal private-record reader also commits its pre-transaction Worker
+time to the shared D1 high-water clock. A Worker that is far ahead can therefore
+reject OAuth traffic across the service until real time catches up. Monitor
+Worker and D1 clock skew and treat a large forward jump as an availability
+incident; do not move the D1 clock backwards. Worker-only observations made
+before that clock transaction, or after it when withholding a response, are
+not themselves persisted and do not establish a monotonic time fence.
+
+Consent code issuance commits clock samples before and after its separate
+atomic issuance batch, then rechecks the exact PAR, approval, account and
+issuance receipt before releasing a code. If the final sample or readback
+fails, the code is withheld and the client must restart authorization. Its
+safety assumes no trigger on the issuance statements advances the clock: an
+assertion failure rolls back all changes in the batch, including a trigger's
+clock update. Review this rule when adding triggers or changing issuance. The
+issuance receipt has a five-minute lifetime and uses the indexed replay
+cleanup path. Its arrival rate and cleanup backlog must be monitored and
+bounded, including when the service is idle.
+
+Migrations `0037` and `0038` give each account a database-generated Space
+incarnation. Apply both with older Workers drained, and restart any outstanding
+Space approvals that lack an incarnation. A Space grant is bound to the
+account incarnation that approved it; deleting and recreating an account cannot
+make that grant valid again. Account creation fails closed if initialization
+is incomplete. An orphaned initialization row requires an investigated
+repair with Workers stopped rather than automatic removal.
+
 OAuth form bodies are limited to 1 MiB and 16,384 delivered stream chunks. A
 request fragmented beyond that chunk count is rejected even if it is smaller
 than the byte limit; clients and intermediaries should avoid extreme
@@ -86,6 +113,11 @@ session revocations. Keep OAuth and DPoP traffic stopped during recovery. Do
 not reset the clock or resume an old Worker as a recovery shortcut. Establish
 a separate recovery procedure that fences pre-restore proofs and assertions
 and accounts for restored session and revocation state before resuming traffic.
+Restoring all of D1 can also restore an old account incarnation together with
+its grants. With traffic and old Workers drained, rotate signing material,
+invalidate outstanding PARs, approvals and codes, advance the replay clock,
+and fence pre-restore proof and client-assertion windows before reopening.
+An incarnation stored in the same restored database is not a restore fence.
 
 A database clock that jumps forward can cause valid requests to be rejected
 until real time catches up. Moving the stored clock backwards would re-enable
@@ -116,3 +148,7 @@ Resource DPoP admission checks the verified token and live session together with
 its replay marker in one D1 transaction. That transaction is the authorization
 decision boundary. A later private read or mutation that must not continue after
 revocation needs an additional session fence in its own storage transaction.
+
+DPoP proofs bind `htu` to the request URL without its query or fragment, as
+required by RFC 9449. Clients that previously included a query in `htu` must
+update their proof generation. A proof cannot be reused for a different query.

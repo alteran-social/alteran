@@ -34,8 +34,18 @@ export const account = sqliteTable('account', {
   email: text('email'),
   createdAt: integer('created_at', { mode: 'number' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'number' }).notNull(),
+  spaceIncarnation: text('space_incarnation'),
 }, (table) => ({
   handleIdx: uniqueIndex('account_handle_unique').on(table.handle),
+  spaceIncarnation: uniqueIndex('account_space_incarnation_unique').on(table.spaceIncarnation),
+}));
+
+export const account_space_incarnation_init = sqliteTable('account_space_incarnation_init', {
+  id: integer('id').primaryKey().notNull(),
+  did: text('did').notNull(),
+  incarnation: text('incarnation').notNull(),
+}, (table) => ({
+  singleton: check('account_space_incarnation_init_singleton', sql`${table.id} = 1`),
 }));
 
 export const refresh_token_store = sqliteTable('refresh_token', {
@@ -78,6 +88,18 @@ export const oauth_session = sqliteTable('oauth_session', {
   clientIdx: index('oauth_session_client_idx').on(table.clientId),
   currentRefreshIdx: index('oauth_session_current_refresh_idx').on(table.currentRefreshTokenId),
   accessJtiIdx: index('oauth_session_access_jti_idx').on(table.accessJti),
+}));
+
+export const oauth_space_grant = sqliteTable('oauth_space_grant', {
+  sessionId: text('session_id').primaryKey().notNull().references(() => oauth_session.id),
+  snapshot: text('snapshot').notNull(),
+  digest: text('digest').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, (table) => ({
+  validSession: check('oauth_space_grant_session_size', sql`length(CAST(${table.sessionId} AS BLOB)) BETWEEN 1 AND 128`),
+  validSnapshot: check('oauth_space_grant_snapshot', sql`length(CAST(${table.snapshot} AS BLOB)) BETWEEN 1 AND 65536 AND json_valid(${table.snapshot})`),
+  validDigest: check('oauth_space_grant_digest', sql`length(${table.digest}) = 64 AND ${table.digest} NOT GLOB '*[^0-9a-f]*'`),
+  validCreated: check('oauth_space_grant_created', sql`typeof(${table.createdAt}) = 'integer' AND ${table.createdAt} BETWEEN 0 AND 9007199254740991`),
 }));
 
 export const repo_root = sqliteTable('repo_root', {
@@ -137,6 +159,76 @@ export const space = sqliteTable('space', {
   authorityTypeIdx: index('space_authority_type_idx').on(table.authorityDid, table.spaceType, table.ref),
 }));
 
+export const space_personal_policy = sqliteTable('space_personal_policy', {
+  spaceRef: text('space_ref').primaryKey().notNull(),
+  authorityDid: text('authority_did').notNull(),
+  policyType: text('policy_type').notNull(),
+  creationNonce: text('creation_nonce').notNull(),
+  notificationState: text('notification_state').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, (table) => ({
+  nonce: uniqueIndex('space_personal_policy_creation_nonce').on(table.creationNonce),
+  policy: check('space_personal_policy_type', sql`${table.policyType} = 'com.atproto.personalspace.policy'`),
+  notifications: check('space_personal_policy_notifications', sql`${table.notificationState} = 'none'`),
+}));
+
+export const space_personal_creation_attempt = sqliteTable('space_personal_creation_attempt', {
+  nonce: text('nonce').primaryKey().notNull(),
+  spaceRef: text('space_ref').notNull(),
+  authorityDid: text('authority_did').notNull(),
+  spaceType: text('space_type').notNull(),
+  skey: text('skey').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, (table) => ({
+  space: uniqueIndex('space_personal_creation_attempt_space').on(table.spaceRef),
+}));
+
+export const space_personal_deletion_job = sqliteTable('space_personal_deletion_job', {
+  nonce: text('nonce').primaryKey().notNull(),
+  spaceRef: text('space_ref').notNull(),
+  authorityDid: text('authority_did').notNull(),
+  epochId: text('epoch_id'),
+  status: text('status').notNull(),
+  phase: text('phase').notNull(),
+  sequence: integer('sequence').notNull(),
+  lastStepNonce: text('last_step_nonce'),
+  lastStepPhase: text('last_step_phase'),
+  lastStepCount: integer('last_step_count').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, (table) => ({
+  space: uniqueIndex('space_personal_deletion_job_space').on(table.spaceRef),
+  status: check('space_personal_deletion_job_status', sql`${table.status} IN ('deleting', 'complete')`),
+  phase: check('space_personal_deletion_job_phase', sql`${table.phase} IN ('records', 'versions', 'ops', 'done')`),
+  counts: check('space_personal_deletion_job_counts', sql`${table.sequence} >= 0 AND ${table.lastStepCount} BETWEEN 0 AND 32`),
+}));
+
+export const space_personal_deletion_attempt = sqliteTable('space_personal_deletion_attempt', {
+  nonce: text('nonce').primaryKey().notNull(),
+  jobNonce: text('job_nonce').notNull(),
+  spaceRef: text('space_ref').notNull(),
+  authorityDid: text('authority_did').notNull(),
+  epochId: text('epoch_id'),
+  phase: text('phase').notNull(),
+  sequence: integer('sequence').notNull(),
+  status: text('status').notNull(),
+  maximumCount: integer('maximum_count').notNull(),
+  expectedCount: integer('expected_count').notNull(),
+  expectedBytes: integer('expected_bytes').notNull(),
+}, (table) => ({
+  job: uniqueIndex('space_personal_deletion_attempt_job').on(table.jobNonce),
+  status: check('space_personal_deletion_attempt_status', sql`${table.status} IN ('building', 'sealed')`),
+  counts: check('space_personal_deletion_attempt_counts', sql`${table.sequence} >= 0 AND ${table.maximumCount} BETWEEN 1 AND 32 AND ${table.expectedCount} BETWEEN 0 AND ${table.maximumCount} AND ${table.expectedBytes} BETWEEN 0 AND 4194304`),
+}));
+
+export const space_personal_deletion_candidate = sqliteTable('space_personal_deletion_candidate', {
+  attemptNonce: text('attempt_nonce').notNull(),
+  rowId: integer('row_id').notNull(),
+  byteSize: integer('byte_size').notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.attemptNonce, table.rowId] }),
+  bytes: check('space_personal_deletion_candidate_bytes', sql`${table.byteSize} BETWEEN 0 AND 1048576`),
+}));
+
 export const space_repo = sqliteTable('space_repo', {
   spaceRef: text('space_ref').notNull(),
   repoDid: text('repo_did').notNull(),
@@ -161,6 +253,7 @@ export const space_epoch = sqliteTable('space_epoch', {
 }, (table) => ({
   activeOwner: uniqueIndex('space_epoch_active_owner').on(table.spaceRef, table.repoDid)
     .where(sql`${table.state} = 'active'`),
+  spaceOwner: index('space_epoch_space_owner').on(table.spaceRef, table.repoDid, table.id),
   validState: check('space_epoch_state', sql`${table.state} in ('active', 'quarantined', 'retired', 'deleting')`),
 }));
 
@@ -183,6 +276,7 @@ export const space_record_version = sqliteTable('space_record_version', {
     .where(sql`${table.untilGeneration} IS NULL`),
   gcCandidates: index('space_record_version_gc_candidates').on(table.epochId, table.spaceRef, table.repoDid,
     table.untilGeneration, table.path, table.fromGeneration).where(sql`${table.untilGeneration} IS NOT NULL`),
+  spaceOwnerEpoch: index('space_record_version_space_owner_epoch').on(table.spaceRef, table.repoDid, table.epochId),
   validInterval: check('space_record_version_interval', sql`${table.fromGeneration} >= 1 AND (${table.untilGeneration} IS NULL OR ${table.untilGeneration} > ${table.fromGeneration})`),
   validPath: check('space_record_version_path', sql`${table.path} = ${table.collection} || '/' || ${table.rkey}`),
   validSize: check('space_record_version_size', sql`${table.valueSize} = length(${table.valueCbor}) AND ${table.valueSize} > 0 AND ${table.valueSize} <= 1048576`),
@@ -226,6 +320,7 @@ export const space_mutation_attempt = sqliteTable('space_mutation_attempt', {
   rev: text('rev').notNull(),
   setHash: blob('set_hash', { mode: 'buffer' }).notNull(),
 }, (table) => ({
+  owner: index('space_mutation_attempt_owner').on(table.spaceRef, table.repoDid),
   validGeneration: check('space_mutation_attempt_generation', sql`${table.generation} >= 1`),
   hashSize: check('space_mutation_attempt_hash_size', sql`length(${table.setHash}) = 2048`),
 }));
@@ -337,6 +432,7 @@ export const login_attempts = sqliteTable('login_attempts', {
   attempts: integer('attempts').notNull().default(0),
   locked_until: integer('locked_until'),
   last_attempt: integer('last_attempt').notNull(),
+  reservation_nonce: text('reservation_nonce'),
 });
 
 // Blob quota tracking per DID

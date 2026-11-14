@@ -266,6 +266,28 @@ describe('OAuth resource DPoP binding', () => {
     expect(await getSecret(env, `oauth:dpop:jti:resource:${badAthJti}`)).toBeNull();
   });
 
+  it('accepts query-free htu on GET and rejects proof reuse across query variants', async () => {
+    const env = await makeEnv();
+    const key = await makeDpopKey();
+    const access = await issueOAuthAccess(env, key);
+    const url = 'https://pds.example/xrpc/com.atproto.space.getRecord';
+    const proof = await signResourceDpop(env, key, 'GET', url, access);
+    const request = (query: string, signedProof: string) => new Request(`${url}?${query}`, {
+      headers: { authorization: `DPoP ${access}`, dpop: signedProof },
+    });
+    expect((await verifyResourceRequestHybrid(env, request('rkey=one', proof)))?.did).toBe('did:example:test');
+    await expect(verifyResourceRequestHybrid(env, request('rkey=two', proof)))
+      .rejects.toMatchObject({ code: 'invalid_token' });
+
+    const nonce = (await dpopResourceUnauthorized(env)).headers.get('DPoP-Nonce') ?? '';
+    const queryProof = await signDpopProof({ key, method: 'GET', url: `${url}?rkey=one`, nonce, accessToken: access });
+    await expect(verifyResourceRequestHybrid(env, request('rkey=one', queryProof)))
+      .rejects.toMatchObject({ code: 'use_dpop_nonce' });
+    const wrongPath = await signResourceDpop(env, key, 'GET', `${url}Other`, access);
+    await expect(verifyResourceRequestHybrid(env, request('rkey=one', wrongPath)))
+      .rejects.toMatchObject({ code: 'use_dpop_nonce' });
+  });
+
   it('preserves legacy createSession Bearer tokens', async () => {
     const env = await makeEnv();
     const { accessJwt } = await issueSessionTokens(env, 'did:example:test');

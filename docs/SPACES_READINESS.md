@@ -16,8 +16,11 @@ records or advertised as encrypted.
 - Alteran has one public MST repository per account and serves its commits via
   public sync and the firehose. Internal space storage and protocol helpers are
   under development; no space repositories or space host are accessible yet.
-- Space and policy XRPC namespaces return `NotImplemented`; `space:` OAuth
-  scopes are not granted. An independently granted `transition:generic` scope
+- Space and policy XRPC namespaces return `NotImplemented`. OAuth can issue an
+  explicitly requested `read_self` Space grant, but no public Space endpoint
+  accepts it yet. The grant covers every collection in the user's own repo for
+  matching Spaces, even when the request names a collection. Other Space grants
+  remain unavailable. An independently granted `transition:generic` scope
   continues to authorize its existing public-repository operations.
 - `com.atproto.sync.getBlob` authorizes public downloads using public record
   usage and sends public, immutable cache headers. The public blob usage path
@@ -133,6 +136,15 @@ interval invariant. Quarantined legacy epochs cannot be read through this path.
 Validate the complete lease, cleanup, and concurrent-write workload on the
 target D1 deployment before exposing an export route.
 
+Record decoding is limited to 131,072 CBOR items and 100 levels per record.
+The internal mutation path validates the CIDs of touched records and limits
+their combined existing bytes to 4 MiB per batch, so some otherwise valid
+large update or delete batches must be split. It relies on fenced D1 writers
+and previously verified state for untouched records. The record JSON helper
+cannot losslessly serialize integers outside JavaScript's safe range. Before
+exposure, measure worst-case concurrent decoding, D1 response expansion and
+serialization against the target Worker's CPU and memory limits.
+
 The internal metadata archive codec is limited to 16 MiB and normalizes the
 reference PDS's supported policy and member fields; it is not a lossless backup
 or an authorized import. To avoid an ambiguous reference member-key mapping,
@@ -140,13 +152,14 @@ it rejects member DIDs with multiple method-specific segments, including some
 valid `did:web` identities. Migration cannot rely on this codec until that
 identity mapping and preservation of all required state are resolved.
 
-Space deletion also needs an atomic tombstone and a durable, bounded cleanup
-job before it is exposed. Current records, operations, and blob associations
-are not keyed by epoch, and old operations cannot yet be pruned; recreating a
-space before those rows are cleared could mix different incarnations. The
-cleanup must fence old leases and writers, preserve deletion notifications,
-and make stale incremental-sync revisions require a full sync. The proposal
-permits a host to reject recreation, so supporting it can be a separate step.
+An internal personal-Space lifecycle can tombstone a newly created personal
+Space and page through its local D1 records and history. It fences old leases
+and writers and permanently rejects recreation. It only applies when there are
+no external credentials, registered syncers, blob references or quarantine
+receipts. It does not send deletion notifications, clean R2, or securely erase
+copies and database backups. Exposing deletion requires those contracts and a
+recovery path for unfinished cleanup. Incremental sync must also handle its
+history boundary; pruning the operation log for live Spaces remains unsupported.
 
 Apply database migrations `0014` and `0015` in order before deploying code that
 uses them. Public blob cleanup queries consult the new private-usage table, so
@@ -174,3 +187,18 @@ the new fences. Follow [the OAuth replay and cutover notes](OAUTH_REPLAY_CLOCK.m
 before deployment, including the separate backup-restore procedure and any
 required confidential-client reauthorization. Production cleanup scheduling,
 backlog monitoring, and D1 load testing remain deployment gates.
+
+Migrations `0032`–`0039` add the restricted lifecycle, immutable OAuth Space
+grant snapshots, cleanup indexes, account incarnations and login reservation
+nonces. Drain older Workers
+before applying them, apply them in order, and do not restart old versions.
+Apply `0038` atomically or recover from a backup if a manual application is
+interrupted. The backfill, trigger behavior and indexed cleanup still require
+validation on the target D1 deployment before enabling Space access.
+
+The login and consent lockout uses the Cloudflare-provided `CF-Connecting-IP`
+header; absent or invalid values share an `unknown` bucket. This assumes the
+header comes from a trusted edge. A successful app-password login can clear
+earlier primary-password failures for the same IP. Per-IP counters therefore
+need account-wide or edge throttling and storage monitoring for distributed
+guessing; they do not provide those controls themselves.

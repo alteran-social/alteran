@@ -37,9 +37,10 @@ describe('legacy space record verification', () => {
     expect(verify(encode({ $type: collection, link: badLink }))).toBe('invalid');
     expect(verify(encode({ $type: 'com.example.other' }))).toBe('invalid');
     expect(verify(encode({ $type: collection, value: { $link: 'not-a-cid' } }))).toBe('invalid');
-    expect(verify(encode({ $type: collection, value: { $type: 'not an nsid' } }))).toBe('invalid');
+    expect(verify(encode({ $type: collection, value: { $type: 'not an nsid' } }))).toBe('valid');
+    expect(verify(encode({ $type: collection, value: { $type: '' } }))).toBe('invalid');
     expect(verify(encode({ $type: collection, value: { $type: 'com.example.types#part' } }))).toBe('valid');
-    expect(verify(encode({ $type: collection, value: { $type: 'com.example.types#main' } }))).toBe('invalid');
+    expect(verify(encode({ $type: collection, value: { $type: 'com.example.types#main' } }))).toBe('valid');
   });
 
   it('keeps blob-bearing and excessively complex records unavailable', () => {
@@ -48,7 +49,7 @@ describe('legacy space record verification', () => {
       .toBe('unsupported');
     expect(verify(encode({ $type: collection, legacy: { cid: link.toString(), mimeType: 'text/plain' } })))
       .toBe('unsupported');
-    expect(verify(encode({ $type: collection, values: Array(100_001).fill(null) }))).toBe('unsupported');
+    expect(verify(encode({ $type: collection, values: Array(131_072).fill(null) }))).toBe('unsupported');
   });
 
   it('does not accept a missing record type from a polluted prototype', () => {

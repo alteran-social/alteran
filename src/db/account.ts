@@ -36,28 +36,17 @@ export async function createAccount(env: Env, data: {
   handle: string;
   passwordScrypt: string | null;
   email?: string | null;
-}): Promise<void> {
-  const db = getDb(env);
+}): Promise<boolean> {
   const now = NOW();
-  await db
-    .insert(account)
-    .values({
-      did: data.did,
-      handle: normalizeHandle(data.handle),
-      passwordScrypt: data.passwordScrypt ?? null,
-      email: data.email ?? null,
-      createdAt: now,
-      updatedAt: now,
-    })
-    .onConflictDoUpdate({
-      target: account.did,
-      set: {
-        handle: normalizeHandle(data.handle),
-        passwordScrypt: data.passwordScrypt ?? null,
-        email: data.email ?? null,
-        updatedAt: now,
-      },
-    });
+  const result = await env.ALTERAN_DB.prepare(`INSERT INTO account
+    (did, handle, password_scrypt, email, created_at, updated_at)
+    SELECT ?, ?, ?, ?, ?, ?
+    WHERE NOT EXISTS (SELECT 1 FROM account WHERE did = ?)
+      AND NOT EXISTS (SELECT 1 FROM account_state WHERE did = ?)
+    RETURNING did`)
+    .bind(data.did, normalizeHandle(data.handle), data.passwordScrypt ?? null, data.email ?? null,
+      now, now, data.did, data.did).first<{ did: string }>();
+  return result?.did === data.did;
 }
 
 export async function updateAccountPassword(env: Env, did: string, passwordScrypt: string): Promise<void> {

@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { oauthSpaceGrantFence, oauthSpaceGrantFenceValues, type OAuthSpaceGrant } from "./oauth-space-grant";
 import {
   DPOP_PROOF_FUTURE_SKEW_SEC,
   DPOP_PROOF_MAX_AGE_SEC,
@@ -24,6 +25,7 @@ export type OAuthResourceBinding = {
   readonly jkt: string;
   readonly scope: string;
   readonly expiresAt: number;
+  readonly spaceGrant?: OAuthSpaceGrant;
 };
 export type OAuthResourceReplayResult = OAuthReplayResult | {
   readonly tag: "invalidSession";
@@ -85,7 +87,7 @@ export const OAUTH_REPLAY_AMORTIZED_SWEEP_SQL = `WITH bound AS (
         AND session.dpop_jkt = ? AND session.scope = ? AND session.revoked_at IS NULL
         AND ${VALID_SESSION_CLIENT_BINDING}
         AND typeof(session.expires_at) = 'integer' AND session.expires_at > seconds
-        AND session.expires_at > ? AND ? > seconds AND ? > ?))
+        AND session.expires_at > ? AND ? > seconds AND ? > ? AND ${oauthSpaceGrantFence('session')}))
     THEN MIN(?, seconds) ELSE NULL END AS before
   FROM oauth_replay_clock WHERE id = 1 AND nonce = ?
 ), expired AS (
@@ -113,7 +115,8 @@ const INSERT_RESOURCE_DPOP =
     AND EXISTS (SELECT 1 FROM oauth_session session WHERE session.id = ? AND session.access_jti = ?
       AND session.did = ? AND session.client_id = ? AND session.dpop_jkt = ? AND session.scope = ?
       AND session.revoked_at IS NULL AND ${VALID_SESSION_CLIENT_BINDING} AND typeof(session.expires_at) = 'integer'
-      AND session.expires_at > clock.seconds AND session.expires_at > ? AND ? > clock.seconds AND ? > ?)`;
+      AND session.expires_at > clock.seconds AND session.expires_at > ? AND ? > clock.seconds AND ? > ?
+      AND ${oauthSpaceGrantFence('session')})`;
 export const INSERT_ASSERTION = `INSERT OR IGNORE INTO secret (key, value, updated_at)
   SELECT ?, ?, seconds * 1000 FROM oauth_replay_clock
   WHERE id = 1 AND nonce = ? AND seconds - ? <= ? AND ? - seconds <= ?
@@ -129,7 +132,8 @@ const FINAL_RESOURCE_OUTCOME = `SELECT clock.seconds,
   EXISTS (SELECT 1 FROM oauth_session session WHERE session.id = ? AND session.access_jti = ?
     AND session.did = ? AND session.client_id = ? AND session.dpop_jkt = ? AND session.scope = ?
     AND session.revoked_at IS NULL AND ${VALID_SESSION_CLIENT_BINDING} AND typeof(session.expires_at) = 'integer'
-    AND session.expires_at > clock.seconds AND session.expires_at > ? AND ? > clock.seconds AND ? > ?) AS session_valid,
+    AND session.expires_at > clock.seconds AND session.expires_at > ? AND ? > clock.seconds AND ? > ?
+    AND ${oauthSpaceGrantFence('session')}) AS session_valid,
   (SELECT CASE WHEN typeof(session.expires_at) = 'integer' THEN session.expires_at END
     FROM oauth_session session WHERE session.id = ?) AS session_expires_at
   FROM oauth_replay_clock clock WHERE clock.id = 1 AND clock.nonce = ?`;
@@ -206,8 +210,9 @@ async function consumeOAuthReplayInternal(
     binding.expiresAt,
     binding.expiresAt,
     observedAt,
+    ...oauthSpaceGrantFenceValues(binding.spaceGrant),
   ] as const;
-  const sweepBinding = bindingArguments ?? ["", "", "", "", "", "", 0, 0, 0, 0] as const;
+  const sweepBinding = bindingArguments ?? ["", "", "", "", "", "", 0, 0, 0, 0, 0, "", "", null, null, null, ""] as const;
   const assertionExpiry = claims.tag === "assertion" ? claims.expiresAt : null;
   const insertion = claims.tag === "dpop" && bindingArguments
     ? database.prepare(INSERT_RESOURCE_DPOP).bind(
@@ -320,6 +325,18 @@ export function validResourceBinding(binding: OAuthResourceBinding): boolean {
     binding.jkt,
     binding.scope,
   ];
+  const grant = binding.spaceGrant;
+  if (grant) {
+    if (typeof grant.snapshot !== "string" || grant.snapshot.length > 65_536 ||
+      typeof grant.digest !== "string" || !/^[0-9a-f]{64}$/.test(grant.digest) ||
+      typeof grant.accountIncarnation !== "string" || !/^[0-9a-f]{32}$/.test(grant.accountIncarnation) ||
+      (grant.clientAuthMethod !== "none" && grant.clientAuthMethod !== "private_key_jwt") ||
+      (grant.clientAuthKeyId !== null && typeof grant.clientAuthKeyId !== "string") ||
+      (grant.clientAuthKeyBinding !== null && grant.clientAuthKeyBinding !== "jwk-thumbprint-v1")) return false;
+    fields.push(grant.snapshot, grant.digest, grant.accountIncarnation, grant.clientAuthMethod);
+    if (grant.clientAuthKeyId !== null) fields.push(grant.clientAuthKeyId);
+    if (grant.clientAuthKeyBinding !== null) fields.push(grant.clientAuthKeyBinding);
+  }
   const encoder = new TextEncoder();
   let total = 0;
   for (const value of fields) {
