@@ -12,9 +12,10 @@ import { base32 } from "multiformats/bases/base32";
 import { CID } from "multiformats/cid";
 import { isCanonicalRepoCid, parseCanonicalRepoCid } from "./repo-cid";
 import { validateSpaceLexiconSemantics } from "./lexicon-semantics";
+import { SPACE_LEXICON_LIMITS } from "./lexicon-limits";
 
 const SCHEMA_COLLECTION = "com.atproto.lexicon.schema";
-const MAX_CAR_BYTES = 4 * 1024 * 1024;
+const MAX_CAR_BYTES = SPACE_LEXICON_LIMITS.proofResponseBytes;
 const MAX_BLOCK_BYTES = 1024 * 1024;
 const MAX_HEADER_BYTES = 4096;
 const MAX_BLOCKS = 256;
@@ -138,11 +139,14 @@ export async function verifyLexiconProofAtTrustedHead(
     if (!recordBytes) return { tag: "invalid" };
     const record = decodeCanonical(recordBytes);
     if (
-      !isObject(record) || record.$type !== SCHEMA_COLLECTION ||
+      !isObject(record) || !Object.hasOwn(record, "$type") ||
+      !Object.hasOwn(record, "id") || record.$type !== SCHEMA_COLLECTION ||
       record.id !== nsid
     ) return { tag: "invalid" };
     if (
-      !isObject(record.defs) || !isObject(record.defs.main) ||
+      !Object.hasOwn(record, "defs") || !isObject(record.defs) ||
+      !Object.hasOwn(record.defs, "main") || !isObject(record.defs.main) ||
+      !Object.hasOwn(record.defs.main, "type") ||
       record.defs.main.type !== "space"
     ) return { tag: "invalid" };
     const semantics = validateSpaceLexiconSemantics(record);

@@ -78,12 +78,14 @@ retain missing-blob associations until their bytes are uploaded.
 
 ## Development and deployment
 
-The `spaces-reference-interop.test.ts` and `spaces-reference-lexicon.test.ts`
+The `spaces-reference-interop.test.ts`, `spaces-reference-lexicon.test.ts` and
+`spaces-reference-policy.test.ts`
 tests can exercise a disposable local reference PDS. Set
 `ALTERAN_REFERENCE_INTEROP_CONFIG` to a JSON file containing
 `pds`, `plc`, `did`, and `accessJwt` for a test account. Both service URLs must
-be loopback HTTP origins. The test creates a uniquely named space, exchanges a
-STAR archive and verifies response MACs, then attempts to delete the test space.
+be loopback HTTP origins. The archive and policy tests create uniquely named
+spaces and then attempt to delete them. The archive test also exchanges a STAR
+archive and verifies response MACs.
 An interrupted request may leave test data behind. Keep the configuration file
 private because it contains an access token. The Lexicon test injects DNS and
 maps test HTTPS origins to the local services; it does not establish live DNS or
@@ -96,6 +98,13 @@ enabling it, verify the flag in the deployed environment, test same-zone routing
 and egress there, and establish a freshness policy for DID documents and repo
 heads. Matching head responses cannot rule out consistent stale responses from
 the publisher's PDS or a cache.
+
+The experimental request-wide scope resolver permits at most two distinct
+declaration-backed Space types per request, resolved serially under one
+deadline. This deliberately limits interoperability until aggregate Worker
+CPU, memory and concurrent DNS work can be bounded and measured. It is not
+connected to OAuth; authenticated PAR and session binding, declaration
+freshness and consent rechecks are required before it can grant scopes.
 
 Apply database migrations `0014` and `0015` in order before deploying code that
 uses them. Public blob cleanup queries consult the new private-usage table, so

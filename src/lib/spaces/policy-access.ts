@@ -1,5 +1,6 @@
-import { isValidDid, SpaceRef } from "@atproto/syntax-spaces";
+import { SpaceRef } from "@atproto/syntax-spaces";
 import { isLexiconUri } from "./lexicon-uri";
+import { isSpaceDid } from "./space-did";
 import { copyPlainRecord } from "./plain-values";
 import { parseSpacePolicy } from "./policy";
 
@@ -46,7 +47,7 @@ export function decideSpaceAccountAccess(
   ]);
   if (
     !input || typeof input.space !== "string" || input.space.length > 8192 ||
-    (input.repo !== null && !validDid(input.repo)) ||
+    (input.repo !== null && !isSpaceDid(input.repo)) ||
     (input.action !== "read" && input.action !== "write")
   ) return { tag: "invalid" };
   const membership = copyMembership(input.membership);
@@ -55,7 +56,9 @@ export function decideSpaceAccountAccess(
   let authority: string;
   try {
     const reference = SpaceRef.parse(input.space);
-    if (reference.toString() !== input.space || !validDid(reference.spaceDid)) {
+    if (
+      reference.toString() !== input.space || !isSpaceDid(reference.spaceDid)
+    ) {
       return { tag: "invalid" };
     }
     authority = reference.spaceDid;
@@ -125,11 +128,6 @@ export function decideSpaceClientAccess(
       ? "allowed"
       : "denied",
   };
-}
-
-function validDid(value: unknown): value is string {
-  return typeof value === "string" && value.length <= 2048 &&
-    !/%(?![0-9A-Fa-f]{2})/.test(value) && isValidDid(value);
 }
 
 function copyMembership(value: unknown): SpaceMembership | null {

@@ -288,6 +288,26 @@ describe("Spaces OAuth permissions", () => {
     )).toBeNull();
   });
 
+  it("rejects malformed percent escapes in granting and authority DIDs", () => {
+    expect(parseSpacePermission(
+      `space:${TYPE}?authority=did%3Aexample%3A%25ZZ&collection=${THREAD}`,
+    )).toBeNull();
+    expect(
+      materializeSpacePermission(
+        permission(`space:${TYPE}`),
+        "did:example:%ZZ",
+        {
+          spaceType: TYPE,
+          collections: [THREAD],
+        },
+      ),
+    ).toBeNull();
+    expect(allowsSpacePermission(issued(`space:${TYPE}`), {
+      ...TARGET,
+      authority: "did:example:%ZZ",
+    }, { action: "read" })).toBe(false);
+  });
+
   it("treats read_self as narrower than whole-space read regardless of collections", () => {
     const own = issued(`space:${TYPE}?action=read_self&collection=${THREAD}`);
     const all = issued(`space:${TYPE}?action=read`);

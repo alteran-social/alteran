@@ -10,9 +10,10 @@ import {
 } from "./lexicon-proof";
 import { fetchPublicHttps } from "./public-fetch";
 import { parsePublicRepoHead, type PublicRepoHead } from "./repo-head";
+import { SPACE_LEXICON_LIMITS } from "./lexicon-limits";
 
-const JSON_LIMIT = 64 * 1024;
-const PROOF_LIMIT = 4 * 1024 * 1024;
+const JSON_LIMIT = SPACE_LEXICON_LIMITS.jsonResponseBytes;
+const PROOF_LIMIT = SPACE_LEXICON_LIMITS.proofResponseBytes;
 const MAX_TIMEOUT_MS = 10_000;
 const SCHEMA_COLLECTION = "com.atproto.lexicon.schema";
 
@@ -51,6 +52,8 @@ export type SpaceLexiconResolutionOptions = {
   /** Trusted test seams; production must use the default Cloudflare DNS and global fetch. */
   readonly resolveTxt?: ResolveLexiconTxt;
   readonly fetch?: typeof fetch;
+  /** Trusted tests only; production requires byte streams. */
+  readonly allowTestStreams?: boolean;
 };
 
 type Identity = {
@@ -80,12 +83,14 @@ export async function resolveSpaceLexiconProof(
   const timeoutMs = options.timeoutMs ?? MAX_TIMEOUT_MS;
   const lookup = options.resolveTxt;
   const fetcher = options.fetch;
+  const allowTestStreams = options.allowTestStreams;
   if (
     !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 ||
     timeoutMs > MAX_TIMEOUT_MS ||
     (signal !== undefined && !(signal instanceof AbortSignal)) ||
     (lookup !== undefined && typeof lookup !== "function") ||
-    (fetcher !== undefined && typeof fetcher !== "function")
+    (fetcher !== undefined && typeof fetcher !== "function") ||
+    (allowTestStreams !== undefined && typeof allowTestStreams !== "boolean")
   ) {
     return { tag: "invalid", reason: "input" };
   }
@@ -112,6 +117,7 @@ export async function resolveSpaceLexiconProof(
       timeoutMs,
       signal: controller.signal,
       fetch: fetcher,
+      allowTestStreams,
     });
   const authority = async (): Promise<Step<string>> => {
     const result = await resolveLexiconAuthority(nsid, {
@@ -153,7 +159,7 @@ export async function resolveSpaceLexiconProof(
   };
 
   try {
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < SPACE_LEXICON_LIMITS.attempts; attempt++) {
       const firstAuthority = await authority();
       if (firstAuthority.tag !== "ok") return firstAuthority;
       const firstIdentity = await identity(firstAuthority.value);
@@ -204,7 +210,7 @@ export async function resolveSpaceLexiconProof(
         checked.tag === "invalid" || checked.headCid !== firstHead.value.cid ||
         checked.revision !== firstHead.value.revision
       ) {
-        if (attempt === 0) continue;
+        if (attempt + 1 < SPACE_LEXICON_LIMITS.attempts) continue;
         return { tag: "invalid", reason: "proof" };
       }
       const stoppedResult = failure();

@@ -3,10 +3,11 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { describe, it } from "./helpers/bdd";
 import {
-  createSpaceConsentSnapshot,
+  createSpaceConsentSnapshot as createBoundSnapshot,
   restoreSpaceConsentSnapshot,
   type SpaceConsentGrant,
 } from "../src/lib/spaces/consent-snapshot";
+import type { SpaceDeclarationEvidence } from "../src/lib/spaces/declaration-evidence";
 import {
   type IssuedSpacePermission,
   materializeSpacePermission,
@@ -18,6 +19,48 @@ const CLIENT = "https://client.example/client-metadata.json";
 const TYPE = "com.example.forum";
 const THREAD = "com.example.thread";
 const REPLY = "com.example.reply";
+const CID = "bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua";
+const REVISION = "3n2a5tw2wd22l";
+
+function evidenceFor(
+  grants: readonly SpaceConsentGrant[],
+): SpaceDeclarationEvidence[] {
+  const declarations = new Map<string, SpaceDeclarationEvidence>();
+  for (const item of grants) {
+    const permission = item.permission;
+    if (
+      permission?.collectionSource !== "declaration" ||
+      permission.spaceType === "*"
+    ) continue;
+    if (!declarations.has(permission.spaceType)) {
+      declarations.set(permission.spaceType, {
+        spaceType: permission.spaceType,
+        publisherDid: SUBJECT,
+        recordCid: CID,
+        headCid: CID,
+        revision: REVISION,
+        observedAt: 1,
+        key: "any",
+        collections: [...permission.collections.values],
+      });
+    }
+  }
+  return [...declarations.values()];
+}
+
+function createSnapshot(input: {
+  readonly subject: string;
+  readonly clientId: string;
+  readonly grants: readonly SpaceConsentGrant[];
+  readonly declarations?: readonly SpaceDeclarationEvidence[];
+}) {
+  return createBoundSnapshot({
+    subject: input.subject,
+    clientId: input.clientId,
+    grants: input.grants,
+    declarations: input.declarations ?? evidenceFor(input.grants),
+  });
+}
 
 function grant(
   collections: readonly string[],
@@ -36,7 +79,7 @@ function grant(
 async function snapshot(
   grants: readonly SpaceConsentGrant[] = [grant([THREAD])],
 ) {
-  const seal = await createSpaceConsentSnapshot({
+  const seal = await createSnapshot({
     subject: SUBJECT,
     clientId: CLIENT,
     grants,
@@ -64,10 +107,11 @@ describe("space consent snapshots", () => {
       binding,
     );
     expect(restored).toEqual({
-      version: 1,
+      version: 2,
       subject: SUBJECT,
       clientId: CLIENT,
       grants,
+      declarations: evidenceFor(grants),
     });
     expect(restored?.grants[1].permission.collections.values).toEqual([]);
     expect(restored?.grants[0].permission.collectionSource).toBe("declaration");
@@ -78,7 +122,7 @@ describe("space consent snapshots", () => {
     const collectionValues = [THREAD];
     const item = grant(collectionValues);
     const grants = [item];
-    const pending = createSpaceConsentSnapshot({
+    const pending = createSnapshot({
       subject: SUBJECT,
       clientId: CLIENT,
       grants,
@@ -145,7 +189,7 @@ describe("space consent snapshots", () => {
       },
     });
     expect(
-      await createSpaceConsentSnapshot({
+      await createSnapshot({
         subject: SUBJECT,
         clientId: CLIENT,
         grants: [changing],
@@ -161,7 +205,7 @@ describe("space consent snapshots", () => {
       },
     });
     expect(
-      await createSpaceConsentSnapshot({
+      await createSnapshot({
         subject: SUBJECT,
         clientId: CLIENT,
         grants: [{ ...item, permission: throwing }],
@@ -170,10 +214,11 @@ describe("space consent snapshots", () => {
     const array = [item];
     Object.defineProperty(array, "0", { enumerable: true, get: () => item });
     expect(
-      await createSpaceConsentSnapshot({
+      await createSnapshot({
         subject: SUBJECT,
         clientId: CLIENT,
         grants: array,
+        declarations: evidenceFor([item]),
       }),
     )
       .toBeNull();
@@ -204,6 +249,9 @@ describe("space consent snapshots", () => {
         permission.collections.values,
         permission.actions,
         permission.manage,
+        restored.declarations,
+        restored.declarations[0],
+        restored.declarations[0].collections,
       ]
     ) {
       expect(Object.isFrozen(value)).toBe(true);
@@ -221,7 +269,7 @@ describe("space consent snapshots", () => {
     });
     const malformed = [
       null,
-      { ...original, version: 2 },
+      { ...original, version: 1 },
       { ...original, extra: true },
       { ...original, subject: "not-a-did" },
       withPermission({ ...permission, actions: "read" }),
@@ -290,19 +338,101 @@ describe("space consent snapshots", () => {
     const first = grant([THREAD]);
     const equivalent = grant([REPLY], `space?spaceType=${TYPE}`);
     expect(
-      await createSpaceConsentSnapshot({
+      await createSnapshot({
         subject: SUBJECT,
         clientId: CLIENT,
         grants: [first, equivalent],
       }),
     ).toBeNull();
     expect(
-      await createSpaceConsentSnapshot({
+      await createSnapshot({
         subject: SUBJECT,
         clientId: CLIENT,
         grants: [first, grant([THREAD], `space?spaceType=${TYPE}`)],
       }),
     ).not.toBeNull();
+  });
+
+  it("requires exactly matching evidence for each declaration-backed grant", async () => {
+    const item = grant([THREAD]);
+    const evidence = evidenceFor([item])[0];
+    const badEvidence = [
+      [],
+      [evidence, evidence],
+      [{ ...evidence, spaceType: "com.example.other" }],
+      [{ ...evidence, collections: [REPLY] }],
+      [{ ...evidence, recordCid: "not-a-cid" }],
+      [{ ...evidence, headCid: "not-a-cid" }],
+      [{ ...evidence, publisherDid: "did:example:%ZZ" }],
+      [{ ...evidence, revision: "invalid" }],
+      [{ ...evidence, observedAt: Date.now() + 60_000 }],
+      [{ ...evidence, key: "../../invalid" }],
+      [{ ...evidence, key: `literal:${"x".repeat(513)}` }],
+      [{ ...evidence, title: "x".repeat(65) }],
+    ];
+    for (const declarations of badEvidence) {
+      expect(
+        await createSnapshot({
+          subject: SUBJECT,
+          clientId: CLIENT,
+          grants: [item],
+          declarations,
+        }),
+      )
+        .toBeNull();
+    }
+  });
+
+  it("allows explicit and wildcard grants without extra declaration evidence", async () => {
+    const fixed = grant([], `space:${TYPE}?collection=${THREAD}`);
+    const wildcard = grant([], "space:*?action=read_self");
+    expect(
+      await createSnapshot({
+        subject: SUBJECT,
+        clientId: CLIENT,
+        grants: [fixed, wildcard],
+        declarations: [],
+      }),
+    )
+      .not.toBeNull();
+    expect(
+      await createSnapshot({
+        subject: SUBJECT,
+        clientId: CLIENT,
+        grants: [fixed],
+        declarations: evidenceFor([grant([THREAD])]),
+      }),
+    )
+      .toBeNull();
+    expect(
+      await createSnapshot({
+        subject: SUBJECT,
+        clientId: CLIENT,
+        grants: [fixed, grant([THREAD])],
+      }),
+    )
+      .not.toBeNull();
+  });
+
+  it("normalizes repeated collection names in resolver evidence", async () => {
+    const item = grant([THREAD]);
+    const evidence = {
+      ...evidenceFor([item])[0],
+      collections: [THREAD, THREAD],
+    };
+    const seal = await createSnapshot({
+      subject: SUBJECT,
+      clientId: CLIENT,
+      grants: [item],
+      declarations: [evidence],
+    });
+    if (!seal) throw new Error("Expected snapshot");
+    const restored = await restoreSpaceConsentSnapshot(seal.serialized, {
+      subject: SUBJECT,
+      clientId: CLIENT,
+      digest: seal.digest,
+    });
+    expect(restored?.declarations[0].collections).toEqual([THREAD]);
   });
 
   it("rejects oversized or invalid inputs without truncating a grant", async () => {
@@ -327,8 +457,10 @@ describe("space consent snapshots", () => {
         { subject: SUBJECT, clientId: CLIENT, grants: [excessive] },
         { subject: SUBJECT, clientId: "x".repeat(2049), grants: [] },
         { subject: "invalid", clientId: CLIENT, grants: [] },
+        { subject: "did:example:%ZZ", clientId: CLIENT, grants: [] },
+        { subject: SUBJECT, clientId: "not-a-uri", grants: [] },
       ]
-    ) expect(await createSpaceConsentSnapshot(input)).toBeNull();
+    ) expect(await createSnapshot(input)).toBeNull();
     const { binding } = await snapshot();
     expect(await restoreSpaceConsentSnapshot("x".repeat(65537), binding))
       .toBeNull();
@@ -339,7 +471,7 @@ describe("space consent snapshots", () => {
     const malformed = { ...grant([THREAD]).permission, actions: "bread" };
     for (const permission of [raw, malformed]) {
       expect(
-        await createSpaceConsentSnapshot({
+        await createSnapshot({
           subject: SUBJECT,
           clientId: CLIENT,
           grants: [{

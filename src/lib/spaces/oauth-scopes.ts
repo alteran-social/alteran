@@ -1,9 +1,6 @@
-import {
-  isValidDid,
-  isValidNsid,
-  isValidRecordKey,
-} from "@atproto/syntax-spaces";
+import { isValidNsid, isValidRecordKey } from "@atproto/syntax-spaces";
 import { copyPlainArray, copyPlainRecord } from "./plain-values";
+import { isSpaceDid } from "./space-did";
 
 export type SpaceRecordAction = "create" | "update" | "delete";
 export type SpaceAction = "read" | "read_self" | SpaceRecordAction;
@@ -62,7 +59,7 @@ export function materializeSpacePermission(
   const permission = fields && copyPermissionFields(fields);
   if (
     !permission || typeof grantingDid !== "string" ||
-    !isValidDid(grantingDid) ||
+    !isSpaceDid(grantingDid) ||
     (permission.collections.tag === "explicit" &&
       permission.collections.values.length === 0)
   ) return null;
@@ -216,7 +213,7 @@ export function allowsSpacePermission(
     typeof target.spaceType !== "string" ||
     typeof target.authority !== "string" ||
     typeof target.skey !== "string" || !isSpaceType(target.spaceType) ||
-    !(target.authority === "*" || isValidDid(target.authority)) ||
+    !(target.authority === "*" || isSpaceDid(target.authority)) ||
     !isSpaceKey(target.skey)
   ) return false;
 
@@ -350,7 +347,7 @@ function isSpaceType(value: string): boolean {
 }
 
 function isAuthority(value: string): boolean {
-  return value === "*" || value === "self" || isValidDid(value);
+  return value === "*" || value === "self" || isSpaceDid(value);
 }
 
 function isSpaceKey(value: string): boolean {

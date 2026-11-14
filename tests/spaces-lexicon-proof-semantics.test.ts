@@ -91,6 +91,32 @@ describe("semantic validation of signed Lexicon proofs", () => {
     }
   });
 
+  it("requires record identity fields to be own properties", async () => {
+    const { $type: _type, ...withoutType } = schema();
+    const { id: _id, ...withoutId } = schema();
+    for (
+      const [name, value, record] of [
+        ["$type", COLLECTION, withoutType],
+        ["id", NSID, withoutId],
+      ] as const
+    ) {
+      const sample = await fixture(record);
+      const previous = Object.getOwnPropertyDescriptor(Object.prototype, name);
+      Object.defineProperty(Object.prototype, name, {
+        configurable: true,
+        value,
+      });
+      try {
+        expect((await verifyLexiconProofAtTrustedHead(sample.input)).tag).toBe(
+          "invalid",
+        );
+      } finally {
+        if (previous) Object.defineProperty(Object.prototype, name, previous);
+        else Reflect.deleteProperty(Object.prototype, name);
+      }
+    }
+  });
+
   it("propagates unsupported only after stable authority, identity and head checks", async () => {
     const sample = await fixture(withExtra({ type: "future-schema" }));
     const checked = await verifyLexiconProofAtTrustedHead(sample.input);

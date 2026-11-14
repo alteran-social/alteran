@@ -1,4 +1,5 @@
-import { isValidDid } from "@atproto/syntax-spaces";
+import { isSpaceDid } from "./space-did";
+import { isLexiconUri } from "./lexicon-uri";
 import {
   copyIssuedSpacePermission,
   type IssuedSpacePermission,
@@ -6,6 +7,11 @@ import {
   parseSpacePermission,
 } from "./oauth-scopes";
 import { copyPlainArray, copyPlainRecord } from "./plain-values";
+import {
+  copySpaceDeclarationEvidence,
+  type SpaceDeclarationEvidence,
+} from "./declaration-evidence";
+import { SPACE_LEXICON_LIMITS } from "./lexicon-limits";
 
 export type SpaceConsentGrant = {
   readonly requestedScope: string;
@@ -13,10 +19,11 @@ export type SpaceConsentGrant = {
 };
 
 export type SpaceConsentSnapshot = {
-  readonly version: 1;
+  readonly version: 2;
   readonly subject: string;
   readonly clientId: string;
   readonly grants: readonly SpaceConsentGrant[];
+  readonly declarations: readonly SpaceDeclarationEvidence[];
 };
 
 export type SpaceConsentSnapshotSeal = {
@@ -42,10 +49,16 @@ export async function createSpaceConsentSnapshot(input: {
   readonly subject: string;
   readonly clientId: string;
   readonly grants: readonly SpaceConsentGrant[];
+  readonly declarations: readonly SpaceDeclarationEvidence[];
 }): Promise<SpaceConsentSnapshotSeal | null> {
-  const captured = copyPlainRecord(input, ["subject", "clientId", "grants"]);
+  const captured = copyPlainRecord(input, [
+    "subject",
+    "clientId",
+    "grants",
+    "declarations",
+  ]);
   if (!captured) return null;
-  const snapshot = copySnapshot({ version: 1, ...captured });
+  const snapshot = copySnapshot({ version: 2, ...captured });
   if (!snapshot) return null;
   const serialized = JSON.stringify(snapshot);
   const bytes = encodedSnapshot(serialized);
@@ -90,39 +103,56 @@ function copySnapshot(value: unknown): SpaceConsentSnapshot | null {
     "subject",
     "clientId",
     "grants",
+    "declarations",
   ]);
   const source = fields && copyPlainArray(fields.grants, MAX_PERMISSIONS);
+  const declarationSource = fields &&
+    copyPlainArray(
+      fields.declarations,
+      SPACE_LEXICON_LIMITS.declarationsPerRequest,
+    );
   if (
-    !fields || fields.version !== 1 || typeof fields.subject !== "string" ||
-    !isValidDid(fields.subject) || !isClientId(fields.clientId) || !source
+    !fields || fields.version !== 2 || typeof fields.subject !== "string" ||
+    !isSpaceDid(fields.subject) || !isClientId(fields.clientId) || !source ||
+    !declarationSource
   ) return null;
 
+  const declarations: SpaceDeclarationEvidence[] = [];
+  const declarationsByType = new Map<string, SpaceDeclarationEvidence>();
+  for (const item of declarationSource) {
+    const evidence = copySpaceDeclarationEvidence(item);
+    if (!evidence || declarationsByType.has(evidence.spaceType)) return null;
+    declarations.push(evidence);
+    declarationsByType.set(evidence.spaceType, evidence);
+  }
   const grants: SpaceConsentGrant[] = [];
   const scopes = new Set<string>();
-  const declarations = new Map<string, string>();
+  const usedDeclarations = new Set<string>();
   for (const grant of source) {
-    const copy = copyGrant(grant, fields.subject);
+    const copy = copyGrant(grant, fields.subject, declarationsByType);
     if (!copy) return null;
-    if (scopes.has(copy.requestedScope)) return null;
-    scopes.add(copy.requestedScope);
-    if (copy.permission.collectionSource === "declaration") {
-      const { spaceType, collections } = copy.permission;
-      const serialized = JSON.stringify(collections.values);
-      const previous = declarations.get(spaceType);
-      if (previous !== undefined && previous !== serialized) return null;
-      declarations.set(spaceType, serialized);
-    }
-    grants.push(copy);
+    if (scopes.has(copy.grant.requestedScope)) return null;
+    scopes.add(copy.grant.requestedScope);
+    if (copy.declarationType) usedDeclarations.add(copy.declarationType);
+    grants.push(copy.grant);
   }
+  if (usedDeclarations.size !== declarations.length) return null;
   return {
-    version: 1,
+    version: 2,
     subject: fields.subject,
     clientId: fields.clientId,
     grants,
+    declarations,
   };
 }
 
-function copyGrant(value: unknown, subject: string): SpaceConsentGrant | null {
+function copyGrant(
+  value: unknown,
+  subject: string,
+  declarations: ReadonlyMap<string, SpaceDeclarationEvidence>,
+):
+  | { readonly grant: SpaceConsentGrant; readonly declarationType?: string }
+  | null {
   const fields = copyPlainRecord(value, ["requestedScope", "permission"]);
   if (
     !fields || typeof fields.requestedScope !== "string" ||
@@ -131,16 +161,31 @@ function copyGrant(value: unknown, subject: string): SpaceConsentGrant | null {
   const requested = parseSpacePermission(fields.requestedScope);
   const permission = copyIssuedSpacePermission(fields.permission);
   if (!requested || !permission) return null;
-  const expected = materializeSpacePermission(requested, subject, {
-    spaceType: requested.spaceType,
-    collections: permission.collections.values,
-  });
+  const declarationType =
+    requested.collections.tag === "declaration" && requested.spaceType !== "*"
+      ? requested.spaceType
+      : undefined;
+  const evidence = declarationType
+    ? declarations.get(declarationType)
+    : undefined;
+  if (declarationType && !evidence) return null;
+  const expected = materializeSpacePermission(
+    requested,
+    subject,
+    evidence && {
+      spaceType: evidence.spaceType,
+      collections: evidence.collections,
+    },
+  );
   if (!expected) return null;
   const canonical = copyIssuedSpacePermission(expected);
   if (!canonical || JSON.stringify(canonical) !== JSON.stringify(permission)) {
     return null;
   }
-  return { requestedScope: fields.requestedScope, permission };
+  return {
+    grant: { requestedScope: fields.requestedScope, permission },
+    declarationType,
+  };
 }
 
 function freezeSnapshot(snapshot: SpaceConsentSnapshot): SpaceConsentSnapshot {
@@ -153,17 +198,18 @@ function freezeSnapshot(snapshot: SpaceConsentSnapshot): SpaceConsentSnapshot {
     Object.freeze(grant);
   }
   Object.freeze(snapshot.grants);
+  Object.freeze(snapshot.declarations);
   return Object.freeze(snapshot);
 }
 
 function isClientId(value: unknown): value is string {
   return typeof value === "string" && value.length <= MAX_CLIENT_ID_LENGTH &&
-    /^[\x21-\x7e]+$/.test(value);
+    isLexiconUri(value);
 }
 
 function isValidBinding(value: Record<string, unknown>): boolean {
   return typeof value.subject === "string" &&
-    isValidDid(value.subject) &&
+    isSpaceDid(value.subject) &&
     isClientId(value.clientId) && typeof value.digest === "string" &&
     /^[0-9a-f]{64}$/.test(value.digest);
 }

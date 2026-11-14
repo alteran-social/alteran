@@ -1,5 +1,5 @@
 import type { D1Database, R2Bucket, R2Object } from "@cloudflare/workers-types";
-import { isValidDid } from "@atproto/syntax-spaces";
+import { isSpaceDid } from "./space-did";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { CID } from "multiformats/cid";
 import { create as createDigest } from "multiformats/hashes/digest";
@@ -39,7 +39,7 @@ export async function reservePrivateBlob(
   database: D1Database,
   repoDid: string,
 ): Promise<PrivateBlobReservationResult> {
-  if (!validDid(repoDid)) return { tag: "invalid" };
+  if (!isSpaceDid(repoDid)) return { tag: "invalid" };
   const id = crypto.randomUUID();
   const token = crypto.randomUUID();
   const key = `space-staging/${crypto.randomUUID()}`;
@@ -87,7 +87,7 @@ export async function stagePrivateBlob(
   if (
     !reservation || !validUuid(reservation.id) ||
     !validUuid(reservation.token) ||
-    !validDid(reservation.repoDid) || !validMime(mimeType)
+    !isSpaceDid(reservation.repoDid) || !validMime(mimeType)
   ) return { tag: "invalid" };
   let bytes: Uint8Array;
   try {
@@ -239,11 +239,6 @@ function checkedPut(
     !actual.every((value, index) => value === digest[index])
   ) return null;
   return { version, etag };
-}
-
-function validDid(value: unknown): value is string {
-  return typeof value === "string" && value.length <= 2048 &&
-    !/%(?![0-9A-Fa-f]{2})/.test(value) && isValidDid(value);
 }
 
 function validUuid(value: unknown): value is string {

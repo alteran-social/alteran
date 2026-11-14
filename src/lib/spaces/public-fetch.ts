@@ -11,6 +11,8 @@ export type PublicFetchOptions = {
   readonly signal?: AbortSignal;
   /** Trusted test seam; production callers must use Cloudflare global fetch. */
   readonly fetch?: typeof fetch;
+  /** Trusted tests only; production must require byte-stream BYOB reads. */
+  readonly allowTestStreams?: boolean;
 };
 
 export type PublicFetchResult =
@@ -132,6 +134,7 @@ export async function fetchPublicHttps(
     : options.timeoutMs;
   const externalSignal = options.signal;
   const injectedFetch = options.fetch;
+  const allowTestStreams = options.allowTestStreams;
   const fetchPublic = injectedFetch === undefined
     ? globalThis.fetch
     : injectedFetch;
@@ -141,7 +144,8 @@ export async function fetchPublicHttps(
     timeoutMs > MAX_TIMEOUT_MS ||
     (externalSignal !== undefined &&
       !(externalSignal instanceof AbortSignal)) ||
-    typeof fetchPublic !== "function"
+    typeof fetchPublic !== "function" ||
+    (allowTestStreams !== undefined && typeof allowTestStreams !== "boolean")
   ) return { tag: "invalid", reason: "options" };
   if (externalSignal?.aborted) return { tag: "unavailable", reason: "aborted" };
 
@@ -251,7 +255,7 @@ export async function fetchPublicHttps(
         };
       } catch {
         // A trusted test double may supply a non-byte stream; native fetch may not.
-        if (injectedFetch === undefined) {
+        if (!(allowTestStreams ?? injectedFetch !== undefined)) {
           return { tag: "rejected", reason: "response" };
         }
         const defaultReader = body.getReader();

@@ -1,5 +1,6 @@
 import { resolveTxt } from "node:dns/promises";
 import { isValidDid, NSID } from "@atproto/syntax-spaces";
+import { SPACE_LEXICON_LIMITS } from "./lexicon-limits";
 
 const DEFAULT_TIMEOUT_MS = 3_000;
 const MAX_TIMEOUT_MS = 10_000;
@@ -7,7 +8,7 @@ const MAX_DNS_NAME_LENGTH = 253;
 const MAX_RECORDS = 256;
 const MAX_CHUNKS_PER_RECORD = 256;
 const MAX_TOTAL_CHUNKS = 4_096;
-const MAX_TOTAL_BYTES = 65_535;
+const MAX_TOTAL_BYTES = SPACE_LEXICON_LIMITS.dnsResponseBytes;
 
 export type LexiconAuthorityResult =
   | { readonly tag: "resolved"; readonly did: string }
