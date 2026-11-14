@@ -5,6 +5,7 @@ import { getOrCreateSecret } from '../db/account';
 import { InvalidToken, ServerMisconfigured } from './errors';
 import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
 import { AuthScope, isBearerAccessScope, isOAuthScope } from './auth-scope';
+import { isSpaceScope } from './spaces/explicit-read-grant';
 
 const SESSION_SECRET_KEY = 'session_jwt_secret';
 const GRACE_PERIOD_SECONDS = 2 * 60 * 60;
@@ -41,6 +42,7 @@ export type IssueSessionTokenOptions = {
   clientId?: string;
   dpopJkt?: string;
   oauthSessionId?: string;
+  spaceGrantDigest?: string;
 };
 
 export async function issueSessionTokens(env: Env, did: string, opts: IssueSessionTokenOptions = {}) {
@@ -53,6 +55,10 @@ export async function issueSessionTokens(env: Env, did: string, opts: IssueSessi
   if (opts.dpopJkt) {
     if (!isOAuthScope(accessScope)) {
       throw new InvalidToken('Invalid OAuth access token scope');
+    }
+    const hasSpace = accessScope.split(' ').some(isSpaceScope);
+    if (hasSpace !== (typeof opts.spaceGrantDigest === 'string' && /^[0-9a-f]{64}$/.test(opts.spaceGrantDigest))) {
+      throw new InvalidToken('Invalid Space grant binding');
     }
   } else if (!isBearerAccessScope(accessScope)) {
     throw new InvalidToken('Invalid access token scope');
@@ -71,6 +77,7 @@ export async function issueSessionTokens(env: Env, did: string, opts: IssueSessi
     accessPayload.jti = opts.accessJti ?? generateTokenId();
     if (opts.clientId) accessPayload.client_id = opts.clientId;
     if (opts.oauthSessionId) accessPayload.oauth_session = opts.oauthSessionId;
+    if (opts.spaceGrantDigest) accessPayload.space_grant = opts.spaceGrantDigest;
   }
   const accessJwt = await signJwt(jwtKey, 'at+jwt', accessPayload);
 
@@ -88,6 +95,7 @@ export async function issueSessionTokens(env: Env, did: string, opts: IssueSessi
     refreshPayload.cnf = { jkt: opts.dpopJkt };
     if (opts.clientId) refreshPayload.client_id = opts.clientId;
     if (opts.oauthSessionId) refreshPayload.oauth_session = opts.oauthSessionId;
+    if (opts.spaceGrantDigest) refreshPayload.space_grant = opts.spaceGrantDigest;
   }
   const refreshJwt = await signJwt(jwtKey, 'refresh+jwt', refreshPayload);
 
@@ -139,6 +147,11 @@ export async function verifyAccessToken(env: Env, token: string) {
     throw new InvalidToken('Invalid access token scope');
   }
   return payload;
+}
+
+/** Legacy bearer endpoints must not accept a sender-constrained OAuth token. */
+export function isOAuthBoundRefresh(payload: Record<string, unknown>): boolean {
+  return Object.hasOwn(payload, 'cnf') || Object.hasOwn(payload, 'client_id') || Object.hasOwn(payload, 'oauth_session');
 }
 
 export function computeGraceExpiry(previousExpiry: number, nowSeconds: number): number {

@@ -36,7 +36,12 @@
     { "tag": "v1", "new_classes": ["Sequencer"] },
     { "tag": "v2", "modified_classes": ["Sequencer"] }
   ],
-  "observability": { "enabled": true },
+  // Space request query strings contain private identifiers.
+  "observability": {
+    "enabled": true,
+    "logs": { "invocation_logs": false },
+    "traces": { "enabled": false }
+  },
   // Optionally bind secrets from Cloudflare Secret Store. Each entry exposes
   // an env binding with an async get(). This project resolves them to strings
   // at runtime, so your handlers see plain string values.
@@ -132,7 +137,11 @@
         { "tag": "v1", "new_classes": ["Sequencer"] },
         { "tag": "v2", "modified_classes": ["Sequencer"] }
       ],
-      "observability": { "enabled": true },
+      "observability": {
+        "enabled": true,
+        "logs": { "invocation_logs": false },
+        "traces": { "enabled": false }
+      },
     },
   },
 }

@@ -135,9 +135,10 @@ describeApp('app basics', () => {
     // create session to get access token
     const sess = await fetch(`http://localhost:${port}/xrpc/com.atproto.server.createSession`, {
       method: 'POST',
-      body: JSON.stringify({ identifier: 'blobuser', password: 'pwd' }),
+      body: JSON.stringify({ identifier: 'did:example:test', password: 'pwd' }),
       headers: { 'content-type': 'application/json' },
     });
+    expect(sess.status).toBe(200);
     const sessBody = await j(sess);
     const auth = { authorization: `Bearer ${sessBody.accessJwt}` };
     const body = new Blob([new Uint8Array([1,2,3,4])], { type: 'image/png' });
@@ -148,25 +149,40 @@ describeApp('app basics', () => {
     const data = await j(up);
     expect(data.blob?.ref?.$link).toBeDefined();
 
-    // reference blob in a record and then delete to allow GC
+    // Reference the uploaded blob in a public record.
     const post = await fetch(`http://localhost:${port}/xrpc/com.atproto.repo.createRecord`, {
       method: 'POST', headers: { 'content-type': 'application/json', ...auth },
-      body: JSON.stringify({ collection: 'app.bsky.feed.post', record: { text: 'blob', embed: { ref: { $link: data.blob.ref.$link } } } }),
+      body: JSON.stringify({
+        repo: 'did:example:test',
+        collection: 'app.bsky.feed.post',
+        record: {
+          $type: 'app.bsky.feed.post',
+          text: 'blob',
+          createdAt: '2026-11-13T00:00:00.000Z',
+          embed: {
+            $type: 'app.bsky.embed.images',
+            images: [{ alt: 'test image', image: data.blob }],
+          },
+        },
+      }),
     });
     expect(post.status).toBe(200);
     const uri = (await j(post)).uri as string;
+    const blobUrl = `http://localhost:${port}/xrpc/com.atproto.sync.getBlob?did=did:example:test&cid=${data.blob.ref.$link}`;
+    expect((await fetch(blobUrl)).status).toBe(200);
 
-    // delete record, run GC, ensure blob removed
+    // Delete the record and check that the blob is no longer publicly served.
     const rkey = uri.split('/').pop();
     const del = await fetch(`http://localhost:${port}/xrpc/com.atproto.repo.deleteRecord`, {
       method: 'POST', headers: { 'content-type': 'application/json', ...auth },
-      body: JSON.stringify({ collection: 'app.bsky.feed.post', rkey }),
+      body: JSON.stringify({ repo: 'did:example:test', collection: 'app.bsky.feed.post', rkey }),
     });
     expect(del.status).toBe(200);
     const gc = await fetch(`http://localhost:${port}/debug/gc/blobs`, { method: 'POST' });
     expect(gc.status).toBe(200);
-    const got = await fetch(`http://localhost:${port}/debug/blob/${data.blob.ref.$link}`);
-    expect(got.status).toBe(404);
+    const got = await fetch(blobUrl);
+    expect(got.status).toBe(400);
+    expect((await j(got)).error).toBe('BlobNotFound');
   });
 
   it('sync json endpoints return content', async () => {

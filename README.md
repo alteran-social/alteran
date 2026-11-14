@@ -3,6 +3,10 @@
 > [!WARNING]
 > This project was built using agentic coding tools and is currently undergoing a systematic review by a human in their spare time. Nobody should use this project as their PDS yet.
 
+Alteran does not yet support AT Protocol Spaces or migration of Spaces data.
+See the [Spaces readiness notes](https://github.com/alteran-social/alteran/blob/main/docs/SPACES_READINESS.md) before moving an
+account or building against a Spaces-capable PDS.
+
 ## Astro Integration
 
 This repository now ships an Astro integration that turns any Cloudflare Worker-backed Astro app into a single-user ATProto Personal Data Server. Install the package (or link it locally), then add the integration to your `astro.config.mjs`:
@@ -280,8 +284,7 @@ Debugging & storage
 - Bootstrap route (alt): `POST /debug/db/bootstrap` creates a minimal `record` table.
 - Insert a test record: `POST /debug/record` with `{ "uri": "at://did:example/app.bsky.feed.post/123", "json": {"msg":"hi"} }`.
 - Get a record: `GET /debug/record?uri=at://did:example/app.bsky.feed.post/123`.
-- R2 test: `PUT /debug/blob/<key>` and `GET /debug/blob/<key>`.
-- Run GC: `POST /debug/gc/blobs` removes R2 objects with no references
+- Run GC: `POST /debug/gc/blobs` removes eligible unreferenced blob metadata.
 
 XRPC surface
 - `GET /xrpc/com.atproto.server.describeServer`

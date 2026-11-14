@@ -1,9 +1,13 @@
 import type { Env } from '../../env';
-import { getSecret, setSecret } from '../../db/account';
+import { setSecret } from '../../db/account';
+import { copyPlainRecord } from '../spaces/plain-values';
 
 const PAR_PREFIX = 'oauth:par:';
 const CODE_PREFIX = 'oauth:code:';
 const CONSENT_PREFIX = 'oauth:consent:';
+export const MAX_PAR_BYTES = 64 * 1024;
+export const MAX_CODE_BYTES = 128 * 1024;
+const MAX_CONSENT_BYTES = 512 * 1024;
 
 export interface ParRecord {
   client_id: string;
@@ -17,6 +21,7 @@ export interface ParRecord {
   dpopJkt: string;
   clientAuthMethod: 'none' | 'private_key_jwt';
   clientAuthKeyId?: string | null;
+  clientAuthKeyBinding?: 'jwk-thumbprint-v1' | null;
   createdAt: number;
   expiresAt: number;
 }
@@ -30,10 +35,12 @@ export interface CodeRecord {
   dpopJkt: string;
   clientAuthMethod: 'none' | 'private_key_jwt';
   clientAuthKeyId?: string | null;
+  clientAuthKeyBinding?: 'jwk-thumbprint-v1' | null;
   did: string;
   createdAt: number;
   expiresAt: number;
   used?: boolean;
+  spaceConsent?: StoredSpaceConsent;
 }
 
 export interface ConsentRecord {
@@ -41,93 +48,152 @@ export interface ConsentRecord {
   csrf: string;
   createdAt: number;
   expiresAt: number;
+  parValue: string;
+  spaceConsent?: StoredSpaceConsent;
+}
+
+export type StoredSpaceConsent = {
+  readonly serialized: string;
+  readonly digest: string;
+  readonly tokenScope: string;
+  readonly accountIncarnation: string;
+};
+
+export type ParSnapshot = { readonly record: ParRecord; readonly value: string };
+export type CodeSnapshot = { readonly record: CodeRecord; readonly value: string };
+
+function boundedText(value: string, maximum: number): boolean {
+  return value.length <= maximum && new TextEncoder().encode(value).byteLength <= maximum;
+}
+
+function isStoredSpaceConsent(value: unknown): value is StoredSpaceConsent {
+  const fields = copyPlainRecord(value, ['serialized', 'digest', 'tokenScope', 'accountIncarnation']);
+  return !!fields && typeof fields.serialized === 'string' &&
+    boundedText(fields.serialized, 65_536) && typeof fields.digest === 'string' &&
+    /^[0-9a-f]{64}$/.test(fields.digest) && typeof fields.tokenScope === 'string' &&
+    boundedText(fields.tokenScope, 4096) && typeof fields.accountIncarnation === 'string' &&
+    /^[0-9a-f]{32}$/.test(fields.accountIncarnation);
+}
+
+async function getBoundedSecret(env: Env, key: string, maximum: number): Promise<string | null> {
+  const row = await env.ALTERAN_DB.prepare(`SELECT CASE WHEN typeof(value) = 'text'
+    AND length(CAST(value AS BLOB)) <= ? THEN value ELSE NULL END AS value FROM secret WHERE key = ?`)
+    .bind(maximum, key).first<{ value: string | null }>();
+  return typeof row?.value === 'string' ? row.value : null;
+}
+
+export function parRecordFits(record: ParRecord): boolean {
+  return boundedText(JSON.stringify(record), MAX_PAR_BYTES);
 }
 
 export async function savePar(env: Env, id: string, rec: ParRecord): Promise<void> {
+  if (!boundedText(id, 8192) || !parRecordFits(rec)) throw new Error('PAR record exceeds storage limit');
   await setSecret(env, PAR_PREFIX + id, JSON.stringify(rec));
 }
 
 export async function loadPar(env: Env, id: string): Promise<ParRecord | null> {
-  const raw = await getSecret(env, PAR_PREFIX + id);
+  return (await loadParSnapshot(env, id))?.record ?? null;
+}
+
+export async function loadParSnapshot(env: Env, id: string): Promise<ParSnapshot | null> {
+  if (!id || !boundedText(id, 8192)) return null;
+  const raw = await getBoundedSecret(env, PAR_PREFIX + id, MAX_PAR_BYTES);
   if (!raw) return null;
   try {
     const rec = JSON.parse(raw) as ParRecord;
     if (
-      typeof rec.client_id !== 'string' ||
-      typeof rec.redirect_uri !== 'string' ||
-      typeof rec.code_challenge !== 'string' ||
-      typeof rec.scope !== 'string' ||
+      !rec || typeof rec !== 'object' ||
+      typeof rec.client_id !== 'string' || !rec.client_id ||
+      typeof rec.redirect_uri !== 'string' || !rec.redirect_uri ||
+      typeof rec.code_challenge !== 'string' || !rec.code_challenge ||
+      rec.code_challenge_method !== 'S256' ||
+      typeof rec.scope !== 'string' || !rec.scope ||
       typeof rec.state !== 'string' ||
-      typeof rec.dpopJkt !== 'string'
+      typeof rec.dpopJkt !== 'string' || !rec.dpopJkt ||
+      (rec.clientAuthMethod !== 'none' && rec.clientAuthMethod !== 'private_key_jwt') ||
+      (rec.clientAuthKeyId !== undefined && rec.clientAuthKeyId !== null && typeof rec.clientAuthKeyId !== 'string') ||
+      (rec.clientAuthKeyBinding !== undefined && rec.clientAuthKeyBinding !== null && rec.clientAuthKeyBinding !== 'jwk-thumbprint-v1') ||
+      (rec.login_hint !== undefined && typeof rec.login_hint !== 'string') ||
+      (rec.prompt !== undefined && typeof rec.prompt !== 'string') ||
+      !Number.isSafeInteger(rec.createdAt) || !Number.isSafeInteger(rec.expiresAt) ||
+      rec.createdAt < 0 || rec.expiresAt <= rec.createdAt
     ) {
       return null;
     }
-    if (rec.expiresAt && rec.expiresAt < Math.floor(Date.now() / 1000)) {
-      await deletePar(env, id);
+    if (rec.expiresAt < Math.floor(Date.now() / 1000)) {
+      await deleteParSnapshot(env, id, raw);
       return null;
     }
-    return rec;
+    return { record: rec, value: raw };
   } catch {
     return null;
   }
 }
 
-export async function deletePar(env: Env, id: string): Promise<void> {
-  // Overwrite with expired to minimize API surface
-  await setSecret(env, PAR_PREFIX + id, JSON.stringify({}));
+export async function deleteParSnapshot(env: Env, id: string, value: string): Promise<void> {
+  await env.ALTERAN_DB.prepare(
+    'UPDATE secret SET value = ?, updated_at = ? WHERE key = ? AND value = ?',
+  ).bind(JSON.stringify({}), Date.now(), PAR_PREFIX + id, value).run();
 }
 
-export async function saveConsent(env: Env, id: string, csrf: string, expiresAt: number): Promise<void> {
+export async function saveConsent(
+  env: Env, id: string, csrf: string, expiresAt: number, parValue: string,
+  spaceConsent?: StoredSpaceConsent,
+): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
-  await setSecret(env, CONSENT_PREFIX + id, JSON.stringify({ id, csrf, createdAt: now, expiresAt }));
+  if (!boundedText(id, 8192) || !boundedText(csrf, 8192) || !boundedText(parValue, MAX_PAR_BYTES)) {
+    throw new Error('Consent record exceeds storage limit');
+  }
+  if (spaceConsent !== undefined && !isStoredSpaceConsent(spaceConsent)) throw new Error('Invalid Space consent');
+  const value = JSON.stringify({ id, csrf, createdAt: now, expiresAt, parValue, ...(spaceConsent && { spaceConsent }) });
+  if (!boundedText(value, MAX_CONSENT_BYTES)) throw new Error('Consent record exceeds storage limit');
+  await setSecret(env, CONSENT_PREFIX + id, value);
 }
 
-export async function consumeConsent(env: Env, id: string, csrf: string): Promise<boolean> {
+export async function consumeConsent(env: Env, id: string, csrf: string): Promise<ConsentRecord | null> {
   const key = CONSENT_PREFIX + id;
-  const raw = await getSecret(env, key);
-  if (!raw) return false;
+  if (!id || !boundedText(id, 8192) || !boundedText(csrf, 8192)) return null;
+  const raw = await getBoundedSecret(env, key, MAX_CONSENT_BYTES);
+  if (!raw) return null;
   try {
     const rec = JSON.parse(raw) as ConsentRecord;
-    if (rec.expiresAt && rec.expiresAt < Math.floor(Date.now() / 1000)) return false;
-    if (rec.id !== id || rec.csrf !== csrf) return false;
+    if (!rec || typeof rec !== 'object' || rec.id !== id || rec.csrf !== csrf ||
+      typeof rec.parValue !== 'string' || !rec.parValue || !boundedText(rec.parValue, MAX_PAR_BYTES) ||
+      (rec.spaceConsent !== undefined && !isStoredSpaceConsent(rec.spaceConsent)) ||
+      !Number.isSafeInteger(rec.createdAt) || !Number.isSafeInteger(rec.expiresAt) ||
+      rec.createdAt < 0 || rec.expiresAt <= rec.createdAt ||
+      rec.expiresAt < Math.floor(Date.now() / 1000)) return null;
     const response = await env.ALTERAN_DB.prepare(
       'UPDATE secret SET value = ?, updated_at = ? WHERE key = ? AND value = ?'
     ).bind(JSON.stringify({}), Math.floor(Date.now()), key, raw).run();
-    return (response.meta.changes ?? 0) === 1;
-  } catch {
-    return false;
-  }
-}
-
-export async function saveCode(env: Env, code: string, rec: CodeRecord): Promise<void> {
-  await setSecret(env, CODE_PREFIX + code, JSON.stringify(rec));
-}
-
-export async function loadCode(env: Env, code: string): Promise<CodeRecord | null> {
-  const raw = await getSecret(env, CODE_PREFIX + code);
-  if (!raw) return null;
-  try {
-    const rec = JSON.parse(raw) as CodeRecord;
-    if (rec.expiresAt && rec.expiresAt < Math.floor(Date.now() / 1000)) return null;
-    return rec;
+    return (response.meta.changes ?? 0) === 1 ? rec : null;
   } catch {
     return null;
   }
 }
 
-export async function consumeCode(env: Env, code: string): Promise<CodeRecord | null> {
-  const key = CODE_PREFIX + code;
-  const raw = await getSecret(env, key);
+/** Read a validated immutable code without consuming it. */
+export async function loadCodeSnapshot(env: Env, code: string): Promise<CodeSnapshot | null> {
+  if (!code || !boundedText(code, 8192)) return null;
+  const raw = await getBoundedSecret(env, CODE_PREFIX + code, MAX_CODE_BYTES);
   if (!raw) return null;
   try {
     const rec = JSON.parse(raw) as CodeRecord;
-    if (rec.expiresAt && rec.expiresAt < Math.floor(Date.now() / 1000)) return null;
-    if (rec.used) return null;
-    const used = JSON.stringify({ ...rec, used: true });
-    const response = await env.ALTERAN_DB.prepare(
-      'UPDATE secret SET value = ?, updated_at = ? WHERE key = ? AND value = ?'
-    ).bind(used, Math.floor(Date.now()), key, raw).run();
-    return (response.meta.changes ?? 0) === 1 ? rec : null;
+    if (!rec || typeof rec !== 'object' || Array.isArray(rec) || rec.code !== code ||
+      typeof rec.client_id !== 'string' || !rec.client_id ||
+      typeof rec.redirect_uri !== 'string' || !rec.redirect_uri ||
+      typeof rec.code_challenge !== 'string' || !rec.code_challenge ||
+      typeof rec.scope !== 'string' || !rec.scope ||
+      typeof rec.dpopJkt !== 'string' || !rec.dpopJkt ||
+      typeof rec.did !== 'string' || !rec.did ||
+      (rec.clientAuthMethod !== 'none' && rec.clientAuthMethod !== 'private_key_jwt') ||
+      (rec.clientAuthKeyId !== undefined && rec.clientAuthKeyId !== null && typeof rec.clientAuthKeyId !== 'string') ||
+      (rec.clientAuthKeyBinding !== undefined && rec.clientAuthKeyBinding !== null && rec.clientAuthKeyBinding !== 'jwk-thumbprint-v1') ||
+      (rec.used !== undefined && rec.used !== false) ||
+      (rec.spaceConsent !== undefined && (!isStoredSpaceConsent(rec.spaceConsent) || rec.spaceConsent.tokenScope !== rec.scope)) ||
+      !Number.isSafeInteger(rec.createdAt) || !Number.isSafeInteger(rec.expiresAt) ||
+      rec.createdAt < 0 || rec.expiresAt <= rec.createdAt) return null;
+    return { record: rec, value: raw };
   } catch {
     return null;
   }

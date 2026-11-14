@@ -74,6 +74,35 @@ external-service responsibilities.
 
 ---
 
+## AT Protocol Spaces
+
+`com.atproto.space.getRecord` supports an unsigned read from the authenticated
+user's own repository in a matching Space. It requires a DPoP-bound OAuth
+access token with an explicitly approved `read_self` Space grant, with or without
+a collection parameter. That grant covers all collections in each matching
+Space, even when the request named a collection. Legacy bearer tokens, app
+passwords, and cross-repository reads are not accepted. Requests must include
+exactly one `space`, `repo`, `collection`,
+and `rkey` query parameter.
+
+The endpoint returns `Cache-Control: private, no-store`. Any
+`Accept-Signature` header is rejected with `InvalidSpaceMac`; record MACs are
+not available through this endpoint yet. A missing or deleted Space returns a
+generic authorization failure. The committed D1 completion check is the
+authorization decision point; an already admitted response can be delivered
+later, and a later revocation cannot retract bytes already delivered.
+
+Other `com.atproto.space.*`, `com.atproto.personalspace.*`,
+`com.atproto.memberspace.*`, and `com.atproto.managedspace.*` methods remain
+unsupported and are not proxied to another service. Space actions and policy
+operations other than the explicitly approved read above are not granted. A
+separate `transition:generic` grant retains its public-repository permissions.
+
+See [Spaces readiness](SPACES_READINESS.md) for the remaining work and migration
+limitations.
+
+---
+
 ## Server Endpoints
 
 ### com.atproto.server.describeServer

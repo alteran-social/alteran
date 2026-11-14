@@ -31,6 +31,7 @@ export type Env = {
   PDS_REFRESH_TTL_SEC?: string;
   REPO_SIGNING_KEY?: string | SecretsStoreSecret;
   PDS_PLC_ROTATION_KEY?: string | SecretsStoreSecret;
+  PDS_SPACE_KEM_KEY?: string | SecretsStoreSecret;
   PDS_RATE_LIMIT_PER_MIN?: string;
   PDS_MAX_JSON_BYTES?: string;
   PDS_CORS_ORIGIN?: string;

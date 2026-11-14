@@ -1,5 +1,5 @@
 import type { APIContext } from 'astro';
-import { deletePar, loadPar } from '../../lib/oauth/store';
+import { deleteParSnapshot, loadParSnapshot } from '../../lib/oauth/store';
 import { loginHintMatchesSingleUser, publicPdsOrigin, redirectWithOAuthError } from '../../lib/oauth/consent';
 
 export const prerender = false;
@@ -26,27 +26,28 @@ export async function GET({ locals, request }: APIContext) {
     });
   }
 
-  const par = await loadPar(env, id);
-  if (!par) {
+  const snapshot = await loadParSnapshot(env, id);
+  if (!snapshot) {
     return new Response(JSON.stringify({ error: 'invalid_request_uri' }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' },
     });
   }
+  const par = snapshot.record;
 
   if (client_id && client_id !== par.client_id) {
-    await deletePar(env, id);
+    await deleteParSnapshot(env, id, snapshot.value);
     return redirectWithOAuthError(par.redirect_uri, 'invalid_request', par.state, issuer, 'client_id mismatch');
   }
 
   if (!(await loginHintMatchesSingleUser(env, par.login_hint))) {
-    await deletePar(env, id);
+    await deleteParSnapshot(env, id, snapshot.value);
     return redirectWithOAuthError(par.redirect_uri, 'login_required', par.state, issuer, 'login_hint does not match this PDS account');
   }
 
   const parPrompt = (par.prompt || '').split(' ').filter(Boolean);
   if (frontChannelPrompt.includes('none') || parPrompt.includes('none')) {
-    await deletePar(env, id);
+    await deleteParSnapshot(env, id, snapshot.value);
     return redirectWithOAuthError(par.redirect_uri, 'login_required', par.state, issuer);
   }
 

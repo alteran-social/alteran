@@ -28,8 +28,10 @@
   "scripts": {},
   "devDependencies": {
     "@astrojs/cloudflare": "^13.5.1",
+    "@atproto/oauth-scopes": "0.0.0-spaces-alpha-20261113224550",
     "@cloudflare/vite-plugin": "^1.37.0",
     "drizzle-kit": "^0.31.10",
+    "esbuild": "0.25.12",
     "miniflare": "^3.20250718.3",
     "vite": "^6.4.2",
     "wrangler": "^4.91.0"
@@ -40,7 +42,15 @@
   "dependencies": {
     "@atproto/api": "^0.17.7",
     "@atproto/crypto": "^0.4.5",
+    "@atproto/crypto-spaces": "npm:@atproto/crypto@0.0.0-spaces-alpha-20261113224550",
+    "@atproto/did": "0.0.0-spaces-alpha-20261113224550",
+    "@atproto/lex-cbor": "0.0.0-spaces-alpha-20261113224550",
+    "@atproto/lex-document": "0.0.0-spaces-alpha-20261113224550",
+    "@atproto/lex-json": "0.0.0-spaces-alpha-20261113224550",
+    "@atproto/repo": "0.0.0-spaces-alpha-20261113224550",
+    "@atproto/space": "0.0.0-spaces-alpha-20261113224550",
     "@atproto/syntax": "^0.4.3",
+    "@atproto/syntax-spaces": "npm:@atproto/syntax@0.0.0-spaces-alpha-20261113224550",
     "@cloudflare/workers-types": "^4.20260511.1",
     "@did-plc/lib": "^0.0.4",
     "@iconify-json/simple-icons": "^1.2.82",

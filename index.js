@@ -42,6 +42,9 @@ const CORE_ROUTES = [
   { pattern: '/xrpc/com.atproto.server.describeServer', entrypoint: './src/pages/xrpc/com.atproto.server.describeServer.ts' },
   { pattern: '/xrpc/com.atproto.server.getSession', entrypoint: './src/pages/xrpc/com.atproto.server.getSession.ts' },
   { pattern: '/xrpc/com.atproto.server.refreshSession', entrypoint: './src/pages/xrpc/com.atproto.server.refreshSession.ts' },
+  { pattern: '/xrpc/com.atproto.space.getRecord', entrypoint: './src/pages/xrpc/com.atproto.space.getRecord.ts' },
+  { pattern: '/xrpc/com.atproto.space.getSpace', entrypoint: './src/pages/xrpc/com.atproto.space.getSpace.ts' },
+  { pattern: '/xrpc/com.atproto.space.listRecords', entrypoint: './src/pages/xrpc/com.atproto.space.listRecords.ts' },
   { pattern: '/xrpc/com.atproto.sync.getBlocks', entrypoint: './src/pages/xrpc/com.atproto.sync.getBlocks.ts' },
   { pattern: '/xrpc/com.atproto.sync.getBlocks.json', entrypoint: './src/pages/xrpc/com.atproto.sync.getBlocks.json.ts' },
   { pattern: '/xrpc/com.atproto.sync.getCheckout', entrypoint: './src/pages/xrpc/com.atproto.sync.getCheckout.ts' },
@@ -75,7 +78,6 @@ const ROOT_ROUTE = {
 };
 
 const DEBUG_ROUTES = [
-  { pattern: '/debug/blob/[...key]', entrypoint: './src/pages/debug/blob/[...key].ts' },
   { pattern: '/debug/db/bootstrap', entrypoint: './src/pages/debug/db/bootstrap.ts' },
   { pattern: '/debug/db/commits', entrypoint: './src/pages/debug/db/commits.ts' },
   { pattern: '/debug/gc/blobs', entrypoint: './src/pages/debug/gc/blobs.ts' },

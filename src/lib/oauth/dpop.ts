@@ -1,14 +1,15 @@
 import type { Env } from '../../env';
-import { errorMessage } from '../errors';
-import { cleanupExpiredOAuthReplaySecrets, createSecretOnce, getOrCreateSecret, setSecret, getSecret } from '../../db/account';
+import { setSecret, getSecret } from '../../db/account';
+import { consumeOAuthReplay } from '../../db/oauth-replay';
 import { decodeProtectedHeader, importJWK, compactVerify, type JWK as JoseJWK } from 'jose';
 import { DpopNonceError } from './dpop-errors';
+import { DPOP_PROOF_FUTURE_SKEW_SEC, DPOP_PROOF_MAX_AGE_SEC, isDpopProofFresh } from './dpop-window';
+import { dpopTarget } from './dpop-target';
 
 // DPoP nonce management and proof verification utilities
 
 const NONCE_AUTHZ_KEY = 'oauth_dpop_nonce_authz';
 const NONCE_TTL_SEC = 120; // rotate roughly every 2 minutes
-
 export type DpopVerification = {
   jkt: string; // JWK thumbprint
   jwk: JsonWebKey;
@@ -65,13 +66,17 @@ export async function consumeDpopJti(env: Env, kind: string, jti: unknown, iat: 
   if (typeof jti !== 'string' || jti.length < 8) {
     throw new DpopNonceError('DPoP jti required', await getAuthzNonce(env));
   }
+  if (!isDpopProofFresh(iat)) {
+    throw new DpopNonceError('DPoP proof expired', await getAuthzNonce(env));
+  }
 
   const key = `oauth:dpop:jti:${kind}:${jti}`;
-  const now = Math.floor(Date.now() / 1000);
-  await cleanupExpiredOAuthReplaySecrets(env, now);
-  const inserted = await createSecretOnce(env, key, JSON.stringify({ iat, exp: now + 300 }));
-  if (!inserted) {
+  const result = await consumeOAuthReplay(env, key, { tag: 'dpop', issuedAt: iat });
+  if (result.tag === 'replayed') {
     throw new DpopNonceError('DPoP proof replayed', await getAuthzNonce(env));
+  }
+  if (result.tag === 'expired' || !isDpopProofFresh(iat)) {
+    throw new DpopNonceError('DPoP proof expired', await getAuthzNonce(env));
   }
 }
 
@@ -82,16 +87,6 @@ export async function consumeDpopVerificationJti(
 ): Promise<void> {
   const iat = verification.payload.iat;
   await consumeDpopJti(env, kind, verification.payload.jti, typeof iat === 'number' ? iat : 0);
-}
-
-function urlWithoutHash(u: string): string {
-  try {
-    const url = new URL(u);
-    url.hash = '';
-    return url.toString();
-  } catch {
-    return u;
-  }
 }
 
 // removed local DER conversion; jose handles verification
@@ -122,16 +117,16 @@ export async function verifyDpop(
   const payload = JSON.parse(new TextDecoder().decode(verified.payload)) as Record<string, unknown>;
 
   const method = request.method.toUpperCase();
-  const url = urlWithoutHash(request.url);
+  const url = dpopTarget(request.url);
   if (payload.htm !== method || payload.htu !== url) {
     throw new DpopNonceError('DPoP htm/htu mismatch', nonce);
   }
 
   const now = Math.floor(Date.now() / 1000);
-  if (typeof payload.iat !== 'number' || now - payload.iat > 300) {
+  if (typeof payload.iat !== 'number' || !Number.isFinite(payload.iat) || now - payload.iat > DPOP_PROOF_MAX_AGE_SEC) {
     throw new DpopNonceError('DPoP iat too old', nonce);
   }
-  if (payload.iat - now > 30) {
+  if (payload.iat - now > DPOP_PROOF_FUTURE_SKEW_SEC) {
     throw new DpopNonceError('DPoP iat is in the future', nonce);
   }
 
@@ -174,7 +169,7 @@ export async function withDpop<T>(env: Env, request: Request, fn: (ver: DpopVeri
       return dpopErrorResponse(env, e);
     }
     const headers = new Headers({ 'Content-Type': 'application/json' });
-    return new Response(JSON.stringify({ error: 'invalid_request', error_description: errorMessage(e) ?? 'Unknown error' }), { status: 400, headers });
+    return new Response(JSON.stringify({ error: 'invalid_request', error_description: 'OAuth request failed' }), { status: 400, headers });
   }
 }
 

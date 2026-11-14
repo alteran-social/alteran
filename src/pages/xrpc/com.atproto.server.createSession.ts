@@ -1,8 +1,5 @@
 import type { APIContext } from 'astro';
 import { readJson } from '../../lib/util';
-import { drizzle } from 'drizzle-orm/d1';
-import { login_attempts } from '../../db/schema';
-import { eq } from 'drizzle-orm';
 import { createAccount, getAccountByIdentifier, storeRefreshToken } from '../../db/account';
 import { findMatchingAppPassword } from '../../db/app-password';
 import { hashPassword, verifyPassword } from '../../lib/password';
@@ -10,31 +7,14 @@ import { issueSessionTokens } from '../../lib/session-tokens';
 import { AuthScope } from '../../lib/auth-scope';
 import { getRuntimeString } from '../../lib/secrets';
 import { buildDidDocument } from '../../lib/did-document';
+import { clearLoginAttempt, loginLockoutResponse, reserveLoginAttempt } from '../../lib/login-attempts';
 
 export const prerender = false;
 
-const MAX_LOGIN_ATTEMPTS = 5;
-const LOCKOUT_DURATION_SEC = 15 * 60; // 15 minutes
-
 export async function POST({ locals, request }: APIContext) {
   const { env } = locals;
-  const clientIp = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || 'unknown';
-
-  const db = drizzle(env.ALTERAN_DB);
-  const now = Math.floor(Date.now() / 1000);
-
-  // Check if IP is locked out
-  const attempt = await db.select().from(login_attempts).where(eq(login_attempts.ip, clientIp)).get();
-  if (attempt && attempt.locked_until && attempt.locked_until > now) {
-    const remainingSeconds = attempt.locked_until - now;
-    return new Response(
-      JSON.stringify({
-        error: 'RateLimitExceeded',
-        message: `Account locked due to too many failed attempts. Try again in ${Math.ceil(remainingSeconds / 60)} minutes.`
-      }),
-      { status: 429, headers: { 'Content-Type': 'application/json' } }
-    );
-  }
+  const attempt = await reserveLoginAttempt(env, request);
+  if (attempt.tag === 'locked') return loginLockoutResponse(attempt.retryAfter);
 
   const rawBody = await readJson(request).catch(() => ({}));
   const body = (rawBody ?? {}) as { identifier?: unknown; password?: unknown };
@@ -81,37 +61,7 @@ export async function POST({ locals, request }: APIContext) {
   const ok = login.tag !== 'failed';
 
   if (!ok) {
-    // Track failed attempt
-    const currentAttempts = (attempt?.attempts || 0) + 1;
-    const lockedUntil = currentAttempts >= MAX_LOGIN_ATTEMPTS ? now + LOCKOUT_DURATION_SEC : null;
-
-    if (attempt) {
-      await db.update(login_attempts)
-        .set({
-          attempts: currentAttempts,
-          locked_until: lockedUntil,
-          last_attempt: now
-        })
-        .where(eq(login_attempts.ip, clientIp))
-        .run();
-    } else {
-      await db.insert(login_attempts).values({
-        ip: clientIp,
-        attempts: currentAttempts,
-        locked_until: lockedUntil,
-        last_attempt: now,
-      }).run();
-    }
-
-    if (lockedUntil) {
-      return new Response(
-        JSON.stringify({
-          error: 'RateLimitExceeded',
-          message: 'Too many failed login attempts. Account locked for 15 minutes.'
-        }),
-        { status: 429, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
+    if (attempt.reservation.lockedUntil !== null) return loginLockoutResponse(undefined, true);
 
     return new Response(
       JSON.stringify({
@@ -122,10 +72,7 @@ export async function POST({ locals, request }: APIContext) {
     );
   }
 
-  // Successful login - reset attempts
-  if (attempt) {
-    await db.delete(login_attempts).where(eq(login_attempts.ip, clientIp)).run();
-  }
+  await clearLoginAttempt(env, attempt.reservation);
 
   const did = (account?.did ?? (await getRuntimeString(env, 'PDS_DID', 'did:example:single-user')) ?? 'did:example:single-user');
   const handle = (account?.handle ?? (await getRuntimeString(env, 'PDS_HANDLE', identifier ?? 'user.example')) ?? (identifier ?? 'user.example'));

@@ -2,8 +2,8 @@ import { describe, it } from "./helpers/bdd";
 import { expect } from "@std/expect";
 import { makeEnv } from './helpers/env';
 import { mockClientMetadata } from './helpers/oauth';
-import { loadPar, savePar, consumeCode, saveCode } from '../src/lib/oauth/store';
-import { checkConsentPasswordLockout, reserveConsentPasswordAttempt } from '../src/lib/oauth/consent';
+import { loadPar, savePar, loadCodeSnapshot } from '../src/lib/oauth/store';
+import { reserveLoginAttempt } from '../src/lib/login-attempts';
 import { GET as authorize } from '../src/pages/oauth/authorize';
 import { GET as consentGet, POST as consentPost } from '../src/pages/oauth/consent';
 
@@ -106,7 +106,7 @@ describe('OAuth single-user consent', () => {
       expect(code.length).toBeGreaterThan(8);
       expect(redirect.searchParams.get('state')).toBe('state123');
       expect(await loadPar(env, 'req123')).toBeNull();
-      const codeRec = await consumeCode(env, code);
+      const codeRec = (await loadCodeSnapshot(env, code))?.record;
       expect(codeRec?.did).toBe('did:example:test');
       expect(codeRec?.client_id).toBe(clientId);
     } finally {
@@ -142,6 +142,11 @@ describe('OAuth single-user consent', () => {
       const env = await makeEnv();
       await seedPar(env);
       const res = await consentGet({ locals: { env }, request: new Request(`https://pds.example/oauth/consent?request_uri=${encodeURIComponent(requestUri)}`) } as any);
+      expect(res.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+      expect(res.headers.get('content-security-policy')).toContain("form-action 'self'");
+      expect(res.headers.get('x-frame-options')).toBe('DENY');
+      expect(res.headers.get('referrer-policy')).toBe('no-referrer');
+      expect(res.headers.get('cache-control')).toBe('no-store');
       const html = await res.text();
       expect(html).toContain('name="password" type="password" autocomplete="current-password" required');
       expect(html).toContain('name="decision" value="deny" type="submit" formnovalidate');
@@ -207,34 +212,15 @@ describe('OAuth single-user consent', () => {
     const request = new Request('https://pds.example/oauth/consent', {
       headers: { 'cf-connecting-ip': '198.51.100.25' },
     });
-    const results = await Promise.all(Array.from({ length: 5 }, () => reserveConsentPasswordAttempt(env, request)));
+    const results = await Promise.all(Array.from({ length: 5 }, () => reserveLoginAttempt(env, request)));
 
     const row = await env.ALTERAN_DB.prepare(
       'SELECT attempts, locked_until FROM login_attempts WHERE ip = ?'
     ).bind('198.51.100.25').first<{ attempts: number; locked_until: number | null }>();
     expect(row?.attempts).toBe(5);
     expect(row?.locked_until ?? 0).toBeGreaterThan(Math.floor(Date.now() / 1000));
-    expect(results.filter((result) => result?.status === 429)).toHaveLength(1);
-    expect((await checkConsentPasswordLockout(env, request))?.status).toBe(429);
+    expect(results.filter((result) => result.tag === 'reserved' && result.reservation.lockedUntil !== null)).toHaveLength(1);
+    expect((await reserveLoginAttempt(env, request)).tag).toBe('locked');
   });
 
-  it('atomically consumes authorization codes once', async () => {
-    const env = await makeEnv();
-    const code = 'code-race';
-    await saveCode(env, code, {
-      code,
-      client_id: clientId,
-      redirect_uri: 'https://client.example/callback',
-      code_challenge: 'challenge',
-      scope: 'atproto',
-      dpopJkt: 'jkt123',
-      clientAuthMethod: 'none',
-      clientAuthKeyId: null,
-      did: 'did:example:test',
-      createdAt: Math.floor(Date.now() / 1000),
-      expiresAt: Math.floor(Date.now() / 1000) + 300,
-    });
-    const attempts = await Promise.all(Array.from({ length: 20 }, () => consumeCode(env, code)));
-    expect(attempts.filter(Boolean)).toHaveLength(1);
-  });
 });

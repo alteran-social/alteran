@@ -1,0 +1,1 @@
+ALTER TABLE `oauth_session` ADD `client_auth_key_binding` text;
